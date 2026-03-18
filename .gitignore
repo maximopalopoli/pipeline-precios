@@ -2,3 +2,6 @@ data/
 raw/
 .env
 *.zip
+__pycache__/
+*.pyc
+*.pyo
