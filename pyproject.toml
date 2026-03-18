@@ -1,0 +1,20 @@
+[project]
+name = "pipeline-precios"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "psycopg2-binary>=2.9",
+    "pydantic>=2.0",
+    "requests>=2.32",
+    "structlog>=24.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-postgresql",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
