@@ -11,7 +11,13 @@ import json
 import pytest
 
 from etl.quality.checks import CheckResult, Severity
-from etl.quality.reporters import QualityReport, build, mark_run_failed, report
+from etl.quality.reporters import (
+    QualityReport,
+    build,
+    mark_run_failed,
+    register_rejected_rows,
+    report,
+)
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -111,14 +117,20 @@ def test_report_no_conn_does_not_raise():
 # ── Integration: _persist via report(conn=...) ─────────────────────────────────
 
 
+_raw_file_counter = 0
+
+
 def _insert_raw_file(conn) -> int:
+    global _raw_file_counter
+    _raw_file_counter += 1
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
-            VALUES ('r.zip', 'http://test', 'abc123', 0, '2026-03-19')
+            VALUES ('r.zip', 'http://test', %s, 0, '2026-03-19')
             RETURNING id
             """,
+            (f"abc123-{_raw_file_counter}",),
         )
         fid = cur.fetchone()[0]
     conn.commit()
@@ -248,3 +260,163 @@ def test_mark_run_failed_stamps_finished_at(pg_conn):
     with pg_conn.cursor() as cur:
         cur.execute("SELECT finished_at FROM ingestion_runs WHERE id = %s", (run_id,))
         assert cur.fetchone()[0] is not None
+
+
+# ── register_rejected_rows() ───────────────────────────────────────────────────
+
+
+def _load_sample_staging(conn, sample_zip_path) -> int:
+    """Load sample.zip into staging and return run_id."""
+    from etl.staging.loader import load
+    raw_file_id = _insert_raw_file(conn)
+    run_id = _insert_run(conn, raw_file_id)
+    load(conn, sample_zip_path, run_id)
+    return run_id
+
+
+def test_register_rejected_rows_returns_zero_when_all_pass(pg_conn, sample_zip_path):
+    run_id = _load_sample_staging(pg_conn, sample_zip_path)
+    count = register_rejected_rows(pg_conn, run_id, ALL_PASS)
+    assert count == 0
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM rejected_rows WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == 0
+
+
+def test_register_rejected_rows_skips_critical_failures(pg_conn, sample_zip_path):
+    """CRITICAL failures must not produce rejected_rows entries."""
+    run_id = _load_sample_staging(pg_conn, sample_zip_path)
+    critical_only = [_make("schema_match", passed=False, severity=Severity.CRITICAL)]
+    count = register_rejected_rows(pg_conn, run_id, critical_only)
+    assert count == 0
+
+
+def test_register_rejected_rows_positive_prices(pg_conn, sample_zip_path):
+    run_id = _load_sample_staging(pg_conn, sample_zip_path)
+
+    # Corrupt one precio_lista
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_productos SET productos_precio_lista = '0'
+             WHERE ctid = (SELECT ctid FROM stg_productos WHERE run_id = %s LIMIT 1)
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    results = [_make("positive_prices", passed=False, severity=Severity.WARNING,
+                     bad_precio_lista_rows=1, total_rows=7)]
+    count = register_rejected_rows(pg_conn, run_id, results)
+    assert count == 1
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT source_file, rejection_reason FROM rejected_rows WHERE run_id = %s",
+            (run_id,),
+        )
+        row = cur.fetchone()
+    assert row[0] == "stg_productos"
+    assert "precio_lista" in row[1]
+
+
+def test_register_rejected_rows_required_nulls(pg_conn, sample_zip_path):
+    run_id = _load_sample_staging(pg_conn, sample_zip_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE stg_comercios SET comercio_cuit = '' WHERE run_id = %s",
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    results = [_make("required_nulls", passed=False, severity=Severity.WARNING,
+                     nulls_by_table={"stg_comercios": {"comercio_cuit": 2}})]
+    count = register_rejected_rows(pg_conn, run_id, results)
+    assert count == 2  # sample has 2 comercios
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT source_file, rejection_reason FROM rejected_rows WHERE run_id = %s",
+            (run_id,),
+        )
+        row = cur.fetchone()
+    assert row[0] == "stg_comercios"
+    assert "comercio_cuit" in row[1]
+
+
+def test_register_rejected_rows_tipo_sucursal(pg_conn, sample_zip_path):
+    run_id = _load_sample_staging(pg_conn, sample_zip_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_sucursales SET sucursales_tipo = 'Megamercado'
+             WHERE ctid = (SELECT ctid FROM stg_sucursales WHERE run_id = %s LIMIT 1)
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    results = [_make("tipo_sucursal", passed=False, severity=Severity.WARNING,
+                     invalid_tipos={"Megamercado": 1})]
+    count = register_rejected_rows(pg_conn, run_id, results)
+    assert count == 1
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT rejection_reason FROM rejected_rows WHERE run_id = %s",
+            (run_id,),
+        )
+        reason = cur.fetchone()[0]
+    assert "Megamercado" in reason
+
+
+def test_register_rejected_rows_updates_rows_rejected(pg_conn, sample_zip_path):
+    run_id = _load_sample_staging(pg_conn, sample_zip_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_productos SET productos_precio_lista = '-1'
+             WHERE ctid = (SELECT ctid FROM stg_productos WHERE run_id = %s LIMIT 1)
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    results = [_make("positive_prices", passed=False, severity=Severity.WARNING,
+                     bad_precio_lista_rows=1, total_rows=7)]
+    register_rejected_rows(pg_conn, run_id, results)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT rows_rejected FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        assert cur.fetchone()[0] == 1
+
+
+def test_report_with_conn_registers_rejected_rows(pg_conn, sample_zip_path):
+    """report() end-to-end: bad price → rejected_rows populated."""
+    run_id = _load_sample_staging(pg_conn, sample_zip_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_productos SET productos_precio_lista = '0'
+             WHERE ctid = (SELECT ctid FROM stg_productos WHERE run_id = %s LIMIT 1)
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    results = [_make("positive_prices", passed=False, severity=Severity.WARNING,
+                     bad_precio_lista_rows=1, total_rows=7)]
+    qr = report(results, run_id, conn=pg_conn)
+
+    assert qr.warnings_failed == 1
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM rejected_rows WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == 1

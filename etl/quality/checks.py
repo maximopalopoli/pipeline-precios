@@ -418,7 +418,7 @@ def check_positive_prices(
              WHERE run_id = %s
                AND (
                    productos_precio_lista = ''
-                   OR productos_precio_lista !~ '^[0-9]+(\.[0-9]+)?$'
+                   OR productos_precio_lista !~ '^[0-9]+(\\.[0-9]+)?$'
                    OR productos_precio_lista::numeric <= 0
                )
             """,
@@ -597,8 +597,8 @@ def check_coordinates_bbox(
              WHERE run_id = %s
                AND sucursales_latitud  <> ''
                AND sucursales_longitud <> ''
-               AND sucursales_latitud  ~ '^-?[0-9]+(\.[0-9]+)?$'
-               AND sucursales_longitud ~ '^-?[0-9]+(\.[0-9]+)?$'
+               AND sucursales_latitud  ~ '^-?[0-9]+(\\.[0-9]+)?$'
+               AND sucursales_longitud ~ '^-?[0-9]+(\\.[0-9]+)?$'
                AND NOT (
                    sucursales_latitud::numeric  BETWEEN %s AND %s
                    AND sucursales_longitud::numeric BETWEEN %s AND %s
@@ -645,9 +645,6 @@ def check_tipo_sucursal(
     Valid types: Hipermercado, Supermercado, Autoservicio, Tradicional, Web.
     Severity: WARNING.
     """
-    # Build a parameterised ANY(%s) using a tuple for psycopg2
-    valid_tuple = tuple(_VALID_TIPOS)
-
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -655,11 +652,11 @@ def check_tipo_sucursal(
               FROM stg_sucursales
              WHERE run_id = %s
                AND sucursales_tipo <> ''
-               AND sucursales_tipo NOT IN %s
+               AND sucursales_tipo != ALL(%s)
              GROUP BY sucursales_tipo
              ORDER BY cnt DESC
             """,
-            (run_id, valid_tuple),
+            (run_id, list(_VALID_TIPOS)),
         )
         invalid_rows = {row[0]: row[1] for row in cur.fetchall()}
 
@@ -680,8 +677,6 @@ def check_provincia(
 
     Severity: WARNING.
     """
-    valid_tuple = tuple(_VALID_PROVINCIAS)
-
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -689,11 +684,11 @@ def check_provincia(
               FROM stg_sucursales
              WHERE run_id = %s
                AND sucursales_provincia <> ''
-               AND sucursales_provincia NOT IN %s
+               AND sucursales_provincia != ALL(%s)
              GROUP BY sucursales_provincia
              ORDER BY cnt DESC
             """,
-            (run_id, valid_tuple),
+            (run_id, list(_VALID_PROVINCIAS)),
         )
         invalid_rows = {row[0]: row[1] for row in cur.fetchall()}
 

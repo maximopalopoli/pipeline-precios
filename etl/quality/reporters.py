@@ -7,8 +7,9 @@ Consumes the list[CheckResult] produced by checks.run_all() and:
      (info → passed, warning → failed WARNING, error → failed CRITICAL).
   2. Emits a single summary event with aggregate counts.
   3. Optionally persists a compact text summary into
-     ingestion_runs.error_message so failures are visible without reading
-     logs.
+     ingestion_runs.error_message (non-empty only when there are failures).
+  4. Optionally inserts individual bad rows into rejected_rows so the
+     transform stage can skip them by joining on that table.
 
 Usage::
 
@@ -16,12 +17,11 @@ Usage::
 
     try:
         results = checks.run_all(conn, run_id)
-    except checks.QualityCheckError:
-        pass  # individual check logs already emitted; re-raise after report
+    except checks.QualityCheckError as exc:
+        reporters.report(exc.failures or results, run_id, conn=conn)
+        raise
 
-    report = reporters.report(results, run_id, conn=conn)
-    if not report.ok:
-        raise SystemExit(1)
+    reporters.report(results, run_id, conn=conn)
 """
 
 from __future__ import annotations
@@ -74,6 +74,12 @@ def report(
     """
     Log, summarise, and optionally persist quality check results.
 
+    When *conn* is supplied:
+      - Failed checks are written to ingestion_runs.error_message.
+      - CRITICAL failures also set status='failed' and finished_at.
+      - Individual bad rows from failed WARNING checks are inserted into
+        rejected_rows and ingestion_runs.rows_rejected is updated.
+
     Parameters
     ----------
     results:
@@ -81,9 +87,7 @@ def report(
     run_id:
         ingestion_runs.id — used for log context and DB persistence.
     conn:
-        Optional open psycopg2 connection.  When supplied, the report
-        summary is written to ingestion_runs.error_message (non-empty
-        only when there are failures).
+        Optional open psycopg2 connection.
 
     Returns
     -------
@@ -94,6 +98,7 @@ def report(
     _log_summary(qr)
     if conn is not None:
         _persist(conn, qr, results)
+        register_rejected_rows(conn, run_id, results)
     return qr
 
 
@@ -226,3 +231,234 @@ def _persist(
         failed_checks=len(failed),
         criticals_failed=qr.criticals_failed,
     )
+
+
+# ── Rejected rows ──────────────────────────────────────────────────────────────
+
+# Required columns per staging table (empty string = missing value)
+_REQUIRED_COMERCIOS = [
+    "id_comercio", "id_bandera", "comercio_cuit", "comercio_razon_social",
+]
+_REQUIRED_SUCURSALES = [
+    "id_comercio", "id_bandera", "id_sucursal", "sucursales_nombre",
+    "sucursales_tipo", "sucursales_localidad", "sucursales_provincia",
+]
+_REQUIRED_PRODUCTOS = [
+    "id_comercio", "id_bandera", "id_sucursal", "id_producto",
+    "productos_descripcion", "productos_marca", "productos_precio_lista",
+]
+
+# Argentina bounding box (must stay in sync with checks.py)
+_ARG_LAT_MIN, _ARG_LAT_MAX = -55.1, -21.8
+_ARG_LON_MIN, _ARG_LON_MAX = -73.6, -53.6
+
+_VALID_TIPOS = ("Hipermercado", "Supermercado", "Autoservicio", "Tradicional", "Web")
+
+_VALID_PROVINCIAS = (
+    "AR-B", "AR-C", "AR-K", "AR-H", "AR-U", "AR-X", "AR-W", "AR-E",
+    "AR-P", "AR-Y", "AR-L", "AR-F", "AR-M", "AR-N", "AR-Q", "AR-R",
+    "AR-A", "AR-J", "AR-D", "AR-Z", "AR-S", "AR-G", "AR-V", "AR-T",
+)
+
+# Row tuple type: (run_id, source_file, raw_data, rejection_reason)
+_RejectedRow = tuple[int, str, str, str]
+
+
+def register_rejected_rows(
+    conn: "psycopg2.connection",
+    run_id: int,
+    results: list[CheckResult],
+) -> int:
+    """
+    Insert individual bad staging rows into rejected_rows.
+
+    Only processes failed WARNING checks — CRITICAL failures abort the
+    pipeline before rows are worth persisting.  Updates
+    ingestion_runs.rows_rejected with the total count.
+
+    Returns the number of rows inserted.
+    """
+    handlers = {
+        "positive_prices": _reject_positive_prices,
+        "required_nulls":  _reject_required_nulls,
+        "coordinates_bbox": _reject_coordinates_bbox,
+        "tipo_sucursal":   _reject_tipo_sucursal,
+        "provincia":       _reject_provincia,
+    }
+
+    rows: list[_RejectedRow] = []
+    for result in results:
+        if result.passed or result.severity != Severity.WARNING:
+            continue
+        handler = handlers.get(result.name)
+        if handler is None:
+            continue
+        rows.extend(handler(conn, run_id))
+
+    if not rows:
+        return 0
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO rejected_rows (run_id, source_file, raw_data, rejection_reason)
+            VALUES (%s, %s, %s, %s)
+            """,
+            rows,
+        )
+        cur.execute(
+            "UPDATE ingestion_runs SET rows_rejected = %s WHERE id = %s",
+            (len(rows), run_id),
+        )
+    conn.commit()
+    log.info("quality.rejected_rows.registered", run_id=run_id, count=len(rows))
+    return len(rows)
+
+
+def _reject_positive_prices(
+    conn: "psycopg2.connection",
+    run_id: int,
+) -> list[_RejectedRow]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id_comercio, id_bandera, id_sucursal, id_producto,
+                   productos_precio_lista
+              FROM stg_productos
+             WHERE run_id = %s
+               AND (
+                   productos_precio_lista = ''
+                   OR productos_precio_lista !~ '^[0-9]+(\\.[0-9]+)?$'
+                   OR productos_precio_lista::numeric <= 0
+               )
+            """,
+            (run_id,),
+        )
+        return [
+            (
+                run_id,
+                "stg_productos",
+                "|".join(str(v) for v in row),
+                f"precio_lista inválido: {row[4]!r}",
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def _reject_required_nulls(
+    conn: "psycopg2.connection",
+    run_id: int,
+) -> list[_RejectedRow]:
+    rows: list[_RejectedRow] = []
+    table_specs = [
+        ("stg_comercios",  _REQUIRED_COMERCIOS,  ["id_comercio", "id_bandera"]),
+        ("stg_sucursales", _REQUIRED_SUCURSALES, ["id_comercio", "id_bandera", "id_sucursal"]),
+        ("stg_productos",  _REQUIRED_PRODUCTOS,  ["id_comercio", "id_bandera", "id_sucursal", "id_producto"]),
+    ]
+    with conn.cursor() as cur:
+        for table, required_cols, id_cols in table_specs:
+            for col in required_cols:
+                cur.execute(
+                    f"""
+                    SELECT {", ".join(id_cols)}, %s AS bad_col
+                      FROM {table}
+                     WHERE run_id = %s
+                       AND (TRIM({col}) = '' OR {col} IS NULL)
+                    """,
+                    (col, run_id),
+                )
+                for row in cur.fetchall():
+                    id_part = "|".join(str(v) for v in row[:-1])
+                    bad_col = row[-1]
+                    rows.append((
+                        run_id,
+                        table,
+                        id_part,
+                        f"campo requerido vacío: {bad_col}",
+                    ))
+    return rows
+
+
+def _reject_coordinates_bbox(
+    conn: "psycopg2.connection",
+    run_id: int,
+) -> list[_RejectedRow]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id_comercio, id_bandera, id_sucursal,
+                   sucursales_latitud, sucursales_longitud
+              FROM stg_sucursales
+             WHERE run_id = %s
+               AND sucursales_latitud  <> ''
+               AND sucursales_longitud <> ''
+               AND sucursales_latitud  ~ '^-?[0-9]+(\\.[0-9]+)?$'
+               AND sucursales_longitud ~ '^-?[0-9]+(\\.[0-9]+)?$'
+               AND NOT (
+                   sucursales_latitud::numeric  BETWEEN %s AND %s
+                   AND sucursales_longitud::numeric BETWEEN %s AND %s
+               )
+            """,
+            (run_id, _ARG_LAT_MIN, _ARG_LAT_MAX, _ARG_LON_MIN, _ARG_LON_MAX),
+        )
+        return [
+            (
+                run_id,
+                "stg_sucursales",
+                "|".join(str(v) for v in row),
+                f"coordenadas fuera del bounding box de Argentina: lat={row[3]} lon={row[4]}",
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def _reject_tipo_sucursal(
+    conn: "psycopg2.connection",
+    run_id: int,
+) -> list[_RejectedRow]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id_comercio, id_bandera, id_sucursal, sucursales_tipo
+              FROM stg_sucursales
+             WHERE run_id = %s
+               AND sucursales_tipo <> ''
+               AND sucursales_tipo != ALL(%s)
+            """,
+            (run_id, list(_VALID_TIPOS)),
+        )
+        return [
+            (
+                run_id,
+                "stg_sucursales",
+                "|".join(str(v) for v in row),
+                f"tipo de sucursal inválido: {row[3]!r}",
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def _reject_provincia(
+    conn: "psycopg2.connection",
+    run_id: int,
+) -> list[_RejectedRow]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id_comercio, id_bandera, id_sucursal, sucursales_provincia
+              FROM stg_sucursales
+             WHERE run_id = %s
+               AND sucursales_provincia <> ''
+               AND sucursales_provincia != ALL(%s)
+            """,
+            (run_id, list(_VALID_PROVINCIAS)),
+        )
+        return [
+            (
+                run_id,
+                "stg_sucursales",
+                "|".join(str(v) for v in row),
+                f"provincia inválida: {row[3]!r}",
+            )
+            for row in cur.fetchall()
+        ]

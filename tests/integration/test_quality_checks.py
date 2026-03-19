@@ -38,14 +38,20 @@ from etl.quality.checks import (
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
+_raw_file_counter = 0
+
+
 def _insert_raw_file(conn) -> int:
+    global _raw_file_counter
+    _raw_file_counter += 1
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
-            VALUES ('sample.zip', 'http://test', 'deadbeef', 0, '2026-03-17')
+            VALUES ('sample.zip', 'http://test', %s, 0, '2026-03-17')
             RETURNING id
             """,
+            (f"deadbeef{_raw_file_counter}",),
         )
         fid = cur.fetchone()[0]
     conn.commit()
@@ -301,7 +307,7 @@ def test_run_all_passes_on_clean_sample(pg_conn, sample_zip_path):
     run_id = _load_sample(pg_conn, sample_zip_path)
     results = run_all(pg_conn, run_id, min_productos=5)
     assert all(r.passed for r in results)
-    assert len(results) == 5
+    assert len(results) == 10
 
 
 def test_run_all_raises_on_critical_failure(pg_conn, sample_zip_path):
