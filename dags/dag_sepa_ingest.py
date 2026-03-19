@@ -6,11 +6,9 @@ Schedule: 06:30 and 10:30 daily (two runs to capture rectified prices).
 
 from __future__ import annotations
 
-import json
 import os
 import pickle
 import tempfile
-import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -351,6 +349,7 @@ default_args = {
     "owner": "sepa",
     "retries": 2,
     "retry_delay": timedelta(minutes=15),
+    "execution_timeout": timedelta(minutes=30),
 }
 
 with DAG(
