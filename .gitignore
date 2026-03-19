@@ -2,6 +2,7 @@ data/
 raw/
 .env
 *.zip
+!tests/fixtures/*.zip
 __pycache__/
 *.pyc
 *.pyo
