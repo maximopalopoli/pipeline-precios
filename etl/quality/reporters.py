@@ -154,16 +154,43 @@ def _log_summary(qr: QualityReport) -> None:
     )
 
 
+def mark_run_failed(
+    conn: "psycopg2.connection",
+    run_id: int,
+    message: str,
+) -> None:
+    """
+    Set ingestion_runs.status = 'failed' and record *message* as the error.
+
+    Also stamps finished_at so duration_seconds is computed correctly.
+    Safe to call from any pipeline stage (not only quality checks).
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingestion_runs
+               SET status        = 'failed',
+                   finished_at   = NOW(),
+                   error_message = %s
+             WHERE id = %s
+            """,
+            (message, run_id),
+        )
+    conn.commit()
+    log.error("pipeline.run.failed", run_id=run_id)
+
+
 def _persist(
     conn: "psycopg2.connection",
     qr: QualityReport,
     results: list[CheckResult],
 ) -> None:
     """
-    Write a compact failure summary to ingestion_runs.error_message.
+    Persist failure details and, for CRITICAL failures, mark the run failed.
 
-    Only failed checks are included in the persisted text.  If everything
-    passed, error_message is left untouched (the column defaults to NULL).
+    - Any failure → write compact JSON to ingestion_runs.error_message.
+    - CRITICAL failure → also set status = 'failed' and finished_at = NOW().
+    - All passed → no-op.
     """
     failed = [r for r in results if not r.passed]
     if not failed:
@@ -181,18 +208,21 @@ def _persist(
     }
     summary_text = json.dumps(payload, ensure_ascii=False)
 
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE ingestion_runs
-               SET error_message = %s
-             WHERE id = %s
-            """,
-            (summary_text, qr.run_id),
-        )
-    conn.commit()
+    if qr.criticals_failed > 0:
+        # mark_run_failed writes error_message + status + finished_at atomically
+        mark_run_failed(conn, qr.run_id, summary_text)
+    else:
+        # Warnings only — record the message but keep status as-is
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE ingestion_runs SET error_message = %s WHERE id = %s",
+                (summary_text, qr.run_id),
+            )
+        conn.commit()
+
     log.info(
         "quality.report.persisted",
         run_id=qr.run_id,
         failed_checks=len(failed),
+        criticals_failed=qr.criticals_failed,
     )

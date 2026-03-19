@@ -11,7 +11,7 @@ import json
 import pytest
 
 from etl.quality.checks import CheckResult, Severity
-from etl.quality.reporters import QualityReport, build, report
+from etl.quality.reporters import QualityReport, build, mark_run_failed, report
 
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
@@ -181,3 +181,70 @@ def test_report_persisted_json_includes_severity_and_details(pg_conn):
     assert failure["check"] == "positive_prices"
     assert failure["severity"] == Severity.WARNING
     assert failure["details"]["bad_precio_lista_rows"] == 3
+
+
+def test_report_sets_status_failed_on_critical(pg_conn):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id)
+
+    report(CRITICAL_AND_WARN, run_id, conn=pg_conn)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, finished_at FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        status, finished_at = cur.fetchone()
+
+    assert status == "failed"
+    assert finished_at is not None
+
+
+def test_report_does_not_set_status_failed_on_warning_only(pg_conn):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id)
+
+    report(WARN_ONLY, run_id, conn=pg_conn)
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT status FROM ingestion_runs WHERE id = %s", (run_id,))
+        status = cur.fetchone()[0]
+
+    # Warnings should not change the run status ('running' is the default)
+    assert status == "running"
+
+
+# ── mark_run_failed() ──────────────────────────────────────────────────────────
+
+
+def test_mark_run_failed_sets_status_and_message(pg_conn):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id)
+
+    mark_run_failed(pg_conn, run_id, "something went wrong")
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, error_message, finished_at FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        status, error_message, finished_at = cur.fetchone()
+
+    assert status == "failed"
+    assert error_message == "something went wrong"
+    assert finished_at is not None
+
+
+def test_mark_run_failed_stamps_finished_at(pg_conn):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id)
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT finished_at FROM ingestion_runs WHERE id = %s", (run_id,))
+        assert cur.fetchone()[0] is None  # not yet finished
+
+    mark_run_failed(pg_conn, run_id, "abort")
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT finished_at FROM ingestion_runs WHERE id = %s", (run_id,))
+        assert cur.fetchone()[0] is not None
