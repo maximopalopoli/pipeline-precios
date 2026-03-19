@@ -22,11 +22,16 @@ from etl.quality.checks import (
     CheckResult,
     QualityCheckError,
     Severity,
+    check_coordinates_bbox,
     check_fk_integrity,
     check_min_row_count,
     check_pk_uniqueness,
     check_positive_prices,
+    check_provincia,
+    check_required_nulls,
+    check_row_count_drift,
     check_schema,
+    check_tipo_sucursal,
     run_all,
 )
 
@@ -337,3 +342,210 @@ def test_run_all_does_not_raise_on_warning_only(pg_conn, sample_zip_path):
     assert len(failed) == 1
     assert failed[0].name == "positive_prices"
     assert failed[0].severity == Severity.WARNING
+
+
+# ── Row count drift ────────────────────────────────────────────────────────────
+
+
+def test_check_row_count_drift_passes_with_no_previous_run(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+    result = check_row_count_drift(pg_conn, run_id)
+    assert result.passed
+    assert result.severity == Severity.WARNING
+    assert result.details["previous_rows"] is None
+
+
+def test_check_row_count_drift_passes_within_threshold(pg_conn, sample_zip_path):
+    # First run: load sample and mark completed
+    run_id_1 = _load_sample(pg_conn, sample_zip_path)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ingestion_runs SET status='completed', rows_productos_raw=7 WHERE id=%s",
+            (run_id_1,),
+        )
+    pg_conn.commit()
+
+    # Second run with the same count — drift = 0
+    run_id_2 = _load_sample(pg_conn, sample_zip_path)
+    result = check_row_count_drift(pg_conn, run_id_2, max_drift=0.20)
+    assert result.passed
+    assert result.details["drift"] == 0.0
+
+
+def test_check_row_count_drift_fails_beyond_threshold(pg_conn, sample_zip_path):
+    # First run with a large count
+    run_id_1 = _load_sample(pg_conn, sample_zip_path)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ingestion_runs SET status='completed', rows_productos_raw=1000 WHERE id=%s",
+            (run_id_1,),
+        )
+    pg_conn.commit()
+
+    # Second run has only 7 rows — drift ≈ 99.3 %
+    run_id_2 = _load_sample(pg_conn, sample_zip_path)
+    result = check_row_count_drift(pg_conn, run_id_2, max_drift=0.20)
+    assert not result.passed
+    assert result.details["drift"] > 0.20
+
+
+# ── Required nulls ─────────────────────────────────────────────────────────────
+
+
+def test_check_required_nulls_passes_on_sample(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+    result = check_required_nulls(pg_conn, run_id)
+    assert result.passed
+    assert result.severity == Severity.WARNING
+
+
+def test_check_required_nulls_detects_empty_required_field(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE stg_comercios SET comercio_cuit = '' WHERE run_id = %s",
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    result = check_required_nulls(pg_conn, run_id)
+    assert not result.passed
+    assert "stg_comercios" in result.details["nulls_by_table"]
+    assert "comercio_cuit" in result.details["nulls_by_table"]["stg_comercios"]
+
+
+# ── Coordinates bounding box ───────────────────────────────────────────────────
+
+
+def test_check_coordinates_bbox_passes_on_sample(pg_conn, sample_zip_path):
+    """sample.zip sucursales have empty coordinates — check passes (no coords to validate)."""
+    run_id = _load_sample(pg_conn, sample_zip_path)
+    result = check_coordinates_bbox(pg_conn, run_id)
+    assert result.passed
+    assert result.severity == Severity.WARNING
+
+
+def test_check_coordinates_bbox_passes_with_valid_coords(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+
+    # Buenos Aires city centre — well within bbox
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_sucursales
+               SET sucursales_latitud = '-34.6037', sucursales_longitud = '-58.3816'
+             WHERE ctid = (SELECT ctid FROM stg_sucursales WHERE run_id = %s LIMIT 1)
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    result = check_coordinates_bbox(pg_conn, run_id)
+    assert result.passed
+
+
+def test_check_coordinates_bbox_detects_out_of_bounds(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+
+    # Coords for Madrid, Spain — clearly outside Argentina
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_sucursales
+               SET sucursales_latitud = '40.4168', sucursales_longitud = '-3.7038'
+             WHERE ctid = (SELECT ctid FROM stg_sucursales WHERE run_id = %s LIMIT 1)
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    result = check_coordinates_bbox(pg_conn, run_id)
+    assert not result.passed
+    assert result.details["out_of_bbox"] >= 1
+
+
+# ── Tipo sucursal ──────────────────────────────────────────────────────────────
+
+
+def test_check_tipo_sucursal_passes_on_sample(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+    result = check_tipo_sucursal(pg_conn, run_id)
+    assert result.passed
+    assert result.severity == Severity.WARNING
+
+
+def test_check_tipo_sucursal_detects_invalid_type(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_sucursales
+               SET sucursales_tipo = 'Megamercado'
+             WHERE ctid = (SELECT ctid FROM stg_sucursales WHERE run_id = %s LIMIT 1)
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    result = check_tipo_sucursal(pg_conn, run_id)
+    assert not result.passed
+    assert "Megamercado" in result.details["invalid_tipos"]
+
+
+# ── Provincia ──────────────────────────────────────────────────────────────────
+
+
+def test_check_provincia_passes_on_sample(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+    result = check_provincia(pg_conn, run_id)
+    assert result.passed
+    assert result.severity == Severity.WARNING
+
+
+def test_check_provincia_detects_invalid_code(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_sucursales
+               SET sucursales_provincia = 'AR-ZZ'
+             WHERE ctid = (SELECT ctid FROM stg_sucursales WHERE run_id = %s LIMIT 1)
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    result = check_provincia(pg_conn, run_id)
+    assert not result.passed
+    assert "AR-ZZ" in result.details["invalid_provincias"]
+
+
+def test_check_provincia_detects_non_ar_code(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_sucursales
+               SET sucursales_provincia = 'Buenos Aires'
+             WHERE ctid = (SELECT ctid FROM stg_sucursales WHERE run_id = %s LIMIT 1)
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    result = check_provincia(pg_conn, run_id)
+    assert not result.passed
+    assert "Buenos Aires" in result.details["invalid_provincias"]
+
+
+# ── run_all covers all 10 checks ───────────────────────────────────────────────
+
+
+def test_run_all_returns_ten_results(pg_conn, sample_zip_path):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+    results = run_all(pg_conn, run_id, min_productos=5)
+    assert len(results) == 10

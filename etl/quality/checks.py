@@ -94,6 +94,59 @@ _EXPECTED_PRODUCTOS_COLS = {
 # Minimum number of product rows expected per run (protects against truncated ZIPs)
 DEFAULT_MIN_PRODUCTOS = 100
 
+# Maximum allowed relative drift in productos row count vs previous run
+DEFAULT_MAX_DRIFT = 0.20  # 20 %
+
+# Argentina bounding box (approximate, covers continental + Malvinas)
+_ARG_LAT_MIN = -55.1
+_ARG_LAT_MAX = -21.8
+_ARG_LON_MIN = -73.6
+_ARG_LON_MAX = -53.6
+
+# Valid sucursales_tipo values (must match TipoSucursal in models/sucursal.py)
+_VALID_TIPOS = {"Hipermercado", "Supermercado", "Autoservicio", "Tradicional", "Web"}
+
+# Known Argentine province ISO 3166-2 codes
+_VALID_PROVINCIAS = {
+    "AR-B",  # Buenos Aires
+    "AR-C",  # Ciudad Autónoma de Buenos Aires
+    "AR-K",  # Catamarca
+    "AR-H",  # Chaco
+    "AR-U",  # Chubut
+    "AR-X",  # Córdoba
+    "AR-W",  # Corrientes
+    "AR-E",  # Entre Ríos
+    "AR-P",  # Formosa
+    "AR-Y",  # Jujuy
+    "AR-L",  # La Pampa
+    "AR-F",  # La Rioja
+    "AR-M",  # Mendoza
+    "AR-N",  # Misiones
+    "AR-Q",  # Neuquén
+    "AR-R",  # Río Negro
+    "AR-A",  # Salta
+    "AR-J",  # San Juan
+    "AR-D",  # San Luis
+    "AR-Z",  # Santa Cruz
+    "AR-S",  # Santa Fe
+    "AR-G",  # Santiago del Estero
+    "AR-V",  # Tierra del Fuego
+    "AR-T",  # Tucumán
+}
+
+# Required (non-nullable) columns per table — empty string counts as null
+_REQUIRED_COMERCIOS = [
+    "id_comercio", "id_bandera", "comercio_cuit", "comercio_razon_social",
+]
+_REQUIRED_SUCURSALES = [
+    "id_comercio", "id_bandera", "id_sucursal", "sucursales_nombre",
+    "sucursales_tipo", "sucursales_localidad", "sucursales_provincia",
+]
+_REQUIRED_PRODUCTOS = [
+    "id_comercio", "id_bandera", "id_sucursal", "id_producto",
+    "productos_descripcion", "productos_marca", "productos_precio_lista",
+]
+
 
 # ── Result types ───────────────────────────────────────────────────────────────
 
@@ -128,6 +181,7 @@ def run_all(
     run_id: int,
     *,
     min_productos: int = DEFAULT_MIN_PRODUCTOS,
+    max_drift: float = DEFAULT_MAX_DRIFT,
 ) -> list[CheckResult]:
     """
     Run all quality checks for *run_id* against the stg_* tables.
@@ -144,6 +198,9 @@ def run_all(
         ingestion_runs.id whose staging rows are being validated.
     min_productos:
         Minimum number of productos rows required to pass the row-count check.
+    max_drift:
+        Maximum allowed relative change in productos count vs the previous
+        completed run (0.20 = 20 %).
 
     Returns
     -------
@@ -158,6 +215,12 @@ def run_all(
         check_fk_integrity(conn, run_id),
         check_positive_prices(conn, run_id),
         check_min_row_count(conn, run_id, min_productos=min_productos),
+        # Warning checks
+        check_row_count_drift(conn, run_id, max_drift=max_drift),
+        check_required_nulls(conn, run_id),
+        check_coordinates_bbox(conn, run_id),
+        check_tipo_sucursal(conn, run_id),
+        check_provincia(conn, run_id),
     ]
 
     for r in results:
@@ -401,4 +464,242 @@ def check_min_row_count(
         passed=actual >= min_productos,
         severity=Severity.CRITICAL,
         details={"actual_rows": actual, "min_required": min_productos},
+    )
+
+
+# ── Warning checks ─────────────────────────────────────────────────────────────
+
+
+def check_row_count_drift(
+    conn: "psycopg2.connection",
+    run_id: int,
+    *,
+    max_drift: float = DEFAULT_MAX_DRIFT,
+) -> CheckResult:
+    """
+    Compare productos row count vs the previous completed run.
+
+    A drift greater than *max_drift* (default 20 %) suggests an unusual
+    data volume change (missing chains, truncated ZIP, or data explosion).
+    If there is no prior completed run the check is skipped (passed=True).
+    Severity: WARNING.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM stg_productos WHERE run_id = %s",
+            (run_id,),
+        )
+        current = cur.fetchone()[0]
+
+        cur.execute(
+            """
+            SELECT ir.rows_productos_raw
+              FROM ingestion_runs ir
+             WHERE ir.id < %s
+               AND ir.status = 'completed'
+               AND ir.rows_productos_raw IS NOT NULL
+             ORDER BY ir.id DESC
+             LIMIT 1
+            """,
+            (run_id,),
+        )
+        row = cur.fetchone()
+
+    if row is None:
+        return CheckResult(
+            name="row_count_drift",
+            passed=True,
+            severity=Severity.WARNING,
+            details={"current_rows": current, "previous_rows": None, "drift": None},
+        )
+
+    previous = row[0]
+    if previous == 0:
+        drift = 0.0
+    else:
+        drift = abs(current - previous) / previous
+
+    return CheckResult(
+        name="row_count_drift",
+        passed=drift <= max_drift,
+        severity=Severity.WARNING,
+        details={
+            "current_rows": current,
+            "previous_rows": previous,
+            "drift": round(drift, 4),
+            "max_drift": max_drift,
+        },
+    )
+
+
+def check_required_nulls(
+    conn: "psycopg2.connection",
+    run_id: int,
+) -> CheckResult:
+    """
+    Count rows with empty values in required (non-nullable) columns.
+
+    Because staging stores everything as VARCHAR, both SQL NULL and the
+    empty string '' are treated as missing.  Severity: WARNING.
+    """
+    table_checks = [
+        ("stg_comercios", _REQUIRED_COMERCIOS),
+        ("stg_sucursales", _REQUIRED_SUCURSALES),
+        ("stg_productos", _REQUIRED_PRODUCTOS),
+    ]
+
+    nulls_by_table: dict[str, dict[str, int]] = {}
+
+    with conn.cursor() as cur:
+        for table, required_cols in table_checks:
+            col_nulls: dict[str, int] = {}
+            for col in required_cols:
+                cur.execute(
+                    f"""
+                    SELECT COUNT(*)
+                      FROM {table}
+                     WHERE run_id = %s
+                       AND (TRIM({col}) = '' OR {col} IS NULL)
+                    """,
+                    (run_id,),
+                )
+                count = cur.fetchone()[0]
+                if count:
+                    col_nulls[col] = count
+            if col_nulls:
+                nulls_by_table[table] = col_nulls
+
+    return CheckResult(
+        name="required_nulls",
+        passed=not nulls_by_table,
+        severity=Severity.WARNING,
+        details={"nulls_by_table": nulls_by_table},
+    )
+
+
+def check_coordinates_bbox(
+    conn: "psycopg2.connection",
+    run_id: int,
+) -> CheckResult:
+    """
+    Verify that non-empty coordinates in stg_sucursales fall within
+    Argentina's bounding box.
+
+    Rows with empty or non-numeric coordinates are skipped (they are
+    caught by check_required_nulls if the field is required).
+    Severity: WARNING.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COUNT(*)
+              FROM stg_sucursales
+             WHERE run_id = %s
+               AND sucursales_latitud  <> ''
+               AND sucursales_longitud <> ''
+               AND sucursales_latitud  ~ '^-?[0-9]+(\.[0-9]+)?$'
+               AND sucursales_longitud ~ '^-?[0-9]+(\.[0-9]+)?$'
+               AND NOT (
+                   sucursales_latitud::numeric  BETWEEN %s AND %s
+                   AND sucursales_longitud::numeric BETWEEN %s AND %s
+               )
+            """,
+            (run_id, _ARG_LAT_MIN, _ARG_LAT_MAX, _ARG_LON_MIN, _ARG_LON_MAX),
+        )
+        out_of_bbox = cur.fetchone()[0]
+
+        cur.execute(
+            """
+            SELECT COUNT(*)
+              FROM stg_sucursales
+             WHERE run_id = %s
+               AND sucursales_latitud  <> ''
+               AND sucursales_longitud <> ''
+            """,
+            (run_id,),
+        )
+        total_with_coords = cur.fetchone()[0]
+
+    return CheckResult(
+        name="coordinates_bbox",
+        passed=out_of_bbox == 0,
+        severity=Severity.WARNING,
+        details={
+            "out_of_bbox": out_of_bbox,
+            "total_with_coords": total_with_coords,
+            "bbox": {
+                "lat": [_ARG_LAT_MIN, _ARG_LAT_MAX],
+                "lon": [_ARG_LON_MIN, _ARG_LON_MAX],
+            },
+        },
+    )
+
+
+def check_tipo_sucursal(
+    conn: "psycopg2.connection",
+    run_id: int,
+) -> CheckResult:
+    """
+    Verify that sucursales_tipo contains only known valid values.
+
+    Valid types: Hipermercado, Supermercado, Autoservicio, Tradicional, Web.
+    Severity: WARNING.
+    """
+    # Build a parameterised ANY(%s) using a tuple for psycopg2
+    valid_tuple = tuple(_VALID_TIPOS)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT sucursales_tipo, COUNT(*) AS cnt
+              FROM stg_sucursales
+             WHERE run_id = %s
+               AND sucursales_tipo <> ''
+               AND sucursales_tipo NOT IN %s
+             GROUP BY sucursales_tipo
+             ORDER BY cnt DESC
+            """,
+            (run_id, valid_tuple),
+        )
+        invalid_rows = {row[0]: row[1] for row in cur.fetchall()}
+
+    return CheckResult(
+        name="tipo_sucursal",
+        passed=not invalid_rows,
+        severity=Severity.WARNING,
+        details={"invalid_tipos": invalid_rows, "valid_tipos": sorted(_VALID_TIPOS)},
+    )
+
+
+def check_provincia(
+    conn: "psycopg2.connection",
+    run_id: int,
+) -> CheckResult:
+    """
+    Verify that sucursales_provincia contains only known AR-* ISO 3166-2 codes.
+
+    Severity: WARNING.
+    """
+    valid_tuple = tuple(_VALID_PROVINCIAS)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT sucursales_provincia, COUNT(*) AS cnt
+              FROM stg_sucursales
+             WHERE run_id = %s
+               AND sucursales_provincia <> ''
+               AND sucursales_provincia NOT IN %s
+             GROUP BY sucursales_provincia
+             ORDER BY cnt DESC
+            """,
+            (run_id, valid_tuple),
+        )
+        invalid_rows = {row[0]: row[1] for row in cur.fetchall()}
+
+    return CheckResult(
+        name="provincia",
+        passed=not invalid_rows,
+        severity=Severity.WARNING,
+        details={"invalid_provincias": invalid_rows},
     )
