@@ -16,5 +16,8 @@ dev = [
     "pytest-postgresql",
 ]
 
+[tool.setuptools.packages.find]
+include = ["etl*", "models*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
