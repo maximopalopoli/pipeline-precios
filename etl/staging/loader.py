@@ -189,6 +189,42 @@ def load(
     return result
 
 
+def register_counts(
+    conn: "psycopg2.connection",
+    run_id: int,
+    result: LoadResult,
+) -> None:
+    """
+    Persist staging counts from *result* into ingestion_runs.
+
+    Should be called after load() completes successfully.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingestion_runs
+               SET inner_zips_count   = %s,
+                   rows_comercios     = %s,
+                   rows_sucursales    = %s,
+                   rows_productos_raw = %s
+             WHERE id = %s
+            """,
+            (
+                result.inner_zips_count,
+                result.rows_comercios,
+                result.rows_sucursales,
+                result.rows_productos,
+                run_id,
+            ),
+        )
+    conn.commit()
+    log.info(
+        "staging.counts_registered",
+        run_id=run_id,
+        **result.__dict__,
+    )
+
+
 # ── Private helpers ────────────────────────────────────────────────────────────
 
 
@@ -204,7 +240,7 @@ def _parse_csv(
     non-empty line starting with "Ultima" or "Última" — is discarded before
     parsing so pandas never sees it.
     """
-    text = raw_bytes.decode("utf-8", errors="replace")
+    text = raw_bytes.decode("utf-8-sig", errors="replace")  # strip BOM if present
     lines = text.splitlines()
 
     # Drop the trailer and any trailing blank lines
@@ -299,8 +335,12 @@ def _copy_into(
     buf.seek(0)
 
     col_list = ", ".join(["run_id"] + cols)
+    sql = f"COPY {table} ({col_list}) FROM STDIN WITH (FORMAT csv)"
+
+    # psycopg2: cursor.copy_expert(); psycopg3: cursor.copy()
     with conn.cursor() as cur:
-        cur.copy_expert(
-            f"COPY {table} ({col_list}) FROM STDIN WITH (FORMAT csv)",
-            buf,
-        )
+        if hasattr(cur, "copy_expert"):
+            cur.copy_expert(sql, buf)
+        else:
+            with cur.copy(sql) as copy:
+                copy.write(buf.read())

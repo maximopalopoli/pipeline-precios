@@ -1,0 +1,130 @@
+"""
+Integration test: load sample.zip into staging and verify counts.
+
+sample.zip contains 2 inner ZIPs:
+  - sepa_1_comercio-sepa-1: 1 comercio, 2 sucursales, 4 productos
+  - sepa_1_comercio-sepa-2: 1 comercio, 1 sucursal,  3 productos
+  ───────────────────────────────────────────────────────────────
+  Total:                     2 comercios, 3 sucursales, 7 productos
+"""
+
+import pathlib
+
+import pytest
+
+from etl.staging.loader import LoadResult, load, register_counts
+
+# ── Expected counts from sample.zip ───────────────────────────────────────────
+
+EXPECTED_INNER_ZIPS = 2
+EXPECTED_COMERCIOS = 2
+EXPECTED_SUCURSALES = 3
+EXPECTED_PRODUCTOS = 7
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def _insert_run(conn, *, raw_file_id: int) -> int:
+    """Insert a minimal ingestion_runs row and return its id."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO ingestion_runs (raw_file_id) VALUES (%s) RETURNING id",
+            (raw_file_id,),
+        )
+        run_id = cur.fetchone()[0]
+    conn.commit()
+    return run_id
+
+
+def _insert_raw_file(conn) -> int:
+    """Insert a dummy raw_files row and return its id."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
+            VALUES ('sample.zip', 'http://test', 'deadbeef', 0, '2026-03-17')
+            RETURNING id
+            """,
+        )
+        file_id = cur.fetchone()[0]
+    conn.commit()
+    return file_id
+
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+
+def test_load_returns_correct_counts(pg_conn, sample_zip_path):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id=raw_file_id)
+
+    result = load(pg_conn, sample_zip_path, run_id)
+
+    assert isinstance(result, LoadResult)
+    assert result.inner_zips_count == EXPECTED_INNER_ZIPS
+    assert result.rows_comercios == EXPECTED_COMERCIOS
+    assert result.rows_sucursales == EXPECTED_SUCURSALES
+    assert result.rows_productos == EXPECTED_PRODUCTOS
+
+
+def test_load_inserts_rows_into_staging(pg_conn, sample_zip_path):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id=raw_file_id)
+
+    load(pg_conn, sample_zip_path, run_id)
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM stg_comercios WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == EXPECTED_COMERCIOS
+
+        cur.execute("SELECT COUNT(*) FROM stg_sucursales WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == EXPECTED_SUCURSALES
+
+        cur.execute("SELECT COUNT(*) FROM stg_productos WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == EXPECTED_PRODUCTOS
+
+
+def test_load_is_idempotent(pg_conn, sample_zip_path):
+    """Running load() twice for the same run_id must not duplicate rows."""
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id=raw_file_id)
+
+    load(pg_conn, sample_zip_path, run_id)
+    load(pg_conn, sample_zip_path, run_id)  # second run, same run_id
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM stg_comercios WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == EXPECTED_COMERCIOS
+
+        cur.execute("SELECT COUNT(*) FROM stg_sucursales WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == EXPECTED_SUCURSALES
+
+        cur.execute("SELECT COUNT(*) FROM stg_productos WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == EXPECTED_PRODUCTOS
+
+
+def test_register_counts_updates_ingestion_run(pg_conn, sample_zip_path):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id=raw_file_id)
+
+    result = load(pg_conn, sample_zip_path, run_id)
+    register_counts(pg_conn, run_id, result)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT inner_zips_count, rows_comercios, rows_sucursales, rows_productos_raw
+              FROM ingestion_runs
+             WHERE id = %s
+            """,
+            (run_id,),
+        )
+        row = cur.fetchone()
+
+    assert row == (
+        EXPECTED_INNER_ZIPS,
+        EXPECTED_COMERCIOS,
+        EXPECTED_SUCURSALES,
+        EXPECTED_PRODUCTOS,
+    )
