@@ -42,6 +42,7 @@ import structlog
 import structlog.dev
 
 from etl.extract import downloader
+from etl.load.aggregator import aggregate
 from etl.load.warehouse_loader import load as warehouse_load
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
@@ -307,7 +308,22 @@ def run(
             elapsed=round(time.perf_counter() - t6, 2),
         )
 
-        # ── 8. Mark completed ────────────────────────────────────────────────
+        # ── 8. Aggregations ──────────────────────────────────────────────────
+        logger.info("pipeline.stage.start", stage="aggregations")
+        t7 = time.perf_counter()
+
+        fecha_id = int(dl.fecha_datos.strftime("%Y%m%d"))
+        agg = aggregate(conn, fecha_id)
+        conn.commit()
+
+        logger.info(
+            "pipeline.stage.done",
+            stage="aggregations",
+            rows_upserted=agg.rows_upserted,
+            elapsed=round(time.perf_counter() - t7, 2),
+        )
+
+        # ── 9. Mark completed ────────────────────────────────────────────────
         _mark_completed(conn, run_id, rows_valid=len(clean_p.clean))
 
         elapsed_total = round(time.perf_counter() - t0, 2)
