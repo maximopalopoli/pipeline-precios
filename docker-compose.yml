@@ -9,9 +9,12 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__FERNET_KEY: ""
     AIRFLOW__WEBSERVER__SECRET_KEY: airflow-secret-key
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    _PIP_ADDITIONAL_REQUIREMENTS: "pandas>=2.2 psycopg2-binary>=2.9 structlog>=24.0 requests>=2.32"
+    PYTHONPATH: /opt/airflow
   volumes:
     - ./dags:/opt/airflow/dags
     - ./etl:/opt/airflow/etl
+    - ./models:/opt/airflow/models
     - ./data:/opt/airflow/data
     - airflow_logs:/opt/airflow/logs
   depends_on:
