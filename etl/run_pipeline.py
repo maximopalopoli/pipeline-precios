@@ -41,6 +41,7 @@ import psycopg2
 import structlog
 import structlog.dev
 
+from etl import alerting
 from etl.extract import downloader
 from etl.load.aggregator import aggregate
 from etl.load.warehouse_loader import load as warehouse_load
@@ -221,6 +222,11 @@ def run(
             check_results = quality_checks.run_all(conn, run_id)
         except quality_checks.QualityCheckError as exc:
             reporters.report(results=exc.failures, run_id=run_id, conn=conn)
+            alerting.notify_failure(
+                run_id,
+                message=f"Critical quality checks failed: {[r.name for r in exc.failures]}",
+                fecha=dl.fecha_datos,
+            )
             logger.error(
                 "pipeline.aborted",
                 reason="critical_quality_failure",
@@ -338,6 +344,7 @@ def run(
     except Exception as exc:
         if run_id is not None:
             reporters.mark_run_failed(conn, run_id, str(exc))
+            alerting.notify_failure(run_id, str(exc), fecha=fecha)
         log.exception("pipeline.fatal_error", error=str(exc))
         raise
 
