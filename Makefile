@@ -1,4 +1,4 @@
-.PHONY: test test-unit test-integration install up down restart logs
+.PHONY: test test-unit test-integration install up down restart logs dashboard
 
 install:
 	pip install -e ".[dev]"
@@ -23,3 +23,6 @@ restart:
 
 logs:
 	docker compose logs -f --tail=50
+
+dashboard:
+	streamlit run dashboard/app.py

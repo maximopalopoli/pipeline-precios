@@ -4,9 +4,11 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.2",
+    "plotly>=5.18",
     "psycopg2-binary>=2.9",
     "pydantic>=2.0",
     "requests>=2.32",
+    "streamlit>=1.30",
     "structlog>=24.0",
 ]
 
@@ -17,7 +19,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["etl*", "models*"]
+include = ["etl*", "models*", "dashboard*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
