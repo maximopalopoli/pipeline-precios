@@ -3,6 +3,8 @@ raw/
 .env
 *.zip
 !tests/fixtures/*.zip
+.venv/
+*.egg-info/
 __pycache__/
 *.pyc
 *.pyo

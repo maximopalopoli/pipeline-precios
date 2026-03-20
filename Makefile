@@ -1,16 +1,19 @@
-.PHONY: test test-unit test-integration install up down restart logs dashboard
+.PHONY: test test-unit test-integration install up down restart logs dashboard venv
 
-install:
-	pip install -e ".[dev]"
+venv:
+	python -m venv .venv
+
+install: venv
+	.venv/bin/pip install -e ".[dev]"
 
 test:
-	pytest $(PYTEST_ARGS)
+	.venv/bin/pytest $(PYTEST_ARGS)
 
 test-unit:
-	pytest tests/unit $(PYTEST_ARGS)
+	.venv/bin/pytest tests/unit $(PYTEST_ARGS)
 
 test-integration:
-	pytest tests/integration $(PYTEST_ARGS)
+	.venv/bin/pytest tests/integration $(PYTEST_ARGS)
 
 up:
 	docker compose up -d
@@ -25,4 +28,4 @@ logs:
 	docker compose logs -f --tail=50
 
 dashboard:
-	streamlit run dashboard/app.py
+	.venv/bin/streamlit run dashboard/app.py

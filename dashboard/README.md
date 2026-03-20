@@ -43,6 +43,8 @@ POSTGRES_DB=sepa_pipeline
 ### 3. Install dependencies
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 

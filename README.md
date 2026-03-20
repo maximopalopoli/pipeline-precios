@@ -128,7 +128,9 @@ Ver [sepa_datasets.md](sepa_datasets.md) para el esquema completo de cada CSV.
 # Levantar PostgreSQL
 docker compose up -d
 
-# Instalar dependencias
+# Crear venv e instalar dependencias
+python -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
 
 # Ejecutar tests
