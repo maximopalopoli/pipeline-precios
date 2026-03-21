@@ -114,6 +114,20 @@ def _ensure_partition(conn, fecha_id: int) -> str:
     return partition
 
 
+def delete_fact_for_fecha(conn, fecha_id: int) -> int:
+    """Delete all fact_precios rows for *fecha_id* (pre-load wipe).
+
+    The partition is ensured first so the DELETE never fails on a missing table.
+    Caller must COMMIT after this call.
+    """
+    _ensure_partition(conn, fecha_id)
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM fact_precios WHERE fecha_id = %s", (fecha_id,))
+        count = cur.rowcount
+    log.info("warehouse.fact_deleted_for_fecha", fecha_id=fecha_id, rows_deleted=count)
+    return count
+
+
 # ---------------------------------------------------------------------------
 # Dimension loaders
 # ---------------------------------------------------------------------------
@@ -437,14 +451,12 @@ def load_fact(conn, df: pd.DataFrame, run_id: int) -> int:
                 leyenda_promo1, leyenda_promo2,
                 tiene_promo
             )
-            SELECT DISTINCT ON (producto_sk, sucursal_sk, fecha_id)
-                producto_sk, sucursal_sk, fecha_id, run_id,
+            SELECT producto_sk, sucursal_sk, fecha_id, run_id,
                 precio_lista, precio_referencia,
                 precio_promo1, precio_promo2,
                 leyenda_promo1, leyenda_promo2,
                 tiene_promo
             FROM tmp_fact_precios
-            ORDER BY producto_sk, sucursal_sk, fecha_id
             ON CONFLICT (producto_sk, sucursal_sk, fecha_id) DO UPDATE SET
                 run_id            = EXCLUDED.run_id,
                 precio_lista      = EXCLUDED.precio_lista,

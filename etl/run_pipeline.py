@@ -33,6 +33,7 @@ import argparse
 import os
 import sys
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
@@ -153,27 +154,38 @@ def _read_small_staging(
     return comercios, sucursales
 
 
-def _iter_stg_productos(conn, run_id: int, chunk_size: int):
+def _iter_stg_productos(conn_read, run_id: int, chunk_size: int):
     """Yield stg_productos rows for *run_id* as DataFrames of at most *chunk_size* rows.
 
-    Uses LIMIT/OFFSET so each chunk is fetched in a fresh query, allowing the
-    caller to commit between chunks without holding a large result set in memory.
+    Uses a server-side cursor on a separate read connection so the caller can
+    commit on its write connection without closing the cursor.
     """
-    offset = 0
-    cols: list[str] | None = None
-    while True:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM stg_productos WHERE run_id = %s LIMIT %s OFFSET %s",
-                (run_id, chunk_size, offset),
-            )
+    with conn_read.cursor("stg_productos_cursor") as cur:
+        cur.itersize = chunk_size
+        cur.execute(
+            "SELECT * FROM stg_productos WHERE run_id = %s ORDER BY id_comercio, id_sucursal, id_producto",
+            (run_id,),
+        )
+        cols: list[str] | None = None
+        while True:
+            rows = cur.fetchmany(chunk_size)
+            if not rows:
+                break
             if cols is None:
                 cols = [d[0] for d in cur.description]
-            rows = cur.fetchall()
-        if not rows:
-            break
-        yield pd.DataFrame(rows, columns=cols)
-        offset += chunk_size
+            yield pd.DataFrame(rows, columns=cols)
+
+
+# ---------------------------------------------------------------------------
+# Double-buffer helper
+# ---------------------------------------------------------------------------
+
+
+def _commit_fact_chunk(conn_write, df: "pd.DataFrame", run_id: int) -> int:
+    """Load a single fact chunk and commit (runs in background thread)."""
+    rows = warehouse_loader.load_fact(conn_write, df, run_id)
+    conn_write.commit()
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -337,23 +349,48 @@ def run(
         total_productos_valid = 0
         chunk_num = 0
 
-        for chunk_df in _iter_stg_productos(conn, run_id, PRODUTO_CHUNK_SIZE):
-            chunk_num += 1
-            clean_p = clean_productos(chunk_df)
-            total_productos_valid += len(clean_p.clean)
+        # DELETE existing rows for this fecha — makes ON CONFLICT nearly free
+        warehouse_loader.delete_fact_for_fecha(conn, fecha_id_int)
+        conn.commit()
 
-            chunk_result = build_fact_chunk(
-                clean_p.clean,
-                comercio_cache,
-                sucursal_cache,
-                producto_cache,
-                fecha_id_int,
-                run_id,
-            )
-            chunk_rows = warehouse_loader.load_fact(conn, chunk_result.df, run_id)
-            conn.commit()
-            total_fact_rows += chunk_rows
-            del chunk_df, clean_p, chunk_result
+        # Dedicated write connection for the background thread (psycopg2 is not thread-safe)
+        conn_write = _db_connect()
+        conn_read = _db_connect()
+        executor = ThreadPoolExecutor(max_workers=1)
+        pending: Future | None = None
+
+        try:
+            for chunk_df in _iter_stg_productos(conn_read, run_id, PRODUTO_CHUNK_SIZE):
+                chunk_num += 1
+                clean_p = clean_productos(chunk_df)
+                total_productos_valid += len(clean_p.clean)
+
+                chunk_result = build_fact_chunk(
+                    clean_p.clean,
+                    comercio_cache,
+                    sucursal_cache,
+                    producto_cache,
+                    fecha_id_int,
+                    run_id,
+                )
+
+                # Wait for previous chunk's write before submitting next
+                if pending is not None:
+                    total_fact_rows += pending.result()
+
+                # Submit this chunk's DB write to background thread
+                pending = executor.submit(
+                    _commit_fact_chunk, conn_write, chunk_result.df, run_id
+                )
+                del chunk_df, clean_p, chunk_result
+
+            # Wait for the last chunk
+            if pending is not None:
+                total_fact_rows += pending.result()
+        finally:
+            executor.shutdown(wait=False)
+            conn_write.close()
+            conn_read.close()
 
         warehouse_loader.register_rows_loaded(conn, run_id, total_fact_rows)
         conn.commit()

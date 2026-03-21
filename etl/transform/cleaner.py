@@ -10,7 +10,7 @@ Public API
 ----------
 clean_comercios(df)  → CleanResult[ComercioRow]
 clean_sucursales(df) → CleanResult[SucursalRow]
-clean_productos(df)  → CleanResult[ProductoRow]
+clean_productos(df)  → CleanResult (clean=pd.DataFrame, prices as strings)
 """
 
 from __future__ import annotations
@@ -243,56 +243,106 @@ def clean_sucursales(df: pd.DataFrame) -> CleanResult[SucursalRow]:
     return result
 
 
-def clean_productos(df: pd.DataFrame) -> CleanResult[ProductoRow]:
-    """Cast prices, normalize es_ean flag, and derive tiene_promo for stg_productos rows."""
-    result: CleanResult[ProductoRow] = CleanResult()
+def clean_productos(df: pd.DataFrame) -> CleanResult:
+    """Cast prices, normalize es_ean flag, and derive tiene_promo for stg_productos rows.
 
-    for _, row in df.iterrows():
-        raw = row.to_dict()
-        try:
-            promo1 = _opt_decimal(raw.get("productos_precio_unitario_promo1"), "productos_precio_unitario_promo1")
-            promo2 = _opt_decimal(raw.get("productos_precio_unitario_promo2"), "productos_precio_unitario_promo2")
+    Returns a CleanResult where ``.clean`` is a pd.DataFrame (not a list)
+    with columns matching ProductoRow field names, and prices kept as strings
+    for lossless COPY into PostgreSQL NUMERIC(12,2).
+    """
+    n = len(df)
+    if n == 0:
+        return CleanResult(clean=pd.DataFrame(), rejected=[])
 
-            ean_raw = _str(raw.get("productos_ean"))
-            if ean_raw == "1":
-                es_ean = True
-            elif ean_raw == "0":
-                es_ean = False
-            else:
-                raise ValueError(f"productos_ean: expected '0' or '1', got {ean_raw!r}")
+    # Work on a copy to avoid mutating the caller's DataFrame
+    df = df.copy()
 
-            precio_lista = _decimal(raw.get("productos_precio_lista"), "productos_precio_lista")
-            precio_referencia = _decimal(raw.get("productos_precio_referencia"), "productos_precio_referencia")
+    # Reason series: first failure wins per row
+    reason = pd.Series("", index=df.index, dtype="object")
+    bad = pd.Series(False, index=df.index, dtype="bool")
 
-            if float(precio_lista) <= 0:
-                raise ValueError(f"productos_precio_lista must be > 0, got {precio_lista}")
-            if float(precio_referencia) <= 0:
-                raise ValueError(f"productos_precio_referencia must be > 0, got {precio_referencia}")
+    # ── 1. Integer IDs ────────────────────────────────────────────────────────
+    for col in ("id_comercio", "id_bandera", "id_sucursal"):
+        num = pd.to_numeric(df[col], errors="coerce")
+        fail = num.isna()
+        new_bad = fail & ~bad
+        reason[new_bad] = col + ": cannot cast '" + df[col][new_bad].astype(str) + "' to int"
+        bad |= fail
+        df[col] = num
 
-            record = ProductoRow(
-                id_comercio=_int(raw.get("id_comercio"), "id_comercio"),
-                id_bandera=_int(raw.get("id_bandera"), "id_bandera"),
-                id_sucursal=_int(raw.get("id_sucursal"), "id_sucursal"),
-                id_producto=_str(raw.get("id_producto")),
-                es_ean=es_ean,
-                productos_descripcion=_str(raw.get("productos_descripcion")),
-                productos_cantidad_presentacion=_str(raw.get("productos_cantidad_presentacion")),
-                productos_unidad_medida_presentacion=_str(raw.get("productos_unidad_medida_presentacion")),
-                productos_marca=_str(raw.get("productos_marca")),
-                productos_precio_lista=precio_lista,
-                productos_precio_referencia=precio_referencia,
-                productos_cantidad_referencia=_str(raw.get("productos_cantidad_referencia")),
-                productos_unidad_medida_referencia=_str(raw.get("productos_unidad_medida_referencia")),
-                productos_precio_unitario_promo1=promo1,
-                productos_leyenda_promo1=_opt_str(raw.get("productos_leyenda_promo1")),
-                productos_precio_unitario_promo2=promo2,
-                productos_leyenda_promo2=_opt_str(raw.get("productos_leyenda_promo2")),
-                tiene_promo=promo1 is not None or promo2 is not None,
-            )
-            result.clean.append(record)
-        except (ValueError, KeyError) as exc:
-            result.rejected.append({"row": raw, "reason": str(exc)})
+    # ── 2. EAN flag ───────────────────────────────────────────────────────────
+    ean = df["productos_ean"].astype(str).str.strip()
+    ean_valid = ean.isin(["0", "1"])
+    new_bad = ~ean_valid & ~bad
+    reason[new_bad] = "productos_ean: expected '0' or '1', got '" + ean[new_bad] + "'"
+    bad |= ~ean_valid
+    df["es_ean"] = ean == "1"
 
+    # ── 3. Mandatory prices ───────────────────────────────────────────────────
+    for col in ("productos_precio_lista", "productos_precio_referencia"):
+        num = pd.to_numeric(df[col], errors="coerce")
+        cast_fail = num.isna()
+        new_bad = cast_fail & ~bad
+        reason[new_bad] = col + ": cannot cast '" + df[col][new_bad].astype(str) + "' to Decimal"
+        bad |= cast_fail
+
+        le_zero = (num <= 0) & ~num.isna()
+        new_bad = le_zero & ~bad
+        reason[new_bad] = col + " must be > 0, got " + num[new_bad].astype(str)
+        bad |= le_zero
+        # Keep the original string column — PostgreSQL COPY handles the cast
+
+    # ── 4. Optional promo prices ──────────────────────────────────────────────
+    for col in ("productos_precio_unitario_promo1", "productos_precio_unitario_promo2"):
+        raw_str = df[col].astype(str).str.strip()
+        is_empty = raw_str.isin(["", "nan", "none", "None", "NaN"])
+        num = pd.to_numeric(df[col], errors="coerce")
+        cast_fail = num.isna() & ~is_empty
+        new_bad = cast_fail & ~bad
+        reason[new_bad] = col + ": cannot cast '" + df[col][new_bad].astype(str) + "' to Decimal"
+        bad |= cast_fail
+        # Replace empty values with None in the original column
+        df[col] = df[col].where(~is_empty, other=None)
+
+    # ── 5. String columns: strip and normalize ────────────────────────────────
+    str_cols = [
+        "id_producto", "productos_descripcion", "productos_cantidad_presentacion",
+        "productos_unidad_medida_presentacion", "productos_marca",
+        "productos_cantidad_referencia", "productos_unidad_medida_referencia",
+    ]
+    for col in str_cols:
+        s = df[col].astype(str).str.strip()
+        s = s.where(~s.str.lower().isin(["nan", "none", ""]), other="")
+        df[col] = s
+
+    # ── 6. Optional string columns: empty → None ─────────────────────────────
+    for col in ("productos_leyenda_promo1", "productos_leyenda_promo2"):
+        s = df[col].astype(str).str.strip()
+        s = s.where(~s.str.lower().isin(["nan", "none", ""]), other=None)
+        df[col] = s
+
+    # ── 7. Derive tiene_promo ─────────────────────────────────────────────────
+    df["tiene_promo"] = df["productos_precio_unitario_promo1"].notna() | df["productos_precio_unitario_promo2"].notna()
+
+    # ── Split clean / rejected ────────────────────────────────────────────────
+    clean_mask = ~bad
+    clean_df = df.loc[clean_mask].copy()
+
+    # Cast integer ID columns to int for clean rows
+    for col in ("id_comercio", "id_bandera", "id_sucursal"):
+        clean_df[col] = clean_df[col].astype(int)
+
+    rejected_list: list[dict] = []
+    if bad.any():
+        rej_df = df.loc[bad]
+        rej_reasons = reason.loc[bad]
+        for idx in rej_df.index:
+            rejected_list.append({
+                "row": rej_df.loc[idx].to_dict(),
+                "reason": rej_reasons.at[idx],
+            })
+
+    result: CleanResult = CleanResult(clean=clean_df, rejected=rejected_list)
     _log_summary("productos", result)
     return result
 

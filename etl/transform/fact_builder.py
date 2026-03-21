@@ -244,7 +244,7 @@ def build_sk_caches(
 
 
 def build_fact_chunk(
-    productos: list[ProductoRow],
+    productos: "pd.DataFrame | list[ProductoRow]",
     comercio_cache: dict[tuple[int, int], int],
     sucursal_cache: dict[tuple[int, int, int], int],
     producto_cache: dict[str, int],
@@ -257,7 +257,87 @@ def build_fact_chunk(
     Unlike ``build_fact_df``, this function does not touch the database —
     all lookups are dictionary reads against the in-memory caches.  Call
     ``build_sk_caches`` once before iterating chunks to populate them.
+
+    Accepts either a DataFrame (vectorized path from clean_productos) or
+    a list[ProductoRow] (legacy / integration test path).
     """
+    if isinstance(productos, list):
+        return _build_fact_chunk_list(
+            productos, comercio_cache, sucursal_cache, producto_cache, fecha_id, run_id
+        )
+
+    df = productos.copy()
+
+    # ── SK lookups via Series.map ─────────────────────────────────────────────
+    suc_keys = pd.Series(
+        list(zip(df["id_comercio"], df["id_bandera"], df["id_sucursal"])),
+        index=df.index,
+    )
+    df["sucursal_sk"] = suc_keys.map(sucursal_cache)
+    df["producto_sk"] = df["id_producto"].map(producto_cache)
+
+    # ── Identify rejected rows ────────────────────────────────────────────────
+    missing_suc = df["sucursal_sk"].isna()
+    missing_prod = df["producto_sk"].isna() & ~missing_suc
+    bad = missing_suc | missing_prod
+
+    rejected: list[dict] = []
+    if bad.any():
+        for idx in df.index[missing_suc]:
+            row = df.loc[idx]
+            rejected.append({
+                "row": row.to_dict(),
+                "reason": (
+                    f"sucursal_sk not found for "
+                    f"(id_comercio={row['id_comercio']}, id_bandera={row['id_bandera']}, "
+                    f"id_sucursal={row['id_sucursal']})"
+                ),
+            })
+        for idx in df.index[missing_prod]:
+            row = df.loc[idx]
+            rejected.append({
+                "row": row.to_dict(),
+                "reason": f"producto_sk not found for id_producto={row['id_producto']!r}",
+            })
+
+    # ── Build fact DataFrame ──────────────────────────────────────────────────
+    clean = df.loc[~bad].copy()
+    if len(clean) == 0:
+        return FactBuildResult(df=pd.DataFrame(columns=_FACT_COLUMNS), rejected=rejected)
+
+    clean["fecha_id"] = fecha_id
+    clean["run_id"] = run_id
+    clean = clean.rename(columns={
+        "productos_precio_lista": "precio_lista",
+        "productos_precio_referencia": "precio_referencia",
+        "productos_precio_unitario_promo1": "precio_promo1",
+        "productos_precio_unitario_promo2": "precio_promo2",
+        "productos_leyenda_promo1": "leyenda_promo1",
+        "productos_leyenda_promo2": "leyenda_promo2",
+    })
+    fact_df = clean[_FACT_COLUMNS].copy()
+    fact_df["producto_sk"] = fact_df["producto_sk"].astype(int)
+    fact_df["sucursal_sk"] = fact_df["sucursal_sk"].astype(int)
+
+    # Deduplicate on grain columns (fecha_id is constant per run)
+    before = len(fact_df)
+    fact_df = fact_df.drop_duplicates(subset=["producto_sk", "sucursal_sk"], keep="last")
+    dupes = before - len(fact_df)
+    if dupes:
+        log.info("fact_builder.chunk_dedup", removed=dupes)
+
+    return FactBuildResult(df=fact_df, rejected=rejected)
+
+
+def _build_fact_chunk_list(
+    productos: list[ProductoRow],
+    comercio_cache: dict[tuple[int, int], int],
+    sucursal_cache: dict[tuple[int, int, int], int],
+    producto_cache: dict[str, int],
+    fecha_id: int,
+    run_id: int,
+) -> FactBuildResult:
+    """Legacy row-by-row path for list[ProductoRow] input."""
     rows: list[dict] = []
     rejected: list[dict] = []
 

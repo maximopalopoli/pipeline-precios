@@ -159,16 +159,17 @@ class TestCleanSucursales:
 class TestCleanProductos:
     def test_happy_path_no_promo(self):
         r = clean_productos(_df(_producto()))
+        assert isinstance(r.clean, pd.DataFrame)
         assert len(r.clean) == 1
-        row = r.clean[0]
-        assert row.productos_precio_lista == Decimal("250.50")
-        assert row.productos_precio_referencia == Decimal("240.00")
-        assert row.es_ean is True
-        assert row.tiene_promo is False
+        row = r.clean.iloc[0]
+        assert row["productos_precio_lista"] == "250.50"
+        assert row["productos_precio_referencia"] == "240.00"
+        assert row["es_ean"] == True
+        assert row["tiene_promo"] == False
 
     def test_ean_zero_parsed(self):
         r = clean_productos(_df(_producto(productos_ean="0")))
-        assert r.clean[0].es_ean is False
+        assert r.clean.iloc[0]["es_ean"] == False
 
     def test_invalid_ean_rejected(self):
         r = clean_productos(_df(_producto(productos_ean="2")))
@@ -177,19 +178,19 @@ class TestCleanProductos:
 
     def test_tiene_promo_true_when_promo1_set(self):
         r = clean_productos(_df(_producto(productos_precio_unitario_promo1="200.00")))
-        assert r.clean[0].tiene_promo is True
-        assert r.clean[0].productos_precio_unitario_promo1 == Decimal("200.00")
+        assert r.clean.iloc[0]["tiene_promo"] == True
+        assert r.clean.iloc[0]["productos_precio_unitario_promo1"] == "200.00"
 
     def test_tiene_promo_true_when_promo2_set(self):
         r = clean_productos(_df(_producto(productos_precio_unitario_promo2="180.00")))
-        assert r.clean[0].tiene_promo is True
+        assert r.clean.iloc[0]["tiene_promo"] == True
 
     def test_tiene_promo_true_when_both_set(self):
         r = clean_productos(_df(_producto(
             productos_precio_unitario_promo1="200.00",
             productos_precio_unitario_promo2="180.00",
         )))
-        assert r.clean[0].tiene_promo is True
+        assert r.clean.iloc[0]["tiene_promo"] == True
 
     def test_zero_precio_lista_rejected(self):
         r = clean_productos(_df(_producto(productos_precio_lista="0")))
@@ -206,8 +207,8 @@ class TestCleanProductos:
 
     def test_blank_promo_becomes_none(self):
         r = clean_productos(_df(_producto(productos_precio_unitario_promo1="")))
-        assert r.clean[0].productos_precio_unitario_promo1 is None
+        assert r.clean.iloc[0]["productos_precio_unitario_promo1"] is None
 
     def test_promo_leyenda_optional(self):
         r = clean_productos(_df(_producto(productos_leyenda_promo1="")))
-        assert r.clean[0].productos_leyenda_promo1 is None
+        assert r.clean.iloc[0]["productos_leyenda_promo1"] is None
