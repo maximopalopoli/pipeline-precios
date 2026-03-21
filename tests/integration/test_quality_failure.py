@@ -130,10 +130,11 @@ class TestCriticalQualityFailureMarksFailed:
             for f in exc_info.value.failures
         )
 
-    def test_duplicate_pk_marks_run_failed(self, pg_conn, sample_zip_path):
+    def test_duplicate_pk_is_warning_not_critical(self, pg_conn, sample_zip_path):
         """
-        Injecting a duplicate comercio row triggers pk_uniqueness CRITICAL failure.
-        The run must be marked 'failed'.
+        Injecting a duplicate comercio row triggers pk_uniqueness WARNING.
+        The pipeline must NOT abort — duplicate PKs in SEPA source data are
+        common and handled by the transform stage via rejected_rows.
         """
         run_id = _setup_run(pg_conn, sample_zip_path)
 
@@ -160,16 +161,13 @@ class TestCriticalQualityFailureMarksFailed:
             )
         pg_conn.commit()
 
-        with pytest.raises(quality_checks.QualityCheckError) as exc_info:
-            quality_checks.run_all(pg_conn, run_id, min_productos=5)
+        # Should NOT raise — pk_uniqueness is WARNING, not CRITICAL
+        results = quality_checks.run_all(pg_conn, run_id, min_productos=5)
 
-        failing_names = {r.name for r in exc_info.value.failures}
-        assert "pk_uniqueness" in failing_names
-
-        reporters.report(results=exc_info.value.failures, run_id=run_id, conn=pg_conn)
-
-        status, _ = _fetch_run(pg_conn, run_id)
-        assert status == "failed"
+        failing = [r for r in results if not r.passed]
+        assert any(r.name == "pk_uniqueness" for r in failing)
+        pk_result = next(r for r in failing if r.name == "pk_uniqueness")
+        assert pk_result.severity == quality_checks.Severity.WARNING
 
     def test_finished_at_is_set_on_failure(self, pg_conn, sample_zip_path):
         """finished_at must be stamped so duration_seconds is computable."""

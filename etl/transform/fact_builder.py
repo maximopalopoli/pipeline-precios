@@ -32,6 +32,9 @@ from etl.transform.dimension_resolver import (
 
 log = structlog.get_logger(__name__)
 
+# Chunk size for streaming produto processing (300k rows ≈ ~200MB peak)
+PRODUTO_CHUNK_SIZE = 300_000
+
 # Column order must match fact_precios
 _FACT_COLUMNS = [
     "producto_sk",
@@ -193,4 +196,106 @@ def build_fact_df(
             sample_reasons=[r["reason"] for r in rejected[:3]],
         )
 
+    return FactBuildResult(df=df, rejected=rejected)
+
+
+# ---------------------------------------------------------------------------
+# Streaming / chunked helpers
+# ---------------------------------------------------------------------------
+
+
+def build_sk_caches(
+    conn: "psycopg2.connection",
+    run_date: date,
+) -> tuple[int, dict, dict, dict]:
+    """
+    Build surrogate-key lookup caches by reading dimension tables directly.
+
+    Must be called *after* all three dimension tables have been loaded.
+    Returns ``(fecha_id, comercio_cache, sucursal_cache, produto_cache)``.
+    The caches are small (number of unique comercios/sucursais/produtos) and
+    fit comfortably in memory.
+    """
+    fecha_id = resolve_fecha(conn, run_date)
+
+    with conn.cursor() as cur:
+        cur.execute("SELECT id_comercio, id_bandera, comercio_sk FROM dim_comercio")
+        comercio_cache: dict[tuple[int, int], int] = {
+            (r[0], r[1]): r[2] for r in cur.fetchall()
+        }
+
+        cur.execute(
+            "SELECT id_comercio, id_bandera, id_sucursal, sucursal_sk FROM dim_sucursal"
+        )
+        sucursal_cache: dict[tuple[int, int, int], int] = {
+            (r[0], r[1], r[2]): r[3] for r in cur.fetchall()
+        }
+
+        cur.execute("SELECT id_producto, producto_sk FROM dim_producto")
+        producto_cache: dict[str, int] = {r[0]: r[1] for r in cur.fetchall()}
+
+    log.info(
+        "fact_builder.caches_built",
+        comercios=len(comercio_cache),
+        sucursales=len(sucursal_cache),
+        productos=len(producto_cache),
+    )
+    return fecha_id, comercio_cache, sucursal_cache, producto_cache
+
+
+def build_fact_chunk(
+    productos: list[ProductoRow],
+    comercio_cache: dict[tuple[int, int], int],
+    sucursal_cache: dict[tuple[int, int, int], int],
+    producto_cache: dict[str, int],
+    fecha_id: int,
+    run_id: int,
+) -> FactBuildResult:
+    """
+    Resolve surrogate keys for a *chunk* of productos using pre-built caches.
+
+    Unlike ``build_fact_df``, this function does not touch the database —
+    all lookups are dictionary reads against the in-memory caches.  Call
+    ``build_sk_caches`` once before iterating chunks to populate them.
+    """
+    rows: list[dict] = []
+    rejected: list[dict] = []
+
+    for p in productos:
+        sucursal_key = (p.id_comercio, p.id_bandera, p.id_sucursal)
+        sucursal_sk = sucursal_cache.get(sucursal_key)
+        if sucursal_sk is None:
+            rejected.append({
+                "row": p.__dict__,
+                "reason": (
+                    f"sucursal_sk not found for "
+                    f"(id_comercio={p.id_comercio}, id_bandera={p.id_bandera}, "
+                    f"id_sucursal={p.id_sucursal})"
+                ),
+            })
+            continue
+
+        producto_sk = producto_cache.get(p.id_producto)
+        if producto_sk is None:
+            rejected.append({
+                "row": p.__dict__,
+                "reason": f"producto_sk not found for id_producto={p.id_producto!r}",
+            })
+            continue
+
+        rows.append({
+            "producto_sk":      producto_sk,
+            "sucursal_sk":      sucursal_sk,
+            "fecha_id":         fecha_id,
+            "run_id":           run_id,
+            "precio_lista":     p.productos_precio_lista,
+            "precio_referencia": p.productos_precio_referencia,
+            "precio_promo1":    p.productos_precio_unitario_promo1,
+            "precio_promo2":    p.productos_precio_unitario_promo2,
+            "leyenda_promo1":   p.productos_leyenda_promo1,
+            "leyenda_promo2":   p.productos_leyenda_promo2,
+            "tiene_promo":      p.tiene_promo,
+        })
+
+    df = pd.DataFrame(rows, columns=_FACT_COLUMNS) if rows else pd.DataFrame(columns=_FACT_COLUMNS)
     return FactBuildResult(df=df, rejected=rejected)

@@ -61,7 +61,8 @@ class TestDownloadSkipOnDuplicate:
         assert result.fecha_datos == _FECHA
 
     def test_second_download_is_not_new(self, pg_conn, tmp_path):
-        """Downloading the same ZIP a second time returns is_new=False."""
+        """Downloading the same ZIP a second time returns is_new=False.
+        The downloader tracks novelty by SHA-256; retry logic lives in the pipeline."""
         with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
             first = download(pg_conn, tmp_path, _FECHA)
             second = download(pg_conn, tmp_path, _FECHA)

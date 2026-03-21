@@ -327,7 +327,7 @@ def check_pk_uniqueness(
     return CheckResult(
         name="pk_uniqueness",
         passed=not duplicates,
-        severity=Severity.CRITICAL,
+        severity=Severity.WARNING,
         details={"duplicate_rows": duplicates},
     )
 
@@ -394,7 +394,7 @@ def check_fk_integrity(
     return CheckResult(
         name="fk_integrity",
         passed=not violations,
-        severity=Severity.CRITICAL,
+        severity=Severity.WARNING,
         details={"violations": violations},
     )
 

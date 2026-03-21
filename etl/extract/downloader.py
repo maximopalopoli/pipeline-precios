@@ -119,7 +119,6 @@ def download(
     existing_id = _find_by_sha256(conn, sha256)
     if existing_id is not None:
         logger.info("download.duplicate_skipped", raw_file_id=existing_id)
-        # Still return a useful result — path may or may not exist on disk
         return DownloadResult(
             raw_file_id=existing_id,
             filename=filename,

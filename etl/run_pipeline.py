@@ -44,12 +44,17 @@ import structlog.dev
 from etl import alerting
 from etl.extract import downloader
 from etl.load.aggregator import aggregate
+from etl.load import warehouse_loader
 from etl.load.warehouse_loader import load as warehouse_load
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
 from etl.staging import loader as staging_loader
 from etl.transform.cleaner import clean_comercios, clean_productos, clean_sucursales
-from etl.transform.fact_builder import build_fact_df
+from etl.transform.fact_builder import (
+    PRODUTO_CHUNK_SIZE,
+    build_fact_chunk,
+    build_sk_caches,
+)
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -93,6 +98,15 @@ def _db_connect() -> psycopg2.extensions.connection:
 # ---------------------------------------------------------------------------
 
 
+def _has_completed_run(conn, raw_file_id: int) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM ingestion_runs WHERE raw_file_id = %s AND status = 'completed'",
+            (raw_file_id,),
+        )
+        return cur.fetchone() is not None
+
+
 def _open_run(conn, raw_file_id: int) -> int:
     """Insert an ingestion_run in 'running' status; return its id."""
     with conn.cursor() as cur:
@@ -125,10 +139,10 @@ def _mark_completed(conn, run_id: int, rows_valid: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _read_staging(
+def _read_small_staging(
     conn, run_id: int
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return (comercios_df, sucursales_df, productos_df) from stg_* tables."""
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (comercios_df, sucursales_df) — the small tables only."""
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM stg_comercios  WHERE run_id = %s", (run_id,))
         comercios = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
@@ -136,10 +150,30 @@ def _read_staging(
         cur.execute("SELECT * FROM stg_sucursales WHERE run_id = %s", (run_id,))
         sucursales = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
 
-        cur.execute("SELECT * FROM stg_productos  WHERE run_id = %s", (run_id,))
-        productos = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
+    return comercios, sucursales
 
-    return comercios, sucursales, productos
+
+def _iter_stg_productos(conn, run_id: int, chunk_size: int):
+    """Yield stg_productos rows for *run_id* as DataFrames of at most *chunk_size* rows.
+
+    Uses LIMIT/OFFSET so each chunk is fetched in a fresh query, allowing the
+    caller to commit between chunks without holding a large result set in memory.
+    """
+    offset = 0
+    cols: list[str] | None = None
+    while True:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT * FROM stg_productos WHERE run_id = %s LIMIT %s OFFSET %s",
+                (run_id, chunk_size, offset),
+            )
+            if cols is None:
+                cols = [d[0] for d in cur.description]
+            rows = cur.fetchall()
+        if not rows:
+            break
+        yield pd.DataFrame(rows, columns=cols)
+        offset += chunk_size
 
 
 # ---------------------------------------------------------------------------
@@ -173,14 +207,20 @@ def run(
         dl = downloader.download(conn, raw_dir, fecha)
 
         if not dl.is_new:
+            if _has_completed_run(conn, dl.raw_file_id):
+                log.info(
+                    "pipeline.skipped",
+                    reason="duplicate_sha256",
+                    raw_file_id=dl.raw_file_id,
+                    filename=dl.filename,
+                )
+                conn.close()
+                return 0
             log.info(
-                "pipeline.skipped",
-                reason="duplicate_sha256",
+                "pipeline.reprocessing_failed_run",
                 raw_file_id=dl.raw_file_id,
                 filename=dl.filename,
             )
-            conn.close()
-            return 0
 
         log.info(
             "pipeline.stage.done",
@@ -246,71 +286,83 @@ def run(
             elapsed=round(time.perf_counter() - t3, 2),
         )
 
-        # ── 5. Clean ─────────────────────────────────────────────────────────
+        # ── 5. Clean small staging tables (comercios + sucursales) ───────────
         logger.info("pipeline.stage.start", stage="clean")
         t4 = time.perf_counter()
 
-        stg_comercios, stg_sucursales, stg_productos = _read_staging(conn, run_id)
-
+        stg_comercios, stg_sucursales = _read_small_staging(conn, run_id)
         clean_c = clean_comercios(stg_comercios)
         clean_s = clean_sucursales(stg_sucursales)
-        clean_p = clean_productos(stg_productos)
 
-        total_rejected = (
-            len(clean_c.rejected) + len(clean_s.rejected) + len(clean_p.rejected)
-        )
         logger.info(
             "pipeline.stage.done",
             stage="clean",
             comercios=len(clean_c.clean),
             sucursales=len(clean_s.clean),
-            productos=len(clean_p.clean),
-            rejected=total_rejected,
+            rejected=len(clean_c.rejected) + len(clean_s.rejected),
             elapsed=round(time.perf_counter() - t4, 2),
         )
 
-        # ── 6. Build fact DataFrame ──────────────────────────────────────────
-        logger.info("pipeline.stage.start", stage="fact_build")
+        # ── 6. Load dimensions ───────────────────────────────────────────────
+        logger.info("pipeline.stage.start", stage="dimensions")
         t5 = time.perf_counter()
 
-        fact_result = build_fact_df(
-            conn,
-            productos=clean_p.clean,
-            sucursales=clean_s.clean,
-            comercios=clean_c.clean,
-            run_date=dl.fecha_datos,
-            run_id=run_id,
+        # comercio + sucursal via Python (small tables)
+        rc, rs = warehouse_loader.load_dimensions_no_producto(
+            conn, clean_c.clean, clean_s.clean
+        )
+        # producto via SQL INSERT...SELECT from staging (avoids 14M rows in Python)
+        rp = warehouse_loader.load_dim_produto_from_staging(conn, run_id)
+        conn.commit()
+
+        # Build SK lookup caches from the now-populated dimension tables
+        fecha_id_int, comercio_cache, sucursal_cache, producto_cache = build_sk_caches(
+            conn, dl.fecha_datos
         )
 
         logger.info(
             "pipeline.stage.done",
-            stage="fact_build",
-            fact_rows=len(fact_result.df),
-            rejected=len(fact_result.rejected),
+            stage="dimensions",
+            rows_comercios=rc,
+            rows_sucursales=rs,
+            rows_productos=rp,
             elapsed=round(time.perf_counter() - t5, 2),
         )
 
-        # ── 7. Warehouse load ────────────────────────────────────────────────
-        logger.info("pipeline.stage.start", stage="warehouse")
+        # ── 7. Build + load fact_precios in chunks ───────────────────────────
+        logger.info("pipeline.stage.start", stage="fact_load")
         t6 = time.perf_counter()
 
-        wh = warehouse_load(
-            conn,
-            comercios=clean_c.clean,
-            sucursales=clean_s.clean,
-            productos=clean_p.clean,
-            fact_df=fact_result.df,
-            run_id=run_id,
-        )
+        total_fact_rows = 0
+        total_productos_valid = 0
+        chunk_num = 0
+
+        for chunk_df in _iter_stg_productos(conn, run_id, PRODUTO_CHUNK_SIZE):
+            chunk_num += 1
+            clean_p = clean_productos(chunk_df)
+            total_productos_valid += len(clean_p.clean)
+
+            chunk_result = build_fact_chunk(
+                clean_p.clean,
+                comercio_cache,
+                sucursal_cache,
+                producto_cache,
+                fecha_id_int,
+                run_id,
+            )
+            chunk_rows = warehouse_loader.load_fact(conn, chunk_result.df, run_id)
+            conn.commit()
+            total_fact_rows += chunk_rows
+            del chunk_df, clean_p, chunk_result
+
+        warehouse_loader.register_rows_loaded(conn, run_id, total_fact_rows)
         conn.commit()
 
         logger.info(
             "pipeline.stage.done",
-            stage="warehouse",
-            rows_comercios=wh.rows_comercios,
-            rows_sucursales=wh.rows_sucursales,
-            rows_productos=wh.rows_productos,
-            rows_fact=wh.rows_fact,
+            stage="fact_load",
+            chunks=chunk_num,
+            rows_fact=total_fact_rows,
             elapsed=round(time.perf_counter() - t6, 2),
         )
 
@@ -318,8 +370,7 @@ def run(
         logger.info("pipeline.stage.start", stage="aggregations")
         t7 = time.perf_counter()
 
-        fecha_id = int(dl.fecha_datos.strftime("%Y%m%d"))
-        agg = aggregate(conn, fecha_id)
+        agg = aggregate(conn, fecha_id_int)
         conn.commit()
 
         logger.info(
@@ -330,16 +381,16 @@ def run(
         )
 
         # ── 9. Mark completed ────────────────────────────────────────────────
-        _mark_completed(conn, run_id, rows_valid=len(clean_p.clean))
+        _mark_completed(conn, run_id, rows_valid=total_productos_valid)
 
         elapsed_total = round(time.perf_counter() - t0, 2)
         logger.info(
             "pipeline.completed",
             fecha=str(dl.fecha_datos),
-            rows_loaded=wh.rows_fact,
+            rows_loaded=total_fact_rows,
             elapsed_total=elapsed_total,
         )
-        return wh.rows_fact
+        return total_fact_rows
 
     except Exception as exc:
         if run_id is not None:

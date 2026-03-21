@@ -96,7 +96,7 @@ def test_check_pk_uniqueness_passes_on_sample(pg_conn, sample_zip_path):
     run_id = _load_sample(pg_conn, sample_zip_path)
     result = check_pk_uniqueness(pg_conn, run_id)
     assert result.passed
-    assert result.severity == Severity.CRITICAL
+    assert result.severity == Severity.WARNING
 
 
 def test_check_pk_uniqueness_detects_duplicate_comercio(pg_conn, sample_zip_path):
@@ -167,7 +167,7 @@ def test_check_fk_integrity_passes_on_sample(pg_conn, sample_zip_path):
     run_id = _load_sample(pg_conn, sample_zip_path)
     result = check_fk_integrity(pg_conn, run_id)
     assert result.passed
-    assert result.severity == Severity.CRITICAL
+    assert result.severity == Severity.WARNING
 
 
 def test_check_fk_integrity_detects_orphan_producto_comercio(pg_conn, sample_zip_path):

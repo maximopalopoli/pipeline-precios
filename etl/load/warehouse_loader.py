@@ -437,13 +437,14 @@ def load_fact(conn, df: pd.DataFrame, run_id: int) -> int:
                 leyenda_promo1, leyenda_promo2,
                 tiene_promo
             )
-            SELECT
+            SELECT DISTINCT ON (producto_sk, sucursal_sk, fecha_id)
                 producto_sk, sucursal_sk, fecha_id, run_id,
                 precio_lista, precio_referencia,
                 precio_promo1, precio_promo2,
                 leyenda_promo1, leyenda_promo2,
                 tiene_promo
             FROM tmp_fact_precios
+            ORDER BY producto_sk, sucursal_sk, fecha_id
             ON CONFLICT (producto_sk, sucursal_sk, fecha_id) DO UPDATE SET
                 run_id            = EXCLUDED.run_id,
                 precio_lista      = EXCLUDED.precio_lista,
@@ -478,6 +479,71 @@ def register_rows_loaded(conn, run_id: int, rows_loaded: int) -> None:
         run_id=run_id,
         rows_loaded=rows_loaded,
     )
+
+
+# ---------------------------------------------------------------------------
+# Chunked / streaming helpers
+# ---------------------------------------------------------------------------
+
+
+def load_dim_produto_from_staging(conn, run_id: int) -> int:
+    """
+    Load dim_produto directly from stg_produtos via SQL (no Python intermediary).
+
+    Avoids loading 14M+ rows into Python memory: the DB does the deduplication
+    and type-casting inline.  Returns the number of rows upserted.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dim_producto (
+                id_producto, es_ean,
+                productos_descripcion, productos_marca,
+                productos_cantidad_presentacion, productos_unidad_medida_presentacion,
+                productos_cantidad_referencia,   productos_unidad_medida_referencia
+            )
+            SELECT DISTINCT ON (TRIM(id_producto))
+                TRIM(id_producto),
+                (TRIM(productos_ean) = '1'),
+                TRIM(productos_descripcion),
+                TRIM(productos_marca),
+                TRIM(productos_cantidad_presentacion),
+                TRIM(productos_unidad_medida_presentacion),
+                TRIM(productos_cantidad_referencia),
+                TRIM(productos_unidad_medida_referencia)
+            FROM stg_productos
+            WHERE run_id = %s
+              AND TRIM(productos_ean) IN ('0', '1')
+              AND TRIM(id_producto)          <> ''
+              AND TRIM(productos_descripcion) <> ''
+            ORDER BY TRIM(id_producto)
+            ON CONFLICT (id_producto) DO UPDATE SET
+                es_ean                               = EXCLUDED.es_ean,
+                productos_descripcion                = EXCLUDED.productos_descripcion,
+                productos_marca                      = EXCLUDED.productos_marca,
+                productos_cantidad_presentacion      = EXCLUDED.productos_cantidad_presentacion,
+                productos_unidad_medida_presentacion = EXCLUDED.productos_unidad_medida_presentacion,
+                productos_cantidad_referencia        = EXCLUDED.productos_cantidad_referencia,
+                productos_unidad_medida_referencia   = EXCLUDED.productos_unidad_medida_referencia,
+                updated_at                           = NOW()
+            """,
+            (run_id,),
+        )
+        count = cur.rowcount
+    log.info("warehouse.dim_producto_loaded_from_staging", run_id=run_id, rows=count)
+    return count
+
+
+def load_dimensions_no_producto(
+    conn,
+    comercios: list[ComercioRow],
+    sucursales: list[SucursalRow],
+) -> tuple[int, int]:
+    """Upsert dim_comercio and dim_sucursal only (dim_produto loaded separately via SQL)."""
+    rc = _load_dim_comercio(conn, comercios)
+    rs = _load_dim_sucursal(conn, sucursales)
+    log.info("warehouse.dimensions_loaded", rows_comercios=rc, rows_sucursales=rs)
+    return rc, rs
 
 
 # ---------------------------------------------------------------------------

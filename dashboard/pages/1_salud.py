@@ -96,6 +96,9 @@ df_rejected = run_query("""
         rejection_reason,
         COUNT(*) AS count
     FROM rejected_rows
+    WHERE run_id IN (
+        SELECT id FROM ingestion_runs ORDER BY started_at DESC LIMIT 10
+    )
     GROUP BY run_id, rejection_reason
     ORDER BY run_id DESC, count DESC
 """)
