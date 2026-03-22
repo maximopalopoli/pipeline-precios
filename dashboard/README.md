@@ -32,13 +32,7 @@ Copy the example `.env` file if you haven't already:
 cp .env.example .env
 ```
 
-Verify it has these variables set:
-
-```
-POSTGRES_USER=sepa
-POSTGRES_PASSWORD=sepa_secret
-POSTGRES_DB=sepa_pipeline
-```
+Verify it has `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` set (see `.env.example` for the template).
 
 ### 3. Install dependencies
 
@@ -66,11 +60,15 @@ The app opens at [http://localhost:8501](http://localhost:8501).
 
 ## Pages
 
-| Page | URL | What it shows |
-|------|-----|---------------|
-| Home | `/` | Welcome screen |
-| Salud del Pipeline | `/salud` | Last runs, loaded vs rejected rows, QC alerts, execution time |
-| Evolución de Precios | `/evolucion` | Product search, price trends, province breakdown |
+| Page | What it shows |
+|------|---------------|
+| Home | Welcome screen, last ingestion status, links to all pages |
+| Salud del Pipeline | Last runs, loaded vs rejected rows, QC alerts, execution time |
+| Evolucion de Precios | Product search, price trends, province breakdown |
+| Mapa de Precios | Geographic map of prices by store, filters by type and promo |
+| Comparador por Cadena | Price comparison table across chains for a given product |
+| Ranking de Variaciones | Top products with highest price variation in last 7 days |
+| Analisis de Promociones | Promo coverage by chain, effective discounts, promo legends |
 
 ## Running with Docker
 

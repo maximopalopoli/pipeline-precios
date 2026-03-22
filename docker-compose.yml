@@ -7,7 +7,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
     AIRFLOW__CORE__FERNET_KEY: ""
-    AIRFLOW__WEBSERVER__SECRET_KEY: airflow-secret-key
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-changeme}
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
     AIRFLOW__SCHEDULER__JOB_HEARTBEAT_SEC: "30"
     AIRFLOW__SCHEDULER__LOCAL_TASK_JOB_HEARTBEAT_SEC: "30"
@@ -50,8 +50,8 @@ services:
       - |
         airflow db migrate
         airflow users create \
-          --username admin \
-          --password admin \
+          --username $${AIRFLOW_ADMIN_USER:-admin} \
+          --password $${AIRFLOW_ADMIN_PASSWORD:-admin} \
           --firstname Admin \
           --lastname User \
           --role Admin \

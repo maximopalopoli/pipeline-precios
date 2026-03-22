@@ -4,49 +4,23 @@ import plotly.express as px
 import streamlit as st
 
 from dashboard.db import run_query
+from dashboard.filters import (
+    COLOR_PRECIO_LISTA,
+    COLOR_PRECIO_PROMO,
+    product_search,
+    render_global_filters,
+)
 
 st.set_page_config(page_title="Comparador por Cadena", layout="wide")
 st.title("Comparador por Cadena")
 
+gf = render_global_filters()
+
 # ── 1. Product search ────────────────────────────────────────────────────────
 
-search = st.text_input(
-    "Buscar producto por nombre, marca o EAN",
-    placeholder="Ej: leche entera, Marolio, 7790001234567",
-)
-
-if not search:
-    st.info("Ingresá un término de búsqueda para comenzar.")
+producto_sk = product_search()
+if producto_sk is None:
     st.stop()
-
-df_products = run_query(
-    """
-    SELECT producto_sk, id_producto, productos_descripcion, productos_marca
-    FROM dim_producto
-    WHERE productos_descripcion ILIKE %s
-       OR productos_marca        ILIKE %s
-       OR id_producto             = %s
-    LIMIT 50
-    """,
-    (f"%{search}%", f"%{search}%", search),
-)
-
-if df_products.empty:
-    st.warning("No se encontraron productos.")
-    st.stop()
-
-df_products["label"] = (
-    df_products["productos_descripcion"]
-    + " — "
-    + df_products["productos_marca"].fillna("")
-    + " ("
-    + df_products["id_producto"]
-    + ")"
-)
-
-selected_label = st.selectbox("Seleccioná un producto", df_products["label"])
-selected_row = df_products[df_products["label"] == selected_label].iloc[0]
-producto_sk = int(selected_row["producto_sk"])
 
 # ── 2. Date selector ─────────────────────────────────────────────────────────
 
@@ -71,8 +45,16 @@ fecha_id = int(df_dates[df_dates["fecha"] == selected_date].iloc[0]["fecha_id"])
 
 # ── 3. Main query ────────────────────────────────────────────────────────────
 
+# Optional chain filter from global filters
+chain_clause = ""
+extra_params: list = []
+if gf["cadenas"]:
+    chain_ph = ", ".join(["%s"] * len(gf["cadenas"]))
+    chain_clause = f"AND c.comercio_bandera_nombre IN ({chain_ph})"
+    extra_params.extend(gf["cadenas"])
+
 df = run_query(
-    """
+    f"""
     SELECT
         c.comercio_bandera_nombre AS cadena,
         s.sucursales_tipo         AS tipo_sucursal,
@@ -91,10 +73,11 @@ df = run_query(
     JOIN dim_sucursal s ON f.sucursal_sk = s.sucursal_sk
     JOIN dim_comercio c ON s.comercio_sk = c.comercio_sk
     WHERE f.producto_sk = %s AND f.fecha_id = %s
+    {chain_clause}
     GROUP BY c.comercio_bandera_nombre, s.sucursales_tipo
     ORDER BY precio_lista_avg
     """,
-    (producto_sk, fecha_id),
+    (producto_sk, fecha_id, *extra_params),
 )
 
 if df.empty:
@@ -123,12 +106,12 @@ most_expensive = df_chain.iloc[-1]
 col_cheap, col_exp = st.columns(2)
 with col_cheap:
     st.success(
-        f"**Más barata:** {cheapest['cadena']}  \n"
+        f"**Mas barata:** {cheapest['cadena']}  \n"
         f"Precio lista prom: ${cheapest['precio_lista_avg']:,.2f}"
     )
 with col_exp:
     st.error(
-        f"**Más cara:** {most_expensive['cadena']}  \n"
+        f"**Mas cara:** {most_expensive['cadena']}  \n"
         f"Precio lista prom: ${most_expensive['precio_lista_avg']:,.2f}"
     )
 
@@ -142,16 +125,16 @@ st.dataframe(
         "tipo_sucursal": "Tipo",
         "sucursales": "Sucursales",
         "precio_lista_avg": "Lista prom.",
-        "precio_lista_min": "Lista mín.",
-        "precio_lista_max": "Lista máx.",
+        "precio_lista_min": "Lista min.",
+        "precio_lista_max": "Lista max.",
         "mejor_promo_avg": "Promo prom.",
         "con_promo": "Con promo",
         "pct_con_promo": "% con promo",
     }),
     column_config={
         "Lista prom.": st.column_config.NumberColumn(format="$%.2f"),
-        "Lista mín.": st.column_config.NumberColumn(format="$%.2f"),
-        "Lista máx.": st.column_config.NumberColumn(format="$%.2f"),
+        "Lista min.": st.column_config.NumberColumn(format="$%.2f"),
+        "Lista max.": st.column_config.NumberColumn(format="$%.2f"),
         "Promo prom.": st.column_config.NumberColumn(format="$%.2f"),
         "% con promo": st.column_config.NumberColumn(format="%.1f%%"),
     },
@@ -170,7 +153,7 @@ fig_promo = px.bar(
     orientation="h",
     color="pct_con_promo",
     color_continuous_scale="Greens",
-    labels={"cadena": "Cadena", "pct_con_promo": "% con promo"},
+    labels={"cadena": "", "pct_con_promo": "% con promo"},
 )
 fig_promo.update_layout(showlegend=False, yaxis_title="")
 st.plotly_chart(fig_promo, use_container_width=True)
@@ -196,7 +179,10 @@ fig_vs = px.bar(
     y="precio",
     color="tipo",
     barmode="group",
-    color_discrete_map={"Precio lista": "#3498db", "Mejor promo": "#e67e22"},
+    color_discrete_map={
+        "Precio lista": COLOR_PRECIO_LISTA,
+        "Mejor promo": COLOR_PRECIO_PROMO,
+    },
     labels={"cadena": "Cadena", "precio": "Precio ($)", "tipo": "Tipo"},
 )
 fig_vs.update_layout(legend_title_text="", xaxis_tickangle=-45)

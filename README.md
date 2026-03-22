@@ -84,8 +84,8 @@ pipeline-precios/
 │   ├── integration/                  # 7 tests: staging → quality → dimensions → fact → warehouse → aggregator → rerun
 │   └── fixtures/sample.zip           # ZIP de muestra (2 comercios, 7 productos)
 ├── scripts/benchmark_queries.py      # Benchmark: agg vs fact directo
-├── dags/                             # Airflow DAGs (pendiente)
-├── dashboard/                        # Streamlit (pendiente)
+├── dags/dag_sepa_ingest.py           # Airflow DAG (9 tasks, dual daily schedule)
+├── dashboard/                        # Streamlit dashboard (6 pages)
 ├── notebooks/exploration.ipynb       # Análisis exploratorio
 ├── docker-compose.yml                # PostgreSQL 16
 ├── pyproject.toml                    # Dependencias y configuración
@@ -147,6 +147,32 @@ jupyter notebook notebooks/exploration.ipynb
 
 Variables de entorno en `.env` (ver `.env.example`):
 - `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
+- `AIRFLOW_ADMIN_USER`, `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_SECRET_KEY` (for Airflow)
+
+### Airflow
+
+```bash
+# Start all services (PostgreSQL + Airflow + Streamlit)
+docker compose up -d
+
+# Airflow UI: http://localhost:8080
+# Credentials: set AIRFLOW_ADMIN_USER / AIRFLOW_ADMIN_PASSWORD in .env
+```
+
+The DAG `dag_sepa_ingest` runs at 06:30 and 10:30 daily (two runs to capture rectifications). Tasks: download, check hash, staging, quality checks, transform, load dimensions, load facts, aggregate, finalize.
+
+### Dashboard
+
+```bash
+# Run locally
+streamlit run dashboard/app.py
+
+# Or via Docker
+docker compose up -d streamlit
+# Dashboard: http://localhost:8501
+```
+
+6 pages: pipeline health, price evolution, geographic map, chain comparison, variation ranking, and promotion analysis. Global filters (date range, province, chain) persist across pages via the sidebar.
 
 ## Decisiones técnicas
 
@@ -165,9 +191,9 @@ Variables de entorno en `.env` (ver `.env.example`):
 | 2. Infraestructura Docker | Completa |
 | 3. ETL Core | Completa |
 | 4. Agregaciones | Completa |
-| 5. Airflow | Pendiente |
-| 6. Dashboard Streamlit | Pendiente |
-| 7. Testing y docs | Parcial (tests completos, docs en progreso) |
+| 5. Airflow | Completa |
+| 6. Dashboard Streamlit | Completa |
+| 7. Testing y docs | Completa |
 
 Ver [ROADMAP.md](ROADMAP.md) para el plan detallado.
 

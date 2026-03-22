@@ -4,13 +4,20 @@ import plotly.express as px
 import streamlit as st
 
 from dashboard.db import run_query
+from dashboard.filters import (
+    COLOR_REJECTED,
+    COLOR_VALID,
+    render_global_filters,
+)
 
 st.set_page_config(page_title="Salud del Pipeline", layout="wide")
 st.title("Salud del Pipeline")
 
+gf = render_global_filters()
+
 # ── 1. Last ingestion runs ──────────────────────────────────────────────────
 
-st.header("Estado de las últimas ingestas")
+st.header("Estado de las ultimas ingestas")
 
 df_runs = run_query("""
     SELECT
@@ -31,7 +38,7 @@ df_runs = run_query("""
 """)
 
 if df_runs.empty:
-    st.info("No hay corridas registradas todavía.")
+    st.info("No hay corridas registradas todavia.")
 else:
     def _status_color(status: str) -> str:
         colors = {"completed": "🟢", "running": "🟡", "failed": "🔴"}
@@ -44,7 +51,9 @@ else:
         column_config={
             "run_id": st.column_config.NumberColumn("Run"),
             "fecha_datos": st.column_config.DateColumn("Fecha datos"),
-            "duration_seconds": st.column_config.NumberColumn("Duración (s)", format="%.1f"),
+            "duration_seconds": st.column_config.NumberColumn(
+                "Duracion (s)", format="%.1f"
+            ),
         },
         use_container_width=True,
         hide_index=True,
@@ -52,7 +61,7 @@ else:
 
 # ── 2. Loaded vs rejected rows per day ──────────────────────────────────────
 
-st.header("Filas cargadas vs rechazadas por día")
+st.header("Filas cargadas vs rechazadas por dia")
 
 df_daily = run_query("""
     SELECT
@@ -81,7 +90,7 @@ else:
         y="filas",
         color="tipo",
         barmode="group",
-        color_discrete_map={"valid": "#2ecc71", "rejected": "#e74c3c"},
+        color_discrete_map={"valid": COLOR_VALID, "rejected": COLOR_REJECTED},
         labels={"fecha_datos": "Fecha", "filas": "Filas", "tipo": "Tipo"},
     )
     st.plotly_chart(fig_bars, use_container_width=True)
@@ -104,7 +113,7 @@ df_rejected = run_query("""
 """)
 
 if df_rejected.empty:
-    st.success("No hay filas rechazadas.")
+    st.info("No hay filas rechazadas en las ultimas corridas.")
 else:
     for run_id, group in df_rejected.groupby("run_id", sort=False):
         with st.expander(f"Run {run_id} — {group['count'].sum()} rechazos"):
@@ -116,7 +125,7 @@ else:
 
 # ── 4. Execution time per run ───────────────────────────────────────────────
 
-st.header("Tiempo de ejecución por corrida")
+st.header("Tiempo de ejecucion por corrida")
 
 df_duration = run_query("""
     SELECT
@@ -130,13 +139,13 @@ df_duration = run_query("""
 """)
 
 if df_duration.empty:
-    st.info("Sin datos de duración.")
+    st.info("Sin datos de duracion.")
 else:
     fig_duration = px.line(
         df_duration,
         x="fecha_datos",
         y="duration_seconds",
-        labels={"fecha_datos": "Fecha", "duration_seconds": "Duración (s)"},
+        labels={"fecha_datos": "Fecha", "duration_seconds": "Duracion (s)"},
         markers=True,
     )
     st.plotly_chart(fig_duration, use_container_width=True)
