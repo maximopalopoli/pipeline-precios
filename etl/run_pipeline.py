@@ -3,6 +3,7 @@ run_pipeline.py — End-to-end SEPA price pipeline.
 
 Execution order
 ---------------
+0.  Ensure reference seeds (dim_provincia, dim_fecha) are loaded
 1.  Download daily SEPA ZIP → register in raw_files (skip if SHA-256 already seen)
 2.  Open ingestion_run (status = 'running')
 3.  Load staging  (stg_comercios / stg_sucursales / stg_productos)
@@ -77,6 +78,31 @@ def _configure_logging() -> None:
 
 
 log = structlog.get_logger(__name__)
+
+_SEEDS_DIR = Path(__file__).resolve().parent.parent / "db" / "seeds"
+
+
+def _ensure_seeds(conn) -> None:
+    """Execute seed SQL files if their target tables are empty.
+
+    Seeds are idempotent (ON CONFLICT DO NOTHING) so re-running is safe,
+    but we skip execution entirely when tables are already populated to
+    avoid unnecessary work on every pipeline run.
+    """
+    seeds = [
+        ("dim_provincia", "seed_provincias.sql"),
+        ("dim_fecha", "seed_fechas.sql"),
+    ]
+    with conn.cursor() as cur:
+        for table, filename in seeds:
+            cur.execute(f"SELECT EXISTS (SELECT 1 FROM {table} LIMIT 1)")
+            has_rows = cur.fetchone()[0]
+            if not has_rows:
+                seed_path = _SEEDS_DIR / filename
+                log.info("pipeline.seed.loading", table=table, file=filename)
+                cur.execute(seed_path.read_text())
+                log.info("pipeline.seed.loaded", table=table)
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +238,9 @@ def run(
     run_id: int | None = None
 
     try:
+        # ── 0. Ensure reference seeds ─────────────────────────────────────
+        _ensure_seeds(conn)
+
         # ── 1. Download ──────────────────────────────────────────────────────
         log.info("pipeline.stage.start", stage="download")
         t1 = time.perf_counter()
