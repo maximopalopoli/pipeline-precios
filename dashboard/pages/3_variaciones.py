@@ -1,15 +1,15 @@
-"""Screen 5 — Ranking de variaciones de precios."""
+"""Screen 3 — Ranking de variaciones de precios."""
 
 import plotly.express as px
 import streamlit as st
 
 from dashboard.db import run_query
-from dashboard.filters import COLOR_BAJA, COLOR_SUBA, render_global_filters
+from dashboard.filters import COLOR_BAJA, COLOR_SUBA, render_consumer_filters
 
-st.set_page_config(page_title="Ranking de Variaciones", layout="wide")
-st.title("Ranking de Variaciones de Precios")
+st.set_page_config(page_title="Variaciones de Precios", layout="wide")
+st.title("Variaciones de Precios")
 
-gf = render_global_filters()
+cf = render_consumer_filters()
 
 # ── Filters ──────────────────────────────────────────────────────────────────
 
@@ -17,9 +17,8 @@ price_mode = st.radio(
     "Tipo de precio", ["Precio de lista", "Precio promo"], horizontal=True
 )
 
-# Use global filter values
-selected_provs = gf["provincias"]
-selected_chains = gf["cadenas"]
+selected_prov = cf["provincia"]
+selected_chains = cf["cadenas"]
 
 # ── Resolve latest date range (7 days) ───────────────────────────────────────
 
@@ -54,18 +53,15 @@ else:
     prev_col = "precio_promo_avg_anterior"
 
 # ── Build query ──────────────────────────────────────────────────────────────
-# When filtering by chain we go through fact_precios; otherwise use the
-# pre-computed view which is much faster.
 
 if selected_chains:
     chain_ph = ", ".join(["%s"] * len(selected_chains))
     prov_clause = ""
     params: list = []
 
-    if selected_provs:
-        prov_ph = ", ".join(["%s"] * len(selected_provs))
-        prov_clause = f"AND pr.nombre IN ({prov_ph})"
-        params.extend(selected_provs)
+    if selected_prov:
+        prov_clause = "AND pr.nombre = %s"
+        params.append(selected_prov)
 
     params.extend(selected_chains)
 
@@ -130,10 +126,9 @@ else:
     prov_clause = ""
     params = []
 
-    if selected_provs:
-        prov_ph = ", ".join(["%s"] * len(selected_provs))
-        prov_clause = f"AND provincia IN ({prov_ph})"
-        params.extend(selected_provs)
+    if selected_prov:
+        prov_clause = "AND provincia = %s"
+        params.append(selected_prov)
 
     if price_mode == "Precio promo":
         df_var = run_query(

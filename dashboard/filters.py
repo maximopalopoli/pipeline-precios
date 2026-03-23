@@ -85,6 +85,105 @@ def render_global_filters() -> dict:
     }
 
 
+def best_price_expr(alias: str = "f") -> str:
+    """Return SQL expression for the best available price (promo or list)."""
+    return (
+        f"COALESCE(LEAST(NULLIF({alias}.precio_promo1, 0), "
+        f"NULLIF({alias}.precio_promo2, 0)), {alias}.precio_lista)"
+    )
+
+
+def render_consumer_filters() -> dict:
+    """Render consumer-oriented filters in the sidebar.
+
+    Returns a dict with keys:
+        - provincia (str or None) — single province
+        - localidad (str or None) — single locality (depends on provincia)
+        - cadenas (list[str])
+        - latest_fecha (date or None) — most recent date with data
+    """
+    with st.sidebar:
+        st.header("Filtros")
+
+        # Latest available date
+        df_range = run_query(
+            """
+            SELECT MAX(fecha) AS max_fecha
+            FROM dim_fecha
+            JOIN agg_precios_diarios USING (fecha_id)
+            """
+        )
+        latest_fecha = (
+            df_range.iloc[0]["max_fecha"]
+            if not df_range.empty and df_range.iloc[0]["max_fecha"] is not None
+            else None
+        )
+
+        # Province (single select)
+        df_provs = run_query(
+            "SELECT nombre FROM dim_provincia ORDER BY nombre"
+        )
+        prov_options = df_provs["nombre"].tolist() if not df_provs.empty else []
+        provincia = st.selectbox(
+            "Provincia",
+            options=["Todas"] + prov_options,
+            index=0,
+            key="consumer_provincia",
+        )
+        if provincia == "Todas":
+            provincia = None
+
+        # Locality (depends on province)
+        localidad = None
+        if provincia:
+            df_locs = run_query(
+                """
+                SELECT DISTINCT s.sucursales_localidad
+                FROM dim_sucursal s
+                JOIN dim_provincia pr ON s.provincia_sk = pr.provincia_sk
+                WHERE pr.nombre = %s
+                  AND s.sucursales_localidad IS NOT NULL
+                ORDER BY 1
+                """,
+                (provincia,),
+            )
+            loc_options = (
+                df_locs["sucursales_localidad"].tolist()
+                if not df_locs.empty
+                else []
+            )
+            if loc_options:
+                loc_selection = st.selectbox(
+                    "Localidad",
+                    options=["Todas"] + loc_options,
+                    index=0,
+                    key="consumer_localidad",
+                )
+                if loc_selection != "Todas":
+                    localidad = loc_selection
+
+        # Chain (multi-select)
+        df_chains = run_query(
+            "SELECT DISTINCT comercio_bandera_nombre FROM dim_comercio ORDER BY 1"
+        )
+        cadenas = st.multiselect(
+            "Cadena",
+            options=(
+                df_chains["comercio_bandera_nombre"].tolist()
+                if not df_chains.empty
+                else []
+            ),
+            key="consumer_cadenas",
+        )
+
+    return {
+        "provincia": provincia,
+        "localidad": localidad,
+        "cadenas": cadenas,
+        "latest_fecha": latest_fecha,
+    }
+
+
 def product_search() -> int | None:
     """Render a product search widget and return the selected producto_sk.
 

@@ -1,4 +1,4 @@
-"""Screen 1 — Pipeline Health."""
+"""Screen Admin — Pipeline Health (internal use)."""
 
 import plotly.express as px
 import streamlit as st
