@@ -85,9 +85,10 @@ pipeline-precios/
 │   └── fixtures/sample.zip           # ZIP de muestra (2 comercios, 7 productos)
 ├── scripts/benchmark_queries.py      # Benchmark: agg vs fact directo
 ├── dags/dag_sepa_ingest.py           # Airflow DAG (9 tasks, dual daily schedule)
-├── dashboard/                        # Streamlit dashboard (6 pages)
+├── api/                              # FastAPI backend (REST endpoints, asyncpg)
+├── web/                              # React frontend (Vite + TypeScript + Tailwind)
 ├── notebooks/exploration.ipynb       # Análisis exploratorio
-├── docker-compose.yml                # PostgreSQL 16
+├── docker-compose.yml                # PostgreSQL + Airflow + API + Web
 ├── pyproject.toml                    # Dependencias y configuración
 └── Makefile                          # Targets: install, test, test-unit, test-integration
 ```
@@ -116,63 +117,80 @@ sepa_martes.zip
 
 Ver [sepa_datasets.md](sepa_datasets.md) para el esquema completo de cada CSV.
 
-## Requisitos
+## Requirements
 
 - Python 3.11+
-- Docker y Docker Compose
+- Node.js 18+ (for the frontend)
+- Docker and Docker Compose
 - PostgreSQL 16 (via Docker)
 
-## Instalación
+## Quick Start
 
 ```bash
-# Levantar PostgreSQL
-docker compose up -d
-
-# Crear venv e instalar dependencias
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-# Ejecutar tests
-pytest                    # todos
-make test-unit            # solo unitarios
-make test-integration     # solo integración (requiere PostgreSQL)
-
-# Ejecutar pipeline
-python -m etl.run_pipeline --fecha 2026-03-17
-
-# Exploración de datos
-jupyter notebook notebooks/exploration.ipynb
+cp .env.example .env      # edit with your credentials
+make setup                # create venv + install Python & Node deps
+make db                   # start PostgreSQL (migrations + seeds run on first start)
+make ingest               # download today's SEPA ZIP and run the full ETL pipeline
+make dev                  # start DB + API + frontend for local development
 ```
 
-Variables de entorno en `.env` (ver `.env.example`):
-- `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`
-- `AIRFLOW_ADMIN_USER`, `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_SECRET_KEY` (for Airflow)
+That's it. The dashboard will be at http://localhost:5173 and the API at http://localhost:8000.
+
+### Ingest a specific date
+
+```bash
+make ingest-date DATE=2026-03-17
+```
+
+The pipeline downloads the daily ZIP (~300 MB), processes ~12M price observations (staging → quality checks → transform → load → aggregate), and loads them into PostgreSQL. It's idempotent — re-running skips if the file hash hasn't changed.
+
+### Run with Docker Compose (all services)
+
+```bash
+make up
+```
+
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:3000 |
+| API | http://localhost:8000 |
+| Airflow | http://localhost:8080 |
+
+### Run tests
+
+```bash
+make test                 # all tests
+make test-unit            # unit tests only
+make test-integration     # integration tests (requires PostgreSQL)
+make lint                 # run linter
+```
+
+### All available commands
+
+```bash
+make help
+```
+
+## Environment Variables
+
+Set in `.env` (see `.env.example`):
+
+| Variable | Description |
+|----------|-------------|
+| `POSTGRES_USER` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | PostgreSQL password |
+| `POSTGRES_DB` | Database name |
+| `AIRFLOW_ADMIN_USER` | Airflow web UI username |
+| `AIRFLOW_ADMIN_PASSWORD` | Airflow web UI password |
+| `AIRFLOW_SECRET_KEY` | Airflow secret key |
 
 ### Airflow
 
-```bash
-# Start all services (PostgreSQL + Airflow + Streamlit)
-docker compose up -d
-
-# Airflow UI: http://localhost:8080
-# Credentials: set AIRFLOW_ADMIN_USER / AIRFLOW_ADMIN_PASSWORD in .env
-```
-
-The DAG `dag_sepa_ingest` runs at 06:30 and 10:30 daily (two runs to capture rectifications). Tasks: download, check hash, staging, quality checks, transform, load dimensions, load facts, aggregate, finalize.
+The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs to capture government rectifications). 9 tasks: download → check hash → staging → quality checks → transform → load dimensions → load facts → aggregate → finalize.
 
 ### Dashboard
 
-```bash
-# Run locally
-streamlit run dashboard/app.py
-
-# Or via Docker
-docker compose up -d streamlit
-# Dashboard: http://localhost:8501
-```
-
-6 pages: pipeline health, price evolution, geographic map, chain comparison, variation ranking, and promotion analysis. Global filters (date range, province, chain) persist across pages via the sidebar.
+6 screens: Home (KPIs + overview), Buscador (price finder with map), Evolución (price history charts), Variaciones (top price changes), Ofertas (daily promotions), Locales (nearby store locator). Built with React + TypeScript, Recharts for charts, React-Leaflet for maps, TanStack Table/Query for data.
 
 ## Decisiones técnicas
 
@@ -185,15 +203,15 @@ docker compose up -d streamlit
 
 ## Estado del proyecto
 
-| Etapa | Estado |
+| Stage | Status |
 |-------|--------|
-| 1. Exploración de datos | Completa |
-| 2. Infraestructura Docker | Completa |
-| 3. ETL Core | Completa |
-| 4. Agregaciones | Completa |
-| 5. Airflow | Completa |
-| 6. Dashboard Streamlit | Completa |
-| 7. Testing y docs | Completa |
+| 1. Data Exploration | Done |
+| 2. Docker Infrastructure | Done |
+| 3. ETL Core | Done |
+| 4. Aggregations | Done |
+| 5. Airflow Orchestration | Done |
+| 6. Dashboard (React + FastAPI) | ~95% |
+| 7. Testing & Quality | ~95% |
 
 Ver [ROADMAP.md](ROADMAP.md) para el plan detallado.
 
