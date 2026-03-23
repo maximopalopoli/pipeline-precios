@@ -1,7 +1,11 @@
 """Screen 5 — Locales cercanos: find nearby stores on a map."""
 
-import plotly.express as px
+import folium
 import streamlit as st
+from folium.plugins import MarkerCluster
+from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
+from geopy.geocoders import Nominatim
+from streamlit_folium import st_folium
 
 from dashboard.db import run_query
 from dashboard.filters import best_price_expr, render_consumer_filters
@@ -11,36 +15,85 @@ st.title("Locales Cercanos")
 
 cf = render_consumer_filters()
 
+
+@st.cache_data(show_spinner=False, ttl=3600)
+def geocode_address(address: str) -> tuple[float, float] | None:
+    """Geocode an address string to (lat, lon) using Nominatim."""
+    geolocator = Nominatim(user_agent="pipeline-precios-dashboard")
+    try:
+        location = geolocator.geocode(address, country_codes="ar", timeout=10)
+    except (GeocoderTimedOut, GeocoderUnavailable):
+        return None
+    if location is None:
+        return None
+    return (location.latitude, location.longitude)
+
+
 # ── 1. User location input ───────────────────────────────────────────────────
 
 st.subheader("Tu ubicacion")
 
-col_lat, col_lon, col_radio = st.columns(3)
-with col_lat:
-    user_lat = st.number_input(
-        "Latitud",
-        value=-34.6037,
-        format="%.4f",
-        min_value=-90.0,
-        max_value=90.0,
-        help="Ej: -34.6037 (Buenos Aires)",
-    )
-with col_lon:
-    user_lon = st.number_input(
-        "Longitud",
-        value=-58.3816,
-        format="%.4f",
-        min_value=-180.0,
-        max_value=180.0,
-        help="Ej: -58.3816 (Buenos Aires)",
-    )
-with col_radio:
-    radius_km = st.slider("Radio (km)", min_value=1, max_value=50, value=5)
-
-st.caption(
-    "Podes obtener tus coordenadas desde Google Maps: "
-    "click derecho en tu ubicacion y copia los numeros."
+modo = st.radio(
+    "Como queres indicar tu ubicacion?",
+    ["Direccion (calle y altura)", "Coordenadas"],
+    horizontal=True,
 )
+
+user_lat: float | None = None
+user_lon: float | None = None
+
+if modo == "Direccion (calle y altura)":
+    col_dir, col_loc = st.columns([2, 1])
+    with col_dir:
+        direccion_input = st.text_input(
+            "Direccion",
+            placeholder="Ej: Av. Corrientes 1234",
+        )
+    with col_loc:
+        localidad_input = st.text_input(
+            "Localidad / Ciudad",
+            value="Buenos Aires",
+            placeholder="Ej: Buenos Aires, Rosario, Cordoba",
+        )
+
+    if direccion_input:
+        full_address = f"{direccion_input}, {localidad_input}, Argentina"
+        with st.spinner("Buscando direccion..."):
+            coords = geocode_address(full_address)
+        if coords:
+            user_lat, user_lon = coords
+            st.caption(f"Ubicacion encontrada: {user_lat:.4f}, {user_lon:.4f}")
+        else:
+            st.error(
+                "No se pudo encontrar la direccion. "
+                "Intenta ser mas especifico (ej: 'Av. Corrientes 1234, CABA')."
+            )
+    else:
+        st.info("Ingresa una direccion para buscar locales cercanos.")
+
+else:
+    col_lat, col_lon = st.columns(2)
+    with col_lat:
+        user_lat = st.number_input(
+            "Latitud",
+            value=-34.6037,
+            format="%.4f",
+            min_value=-90.0,
+            max_value=90.0,
+        )
+    with col_lon:
+        user_lon = st.number_input(
+            "Longitud",
+            value=-58.3816,
+            format="%.4f",
+            min_value=-180.0,
+            max_value=180.0,
+        )
+
+radius_km = st.slider("Radio (km)", min_value=1, max_value=50, value=5)
+
+if user_lat is None or user_lon is None:
+    st.stop()
 
 # ── 2. Query nearby stores ──────────────────────────────────────────────────
 
@@ -122,63 +175,48 @@ df_map = df_stores.copy()
 df_map["direccion"] = (
     df_map["calle"].fillna("") + " " + df_map["numero"].fillna("")
 ).str.strip()
-df_map["hover"] = (
-    df_map["cadena"]
-    + " — "
-    + df_map["nombre"]
-    + "<br>"
-    + df_map["direccion"]
-    + ", "
-    + df_map["localidad"].fillna("")
-    + "<br>"
-    + df_map["distancia_km"].astype(str)
-    + " km"
+
+m = folium.Map(
+    location=[user_lat, user_lon],
+    zoom_start=13,
+    tiles="CartoDB Positron",
 )
-
-import plotly.graph_objects as go
-
-fig = go.Figure()
 
 # User location marker
-fig.add_trace(go.Scattermapbox(
-    lat=[user_lat],
-    lon=[user_lon],
-    mode="markers+text",
-    marker=dict(size=15, color="#e74c3c", symbol="circle"),
-    text=["Tu ubicacion"],
-    textposition="top center",
-    name="Tu ubicacion",
-    hoverinfo="text",
-))
+folium.Marker(
+    location=[user_lat, user_lon],
+    tooltip="Tu ubicacion",
+    icon=folium.Icon(color="red", icon="home", prefix="fa"),
+).add_to(m)
 
-# Store markers
-fig.add_trace(go.Scattermapbox(
-    lat=df_map["lat"],
-    lon=df_map["lon"],
-    mode="markers",
-    marker=dict(
-        size=10,
-        color="#3498db",
-    ),
-    text=df_map["hover"],
-    customdata=df_map["sucursal_sk"],
-    name="Locales",
-    hoverinfo="text",
-))
+# Radius circle
+folium.Circle(
+    location=[user_lat, user_lon],
+    radius=radius_km * 1000,
+    color="#e74c3c",
+    fill=True,
+    fill_opacity=0.05,
+    weight=1,
+).add_to(m)
 
-fig.update_layout(
-    mapbox=dict(
-        style="open-street-map",
-        center=dict(lat=user_lat, lon=user_lon),
-        zoom=12,
-    ),
-    margin={"r": 0, "t": 0, "l": 0, "b": 0},
-    height=500,
-    showlegend=True,
-    legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-)
+# Store markers with clustering
+marker_cluster = MarkerCluster(name="Locales").add_to(m)
 
-st.plotly_chart(fig, use_container_width=True)
+for _, row in df_map.iterrows():
+    popup_html = (
+        f"<b>{row['cadena']}</b><br>"
+        f"{row['nombre']}<br>"
+        f"{row['direccion']}, {row['localidad'] or ''}<br>"
+        f"<b>{row['distancia_km']} km</b>"
+    )
+    folium.Marker(
+        location=[row["lat"], row["lon"]],
+        tooltip=f"{row['cadena']} — {row['distancia_km']} km",
+        popup=folium.Popup(popup_html, max_width=250),
+        icon=folium.Icon(color="blue", icon="shopping-cart", prefix="fa"),
+    ).add_to(marker_cluster)
+
+st_folium(m, use_container_width=True, height=500)
 
 # ── 4. Store list ────────────────────────────────────────────────────────────
 

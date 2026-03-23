@@ -1,7 +1,9 @@
 """Screen 1 — Buscador de precios: find the cheapest store for a product."""
 
-import plotly.express as px
+import branca.colormap as cm
+import folium
 import streamlit as st
+from streamlit_folium import st_folium
 
 from dashboard.db import run_query
 from dashboard.filters import (
@@ -157,31 +159,40 @@ if not df_with_coords.empty:
 
     if show_map:
         df_with_coords = df_with_coords.copy()
-        df_with_coords["hover"] = (
-            df_with_coords["cadena"]
-            + " — "
-            + df_with_coords["sucursal"]
-            + "<br>"
-            + df_with_coords["localidad"].fillna("")
+
+        # Color scale: green (cheap) to red (expensive)
+        vmin = df_with_coords["mejor_precio"].min()
+        vmax = df_with_coords["mejor_precio"].max()
+        colormap = cm.LinearColormap(
+            colors=["#27ae60", "#f1c40f", "#e74c3c"],
+            vmin=vmin,
+            vmax=vmax,
+            caption="Precio ($)",
         )
 
-        fig = px.scatter_mapbox(
-            df_with_coords,
-            lat="lat",
-            lon="lon",
-            color="mejor_precio",
-            color_continuous_scale="RdYlGn_r",
-            hover_name="hover",
-            hover_data={
-                "mejor_precio": ":.2f",
-                "tipo": True,
-                "lat": False,
-                "lon": False,
-            },
-            zoom=4,
-            center={"lat": -38, "lon": -64},
-            mapbox_style="open-street-map",
-            labels={"mejor_precio": "Precio ($)", "tipo": "Tipo"},
+        m = folium.Map(
+            location=[-38, -64],
+            zoom_start=4,
+            tiles="CartoDB Positron",
         )
-        fig.update_layout(margin={"r": 0, "t": 0, "l": 0, "b": 0}, height=600)
-        st.plotly_chart(fig, use_container_width=True)
+
+        for _, row in df_with_coords.iterrows():
+            popup_html = (
+                f"<b>{row['cadena']}</b> — {row['sucursal']}<br>"
+                f"{row['localidad'] or ''}<br>"
+                f"Precio: <b>${row['mejor_precio']:,.2f}</b><br>"
+                f"Tipo: {row['tipo']}"
+            )
+            folium.CircleMarker(
+                location=[row["lat"], row["lon"]],
+                radius=8,
+                color=colormap(row["mejor_precio"]),
+                fill=True,
+                fill_color=colormap(row["mejor_precio"]),
+                fill_opacity=0.8,
+                tooltip=f"{row['cadena']} — ${row['mejor_precio']:,.2f}",
+                popup=folium.Popup(popup_html, max_width=250),
+            ).add_to(m)
+
+        colormap.add_to(m)
+        st_folium(m, use_container_width=True, height=600)
