@@ -170,6 +170,9 @@ with col1:
     st.page_link("pages/2_evolucion.py", label="Evolucion de Precios", icon="📈")
     st.caption("Seguimiento del precio de un producto a lo largo del tiempo.")
 
+    st.page_link("pages/5_locales.py", label="Locales Cercanos", icon="📍")
+    st.caption("Encuentra supermercados cerca tuyo y ve sus ofertas.")
+
 with col2:
     st.page_link("pages/3_variaciones.py", label="Variaciones de Precios", icon="🔀")
     st.caption("Productos con mayor cambio de precio en los ultimos 7 dias.")
