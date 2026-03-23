@@ -4,15 +4,14 @@ version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
     "pandas>=2.2",
-    "plotly>=5.18",
     "psycopg2-binary>=2.9",
     "pydantic>=2.0",
     "requests>=2.32",
-    "folium>=0.15",
     "geopy>=2.4",
-    "streamlit>=1.30",
-    "streamlit-folium>=0.18",
     "structlog>=24.0",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "asyncpg>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -22,7 +21,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["etl*", "models*", "dashboard*"]
+include = ["etl*", "models*", "api*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
