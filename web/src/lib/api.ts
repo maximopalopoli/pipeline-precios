@@ -66,7 +66,38 @@ export const fetchBuscador = (params: {
   provincia?: string;
   localidad?: string;
   cadenas?: string[];
+  lat?: number;
+  lon?: number;
+  radius?: number;
 }) => api.get<StorePrice[]>('/buscador', { params }).then(r => r.data);
+
+// ── Generic Buscador (search by text across all matching products) ──
+export interface GenericStorePrice {
+  cadena: string;
+  producto: string;
+  marca: string | null;
+  sucursal: string;
+  tipo: string;
+  localidad: string;
+  provincia: string;
+  precio_lista: number;
+  mejor_precio: number;
+  lat: number | null;
+  lon: number | null;
+}
+export const fetchBuscadorGenericDates = (q: string) =>
+  api.get<BuscadorDate[]>('/buscador/generic/dates', { params: { q } }).then(r => r.data);
+
+export const fetchBuscadorGeneric = (params: {
+  q: string;
+  fecha_id: number;
+  provincia?: string;
+  localidad?: string;
+  cadenas?: string[];
+  lat?: number;
+  lon?: number;
+  radius?: number;
+}) => api.get<GenericStorePrice[]>('/buscador/generic', { params }).then(r => r.data);
 
 // ── Evolucion ──
 export interface PricePoint {
