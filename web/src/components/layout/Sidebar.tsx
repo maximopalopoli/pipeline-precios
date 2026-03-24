@@ -7,6 +7,8 @@ const NAV_ITEMS = [
   { to: '/variaciones', label: 'Variaciones', icon: '🔀' },
   { to: '/ofertas', label: 'Ofertas', icon: '🏷️' },
   { to: '/locales', label: 'Locales', icon: '📍' },
+  { to: '/lista', label: 'Lista de Compras', icon: '🛒' },
+  { to: '/comparador-ean', label: 'Comparador EAN', icon: '🏷️' },
 ];
 
 export function AppLayout() {
