@@ -1,9 +1,9 @@
 -- 003_create_dimensions.sql
--- Tablas de dimensiones del warehouse
+-- Warehouse dimension tables
 
 CREATE TABLE IF NOT EXISTS dim_provincia (
     provincia_sk    SERIAL PRIMARY KEY,
-    codigo_iso      VARCHAR(6)  NOT NULL UNIQUE,   -- ISO 3166-2, ej: AR-B
+    codigo_iso      VARCHAR(6)  NOT NULL UNIQUE,   -- ISO 3166-2, e.g.: AR-B
     nombre          TEXT        NOT NULL,
     region          TEXT        NOT NULL
                         CHECK (region IN ('NOA', 'NEA', 'Pampeana', 'Cuyo', 'Patagonia', 'AMBA'))
@@ -13,11 +13,11 @@ CREATE TABLE IF NOT EXISTS dim_provincia (
 
 CREATE TABLE IF NOT EXISTS dim_comercio (
     comercio_sk             SERIAL PRIMARY KEY,
-    -- clave natural
+    -- natural key
     id_comercio             INT         NOT NULL,
     id_bandera              INT         NOT NULL,
     UNIQUE (id_comercio, id_bandera),
-    -- atributos (SCD tipo 1: se sobreescribe)
+    -- attributes (SCD Type 1: overwritten)
     comercio_cuit           VARCHAR(20),
     comercio_razon_social   TEXT,
     comercio_bandera_nombre TEXT,
@@ -31,7 +31,7 @@ CREATE INDEX IF NOT EXISTS idx_dim_comercio_natural ON dim_comercio (id_comercio
 
 CREATE TABLE IF NOT EXISTS dim_sucursal (
     sucursal_sk         SERIAL PRIMARY KEY,
-    -- clave natural
+    -- natural key
     id_comercio         INT         NOT NULL,
     id_bandera          INT         NOT NULL,
     id_sucursal         INT         NOT NULL,
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS dim_sucursal (
     -- FK
     comercio_sk         INT         NOT NULL REFERENCES dim_comercio (comercio_sk),
     provincia_sk        INT         REFERENCES dim_provincia (provincia_sk),
-    -- atributos (SCD tipo 1)
+    -- attributes (SCD Type 1)
     sucursales_nombre           TEXT,
     sucursales_tipo             TEXT,
     sucursales_calle            TEXT,
@@ -60,9 +60,9 @@ CREATE INDEX IF NOT EXISTS idx_dim_sucursal_provincia ON dim_sucursal (provincia
 
 CREATE TABLE IF NOT EXISTS dim_producto (
     producto_sk                         SERIAL PRIMARY KEY,
-    -- clave natural: id_producto (código EAN o interno del comercio)
+    -- natural key: id_producto (EAN code or chain-internal code)
     id_producto                         TEXT        NOT NULL UNIQUE,
-    -- atributos (SCD tipo 1)
+    -- attributes (SCD Type 1)
     es_ean                              BOOLEAN,
     productos_descripcion               TEXT,
     productos_marca                     TEXT,
@@ -76,12 +76,12 @@ CREATE TABLE IF NOT EXISTS dim_producto (
 -- ------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS dim_fecha (
-    fecha_id        INT PRIMARY KEY,   -- formato YYYYMMDD
+    fecha_id        INT PRIMARY KEY,   -- YYYYMMDD format
     fecha           DATE        NOT NULL UNIQUE,
     anio            SMALLINT    NOT NULL,
     mes             SMALLINT    NOT NULL,
     trimestre       SMALLINT    NOT NULL,
     semana_iso      SMALLINT    NOT NULL,
-    dia_semana      SMALLINT    NOT NULL,   -- 1=lunes … 7=domingo (ISO)
+    dia_semana      SMALLINT    NOT NULL,   -- 1=Monday … 7=Sunday (ISO)
     es_fin_semana   BOOLEAN     NOT NULL
 );

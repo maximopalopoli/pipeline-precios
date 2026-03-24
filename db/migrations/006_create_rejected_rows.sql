@@ -1,12 +1,12 @@
 -- 006_create_rejected_rows.sql
--- Registro de filas rechazadas durante el proceso de calidad / transformación
+-- Registry of rows rejected during quality / transformation processing
 
 CREATE TABLE IF NOT EXISTS rejected_rows (
     id                  SERIAL PRIMARY KEY,
     run_id              INT         NOT NULL REFERENCES ingestion_runs (id),
-    source_file         TEXT        NOT NULL,   -- ej: sepa_1_comercio-sepa-8_.../productos.csv
+    source_file         TEXT        NOT NULL,   -- e.g.: sepa_1_comercio-sepa-8_.../productos.csv
     line_number         INT,
-    raw_data            TEXT,                   -- línea cruda del CSV
+    raw_data            TEXT,                   -- raw CSV line
     rejection_reason    TEXT        NOT NULL,
     rejected_at         TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

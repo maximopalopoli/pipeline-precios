@@ -1,5 +1,5 @@
 -- seed_fechas.sql
--- Poblar dim_fecha para 2026 (rango de trabajo del pipeline)
+-- Populate dim_fecha for 2026 (pipeline working range)
 
 INSERT INTO dim_fecha (fecha_id, fecha, anio, mes, trimestre, semana_iso, dia_semana, es_fin_semana)
 SELECT
@@ -9,7 +9,7 @@ SELECT
     EXTRACT(MONTH   FROM d)::SMALLINT   AS mes,
     EXTRACT(QUARTER FROM d)::SMALLINT   AS trimestre,
     EXTRACT(WEEK    FROM d)::SMALLINT   AS semana_iso,
-    EXTRACT(ISODOW  FROM d)::SMALLINT   AS dia_semana,   -- 1=lunes, 7=domingo
+    EXTRACT(ISODOW  FROM d)::SMALLINT   AS dia_semana,   -- 1=Monday, 7=Sunday
     EXTRACT(ISODOW  FROM d) >= 6        AS es_fin_semana
 FROM generate_series(
     '2026-01-01'::DATE,

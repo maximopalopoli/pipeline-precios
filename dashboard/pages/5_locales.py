@@ -1,4 +1,4 @@
-"""Screen 5 — Locales cercanos: find nearby stores on a map."""
+"""Screen 5 — Nearby stores: find nearby stores on a map."""
 
 import folium
 import streamlit as st

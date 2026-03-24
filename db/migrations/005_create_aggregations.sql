@@ -1,25 +1,25 @@
 -- 005_create_aggregations.sql
--- Tabla de agregaciones diarias y vista de variación de precios
+-- Daily aggregation table and price variation view
 
 CREATE TABLE IF NOT EXISTS agg_precios_diarios (
     producto_sk             INT         NOT NULL REFERENCES dim_producto  (producto_sk),
     fecha_id                INT         NOT NULL REFERENCES dim_fecha     (fecha_id),
     provincia_sk            INT         NOT NULL REFERENCES dim_provincia (provincia_sk),
 
-    -- precio lista
+    -- list price
     precio_lista_avg        NUMERIC(12, 2),
     precio_lista_min        NUMERIC(12, 2),
     precio_lista_max        NUMERIC(12, 2),
     precio_lista_median     NUMERIC(12, 2),
 
-    -- precio promo (promedio del mejor promo disponible por sucursal)
+    -- promo price (average of best available promo per store)
     precio_promo_avg        NUMERIC(12, 2),
 
-    -- conteos
+    -- counts
     cantidad_obs            INT         NOT NULL DEFAULT 0,
     cantidad_con_promo      INT         NOT NULL DEFAULT 0,
 
-    -- unicidad por grano
+    -- uniqueness per grain
     PRIMARY KEY (producto_sk, fecha_id, provincia_sk),
 
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -29,8 +29,8 @@ CREATE INDEX IF NOT EXISTS idx_agg_fecha     ON agg_precios_diarios (fecha_id);
 CREATE INDEX IF NOT EXISTS idx_agg_provincia ON agg_precios_diarios (provincia_sk);
 
 -- ------------------------------------------------------------
--- Vista: variación de precio lista respecto al día anterior
--- por producto × provincia
+-- View: list price variation compared to the previous day
+-- per product × province
 -- ------------------------------------------------------------
 
 CREATE OR REPLACE VIEW v_variacion_precios AS

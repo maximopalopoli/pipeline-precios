@@ -1,5 +1,5 @@
 -- seed_provincias.sql
--- 24 provincias argentinas con código ISO 3166-2 y región
+-- 24 Argentine provinces with ISO 3166-2 code and region
 
 INSERT INTO dim_provincia (codigo_iso, nombre, region) VALUES
     -- AMBA

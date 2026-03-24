@@ -1,4 +1,4 @@
-"""Screen 3 — Ranking de variaciones de precios."""
+"""Screen 3 — Price variation ranking."""
 
 import plotly.express as px
 import streamlit as st

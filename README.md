@@ -1,23 +1,23 @@
-# SEPA Precios — Pipeline de Datos
+# SEPA Precios — Data Pipeline
 
-Pipeline ETL que ingesta, valida, transforma y almacena los registros diarios de precios del
-[Sistema Electrónico de Publicidad de Precios Argentinos (SEPA)](https://datos.produccion.gob.ar/dataset/sepa-precios),
-publicados por la Secretaría de Comercio Interior de Argentina.
+ETL pipeline that ingests, validates, transforms, and warehouses daily retail price data from
+[Argentina's SEPA price transparency system](https://datos.produccion.gob.ar/dataset/sepa-precios),
+published by the Secretaría de Comercio Interior.
 
-El dataset contiene precios observados a nivel **sucursal × producto × día**, reportados
-por las cadenas de retail bajo la Resolución 678/2020. Cada día se publican ~12 millones
-de observaciones de precio distribuidas en ~18 comercios.
+The dataset contains prices observed at the **store × product × day** level, reported
+by retail chains under Resolución 678/2020. Each day publishes ~12 million
+price observations across ~18 commercial chains.
 
-## Arquitectura
+## Architecture
 
 ```
-ZIP diario (~300 MB)
-  └── ~18 sub-ZIPs (uno por comercio)
+Daily ZIP (~300 MB)
+  └── ~18 sub-ZIPs (one per chain)
         └── 3 CSVs: comercio.csv | sucursales.csv | productos.csv
 
           ┌─────────────┐
-          │  Descarga    │  etl/extract/downloader.py
-          │  + SHA-256   │  → raw_files (registro de descargas)
+          │  Download    │  etl/extract/downloader.py
+          │  + SHA-256   │  → raw_files (download registry)
           └──────┬───────┘
                  │
           ┌──────▼───────┐
@@ -27,7 +27,7 @@ ZIP diario (~300 MB)
                  │
           ┌──────▼───────┐
           │   Quality     │  etl/quality/checks.py + reporters.py
-          │   Checks      │  8 críticos + 7 warnings → rejected_rows
+          │   Checks      │  8 critical + 7 warnings → rejected_rows
           └──────┬───────┘
                  │
           ┌──────▼───────┐
@@ -37,7 +37,7 @@ ZIP diario (~300 MB)
                  │
           ┌──────▼───────┐
           │    Load       │  etl/load/warehouse_loader.py
-          │  (Upsert)     │  → dim_*, fact_precios (particionada por mes)
+          │  (Upsert)     │  → dim_*, fact_precios (partitioned by month)
           └──────┬───────┘
                  │
           ┌──────▼───────┐
@@ -46,76 +46,76 @@ ZIP diario (~300 MB)
           └───────────────┘
 ```
 
-### Esquema de base de datos (Star Schema — PostgreSQL 16)
+### Database Schema (Star Schema — PostgreSQL 16)
 
-| Capa | Tablas |
-|------|--------|
+| Layer | Tables |
+|-------|--------|
 | **Metadata** | `raw_files`, `ingestion_runs` |
 | **Staging** | `stg_comercios`, `stg_sucursales`, `stg_productos` |
-| **Dimensiones** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
-| **Hechos** | `fact_precios` (particionada por mes, grano: producto × sucursal × día) |
-| **Agregaciones** | `agg_precios_diarios`, vista `v_variacion_precios` |
-| **Calidad** | `rejected_rows` |
+| **Dimensions** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
+| **Fact** | `fact_precios` (partitioned by month, grain: product × store × day) |
+| **Aggregations** | `agg_precios_diarios`, view `v_variacion_precios` |
+| **Quality** | `rejected_rows` |
 
-## Estructura del proyecto
+## Project Structure
 
 ```
 pipeline-precios/
 ├── etl/
-│   ├── extract/downloader.py         # Descarga ZIP + hash SHA-256
-│   ├── staging/loader.py             # Parseo de ZIPs anidados → staging
-│   ├── quality/checks.py             # 8 checks críticos + 7 warnings
-│   ├── quality/reporters.py          # Logging estructurado + persistencia
-│   ├── transform/cleaner.py          # Cast de tipos + normalización
-│   ├── transform/dimension_resolver.py  # Resolución de surrogate keys (SCD Type 1)
-│   ├── transform/fact_builder.py     # Construcción del DataFrame de hechos
-│   ├── load/warehouse_loader.py      # COPY masivo + upserts + auto-particiones
-│   ├── load/aggregator.py            # Recálculo de agregados diarios
-│   └── run_pipeline.py               # Orquestación end-to-end
+│   ├── extract/downloader.py         # ZIP download + SHA-256 hash
+│   ├── staging/loader.py             # Nested ZIP parsing → staging
+│   ├── quality/checks.py             # 8 critical checks + 7 warnings
+│   ├── quality/reporters.py          # Structured logging + persistence
+│   ├── transform/cleaner.py          # Type casting + normalization
+│   ├── transform/dimension_resolver.py  # Surrogate key resolution (SCD Type 1)
+│   ├── transform/fact_builder.py     # Fact DataFrame construction
+│   ├── load/warehouse_loader.py      # Bulk COPY + upserts + auto-partitioning
+│   ├── load/aggregator.py            # Daily aggregate recalculation
+│   └── run_pipeline.py               # End-to-end orchestration
 ├── models/
 │   ├── comercio.py                   # ComercioRecord (Pydantic v2)
 │   ├── sucursal.py                   # SucursalRecord
 │   └── producto.py                   # ProductoRecord
 ├── db/
-│   ├── migrations/                   # 6 migraciones SQL numeradas
-│   └── seeds/                        # Provincias (ISO 3166-2) + calendario
+│   ├── migrations/                   # 6 numbered SQL migrations
+│   └── seeds/                        # Provinces (ISO 3166-2) + calendar
 ├── tests/
 │   ├── unit/                         # test_cleaner, test_quality_reporters
 │   ├── integration/                  # 7 tests: staging → quality → dimensions → fact → warehouse → aggregator → rerun
-│   └── fixtures/sample.zip           # ZIP de muestra (2 comercios, 7 productos)
-├── scripts/benchmark_queries.py      # Benchmark: agg vs fact directo
+│   └── fixtures/sample.zip           # Sample ZIP (2 chains, 7 products)
+├── scripts/benchmark_queries.py      # Benchmark: agg vs direct fact queries
 ├── dags/dag_sepa_ingest.py           # Airflow DAG (9 tasks, dual daily schedule)
 ├── api/                              # FastAPI backend (REST endpoints, asyncpg)
 ├── web/                              # React frontend (Vite + TypeScript + Tailwind)
-├── notebooks/exploration.ipynb       # Análisis exploratorio
+├── notebooks/exploration.ipynb       # Exploratory analysis
 ├── docker-compose.yml                # PostgreSQL + Airflow + API + Web
-├── pyproject.toml                    # Dependencias y configuración
+├── pyproject.toml                    # Dependencies and configuration
 └── Makefile                          # Targets: install, test, test-unit, test-integration
 ```
 
-## Dataset SEPA
+## SEPA Dataset
 
-El portal publica un ZIP por día de la semana (~300 MB cada uno). El gobierno sobreescribe
-el ZIP de cada día semanalmente — no hay archivo histórico.
+The government portal publishes one ZIP per weekday (~300 MB each). The ZIP for each day
+is overwritten weekly — there is no historical archive.
 
-### Estructura del ZIP
+### ZIP Structure
 
 ```
 sepa_martes.zip
 └── 2026-03-17/
     ├── sepa_1_comercio-sepa-8_2026-03-17_09-05-11.zip
-    │   ├── comercio.csv      (~1 fila)
-    │   ├── sucursales.csv    (~10-1000 filas)
-    │   └── productos.csv     (~1K-5M filas)
-    └── ... (18 comercios)
+    │   ├── comercio.csv      (~1 row)
+    │   ├── sucursales.csv    (~10-1000 rows)
+    │   └── productos.csv     (~1K-5M rows)
+    └── ... (18 chains)
 ```
 
-- **Separador:** pipe `|`
+- **Delimiter:** pipe `|`
 - **Encoding:** UTF-8
-- **Precios:** punto `.` como separador decimal
-- **Trailer:** cada CSV termina con `Ultima actualizacion: YYYY-MM-DDTHH:MM:SS-03:00` (descartada al parsear)
+- **Prices:** dot `.` as decimal separator
+- **Trailer:** each CSV ends with `Ultima actualizacion: YYYY-MM-DDTHH:MM:SS-03:00` (discarded during parsing)
 
-Ver [sepa_datasets.md](sepa_datasets.md) para el esquema completo de cada CSV.
+See [sepa_datasets.md](sepa_datasets.md) for the full schema of each CSV.
 
 ## Requirements
 
@@ -192,16 +192,16 @@ The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs 
 
 6 screens: Home (KPIs + overview), Buscador (price finder with map), Evolución (price history charts), Variaciones (top price changes), Ofertas (daily promotions), Locales (nearby store locator). Built with React + TypeScript, Recharts for charts, React-Leaflet for maps, TanStack Table/Query for data.
 
-## Decisiones técnicas
+## Technical Decisions
 
-- **Idempotencia:** SHA-256 para skip de descargas duplicadas; `ON CONFLICT DO UPDATE` en dimensiones y hechos; re-ejecución recalcula agregados
-- **Staging sin tipos:** todo VARCHAR para preservar datos raw y facilitar debugging de quality checks
-- **SCD Type 1:** las dimensiones se actualizan con last-write-wins (sin historial de cambios)
-- **Particionamiento mensual:** `fact_precios` particionada por `fecha_id` para queries eficientes por rango de fechas
-- **Quality checks en dos niveles:** críticos (abortan pipeline) vs warnings (loguean y continúan)
-- **structlog:** logging estructurado con contexto (run_id, filename, counts) para trazabilidad
+- **Idempotency:** SHA-256 to skip duplicate downloads; `ON CONFLICT DO UPDATE` on dimensions and facts; re-runs recalculate aggregates
+- **Untyped staging:** all VARCHAR to preserve raw data and simplify quality check debugging
+- **SCD Type 1:** dimensions update with last-write-wins (no change history)
+- **Monthly partitioning:** `fact_precios` partitioned by `fecha_id` for efficient date-range queries
+- **Two-level quality checks:** critical (abort pipeline) vs warnings (log and continue)
+- **structlog:** structured logging with context (run_id, filename, counts) for traceability
 
-## Estado del proyecto
+## Project Status
 
 | Stage | Status |
 |-------|--------|
@@ -213,11 +213,11 @@ The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs 
 | 6. Dashboard (React + FastAPI) | ~95% |
 | 7. Testing & Quality | ~95% |
 
-Ver [ROADMAP.md](ROADMAP.md) para el plan detallado.
+See [ROADMAP.md](ROADMAP.md) for the detailed plan.
 
-## Referencias
+## References
 
-- [Dataset SEPA](https://datos.produccion.gob.ar/dataset/sepa-precios) — Portal de datos abiertos
-- Resolución 678/2020, Anexo II — Especificación oficial del formato
-- [sepa-pipeline-spec.md](sepa-pipeline-spec.md) — Especificación técnica completa
-- [sepa_datasets.md](sepa_datasets.md) — Esquema detallado de los 3 CSVs
+- [SEPA Dataset](https://datos.produccion.gob.ar/dataset/sepa-precios) — Open data portal
+- Resolución 678/2020, Anexo II — Official format specification
+- [sepa-pipeline-spec.md](sepa-pipeline-spec.md) — Full technical specification
+- [sepa_datasets.md](sepa_datasets.md) — Detailed schema for all 3 CSVs

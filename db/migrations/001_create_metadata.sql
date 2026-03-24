@@ -1,5 +1,5 @@
 -- 001_create_metadata.sql
--- Tablas de trazabilidad operativa del pipeline
+-- Pipeline operational traceability tables
 
 CREATE TABLE IF NOT EXISTS raw_files (
     id              SERIAL PRIMARY KEY,
@@ -20,25 +20,25 @@ CREATE TABLE IF NOT EXISTS ingestion_runs (
     id                  SERIAL PRIMARY KEY,
     raw_file_id         INT         NOT NULL REFERENCES raw_files (id),
 
-    -- conteos de staging
+    -- staging counts
     inner_zips_count    INT,
     rows_comercios      INT,
     rows_sucursales     INT,
     rows_productos_raw  INT,
 
-    -- conteos de calidad / carga
+    -- quality / load counts
     rows_valid          INT,
     rows_rejected       INT,
     rows_loaded         INT,
 
-    -- tiempos
+    -- timestamps
     started_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at         TIMESTAMPTZ,
     duration_seconds    NUMERIC GENERATED ALWAYS AS (
                             EXTRACT(EPOCH FROM (finished_at - started_at))
                         ) STORED,
 
-    -- estado: running | completed | failed
+    -- status: running | completed | failed
     status              TEXT NOT NULL DEFAULT 'running'
                             CHECK (status IN ('running', 'completed', 'failed')),
 

@@ -1,5 +1,5 @@
 -- 002_create_staging.sql
--- Tablas de staging: espejo exacto de los CSVs, todo VARCHAR
+-- Staging tables: exact mirror of CSVs, all VARCHAR
 
 CREATE TABLE IF NOT EXISTS stg_comercios (
     run_id                          INT         NOT NULL REFERENCES ingestion_runs (id),
@@ -45,8 +45,8 @@ CREATE TABLE IF NOT EXISTS stg_sucursales (
 CREATE INDEX IF NOT EXISTS idx_stg_sucursales_run ON stg_sucursales (run_id);
 
 -- ------------------------------------------------------------
--- stg_productos: particionada por run_id (LIST) para truncar
--- eficientemente por ejecución sin afectar otras corridas
+-- stg_productos: partitioned by run_id (LIST) for efficient
+-- truncation per run without affecting other runs
 
 CREATE TABLE IF NOT EXISTS stg_productos (
     run_id                              INT         NOT NULL REFERENCES ingestion_runs (id),
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS stg_productos (
     productos_leyenda_promo2            VARCHAR
 ) PARTITION BY LIST (run_id);
 
--- Partición catch-all para run_ids no declarados explícitamente.
--- El loader creará particiones específicas por run antes de cargar.
+-- Catch-all partition for run_ids not explicitly declared.
+-- The loader will create run-specific partitions before loading.
 CREATE TABLE IF NOT EXISTS stg_productos_default
     PARTITION OF stg_productos DEFAULT;

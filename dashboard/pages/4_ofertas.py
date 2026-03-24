@@ -1,4 +1,4 @@
-"""Screen 4 — Ofertas del dia: top discounted products right now."""
+"""Screen 4 — Today's deals: top discounted products right now."""
 
 import plotly.express as px
 import streamlit as st
