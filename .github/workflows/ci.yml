@@ -9,6 +9,10 @@ on:
       - "db/migrations/**"
       - "api/**"
       - "dags/**"
+      - "web/src/**"
+      - "web/package*.json"
+      - "web/tsconfig*.json"
+      - "web/vite.config.*"
       - "pyproject.toml"
       - "Makefile"
   pull_request:
