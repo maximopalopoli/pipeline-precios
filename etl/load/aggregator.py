@@ -3,10 +3,10 @@ aggregator.py — Recalculate agg_precios_diarios for a processed day.
 
 Strategy
 --------
-All aggregation is done in a single SQL statement that reads directly from
-fact_precios (joined with dim_sucursal to get provincia_sk) and upserts into
-agg_precios_diarios.  Only the rows for the given fecha_id are touched — the
-rest of the table is left intact.
+All aggregation is done in a single transaction managed by the caller.  The
+existing aggregate set for the requested day is removed, then rebuilt from
+fact_precios (joined with dim_sucursal to get provincia_sk).  Only rows for
+the given fecha_id are touched.
 
 PostgreSQL's ``percentile_cont(0.5)`` computes the median inline, so no
 data is transferred to Python.
@@ -31,7 +31,9 @@ class AggResult:
     rows_upserted: int
 
 
-_UPSERT_SQL = """
+_DELETE_SQL = "DELETE FROM agg_precios_diarios WHERE fecha_id = %(fecha_id)s"
+
+_INSERT_SQL = """
 INSERT INTO agg_precios_diarios (
     producto_sk,
     fecha_id,
@@ -68,15 +70,6 @@ JOIN dim_sucursal   s ON s.sucursal_sk  = f.sucursal_sk
 WHERE f.fecha_id        = %(fecha_id)s
   AND s.provincia_sk IS NOT NULL
 GROUP BY f.producto_sk, f.fecha_id, s.provincia_sk
-ON CONFLICT (producto_sk, fecha_id, provincia_sk) DO UPDATE SET
-    precio_lista_avg    = EXCLUDED.precio_lista_avg,
-    precio_lista_min    = EXCLUDED.precio_lista_min,
-    precio_lista_max    = EXCLUDED.precio_lista_max,
-    precio_lista_median = EXCLUDED.precio_lista_median,
-    precio_promo_avg    = EXCLUDED.precio_promo_avg,
-    cantidad_obs        = EXCLUDED.cantidad_obs,
-    cantidad_con_promo  = EXCLUDED.cantidad_con_promo,
-    updated_at          = EXCLUDED.updated_at
 """
 
 
@@ -88,8 +81,9 @@ def aggregate(conn, fecha_id: int) -> AggResult:
     ``provincia_sk``.  Rows whose sucursal has no province assigned are
     excluded (they cannot be aggregated at provincial level).
 
-    The operation is idempotent: re-running for the same fecha_id overwrites
-    the existing aggregates with fresh values.
+    The operation replaces the full aggregate set for the day, including the
+    removal of groups absent from a rectified source file.  The caller must
+    commit or roll back the delete and insert together.
 
     Parameters
     ----------
@@ -105,7 +99,8 @@ def aggregate(conn, fecha_id: int) -> AggResult:
     log.info("aggregator.start", fecha_id=fecha_id)
 
     with conn.cursor() as cur:
-        cur.execute(_UPSERT_SQL, {"fecha_id": fecha_id})
+        cur.execute(_DELETE_SQL, {"fecha_id": fecha_id})
+        cur.execute(_INSERT_SQL, {"fecha_id": fecha_id})
         rows = cur.rowcount
 
     log.info("aggregator.done", fecha_id=fecha_id, rows_upserted=rows)
