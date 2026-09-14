@@ -313,3 +313,68 @@ def test_airflow_marks_a_new_run_failed_when_staging_fails(
             (raw_file_id,),
         )
         assert cur.fetchone() == ("failed", True, "staging load failed")
+
+
+def test_airflow_keeps_structured_quality_failure_details(
+    pg_conn, sample_zip_path, dag_module, monkeypatch
+):
+    run_id = _create_run(pg_conn)
+    staging_loader.load(pg_conn, sample_zip_path, run_id)
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    monkeypatch.setattr(dag_module, "_db_connect", connect)
+    ti = _TaskInstance({"load_staging": {"run_id": run_id}})
+
+    with pytest.raises(cli_pipeline.quality_checks.QualityCheckError):
+        dag_module.run_quality_checks(ti=ti)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, finished_at IS NOT NULL, error_message
+            FROM ingestion_runs
+            WHERE id = %s
+            """,
+            (run_id,),
+        )
+        status, finished, message = cur.fetchone()
+
+    assert status == "failed"
+    assert finished is True
+    assert "quality_failures" in message
+    assert "min_row_count" in message
+
+
+def test_airflow_marks_the_run_failed_when_pending_fact_loading_fails(
+    pg_conn, dag_module, monkeypatch
+):
+    run_id = _create_run(pg_conn)
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    def fail_fact_load(conn, connect, *, run_id, run_date):
+        raise RuntimeError("pending fact load failed")
+
+    monkeypatch.setattr(dag_module, "_db_connect", connect)
+    monkeypatch.setattr(ingestion_processing, "stream_pending_product_facts", fail_fact_load)
+    ti = _TaskInstance(
+        {
+            "load_staging": {"run_id": run_id},
+            "download_zip": {"fecha_datos": str(_RUN_DATE)},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="pending fact load failed"):
+        dag_module.load_pending_fact_precios(ti=ti)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, error_message FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        assert cur.fetchone() == ("failed", "pending fact load failed")
