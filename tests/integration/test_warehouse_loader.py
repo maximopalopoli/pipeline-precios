@@ -18,6 +18,7 @@ from etl.load.warehouse_loader import (
     load,
     load_dimensions,
     load_fact,
+    load_pending_fact,
     register_rows_loaded,
 )
 
@@ -283,6 +284,40 @@ class TestLoadFact:
                 """
             )
             assert cur.fetchone() is not None
+
+
+class TestLoadPendingFact:
+    def test_loads_rows_without_publishing_them(self, pg_conn, run_id):
+        df = _load_dims_and_build_fact(pg_conn, run_id)
+
+        count = load_pending_fact(pg_conn, df, run_id)
+        pg_conn.commit()
+
+        assert count == 1
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s", (run_id,))
+            assert cur.fetchone()[0] == 1
+            cur.execute("SELECT COUNT(*) FROM fact_precios")
+            assert cur.fetchone()[0] == 0
+
+    def test_upsert_is_scoped_to_the_ingestion_run(self, pg_conn, run_id):
+        df = _load_dims_and_build_fact(pg_conn, run_id)
+        load_pending_fact(pg_conn, df, run_id)
+        pg_conn.commit()
+
+        updated = df.copy()
+        updated["precio_lista"] = 999.00
+        load_pending_fact(pg_conn, updated, run_id)
+        pg_conn.commit()
+
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*), MAX(precio_lista) FROM pending_fact_precios WHERE run_id = %s",
+                (run_id,),
+            )
+            count, price = cur.fetchone()
+        assert count == 1
+        assert float(price) == pytest.approx(999.0)
 
 
 # ---------------------------------------------------------------------------
