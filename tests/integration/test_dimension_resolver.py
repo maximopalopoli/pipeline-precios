@@ -252,6 +252,70 @@ class TestResolveProducto:
             (es_ean,) = cur.fetchone()
         assert es_ean is False
 
+    def test_valid_ean_is_shared_across_retailers(self, pg_conn):
+        ean = "7791234567898"
+        sk1 = resolve_producto(
+            pg_conn,
+            _producto_row(id_producto=ean, es_ean=True, id_comercio=1, id_bandera=1),
+        )
+        sk2 = resolve_producto(
+            pg_conn,
+            _producto_row(id_producto=ean, es_ean=True, id_comercio=2, id_bandera=1),
+        )
+
+        assert sk1 == sk2
+
+    def test_internal_code_is_not_shared_across_retailers(self, pg_conn):
+        code = "internal-milk-1l"
+        sk1 = resolve_producto(
+            pg_conn,
+            _producto_row(id_producto=code, es_ean=False, id_comercio=1, id_bandera=1),
+        )
+        sk2 = resolve_producto(
+            pg_conn,
+            _producto_row(id_producto=code, es_ean=False, id_comercio=2, id_bandera=1),
+        )
+
+        assert sk1 != sk2
+
+    def test_internal_code_is_shared_within_a_retailer(self, pg_conn):
+        code = "internal-milk-1l"
+        sk1 = resolve_producto(
+            pg_conn,
+            _producto_row(
+                id_producto=code,
+                es_ean=False,
+                id_comercio=1,
+                id_bandera=1,
+                id_sucursal=10,
+            ),
+        )
+        sk2 = resolve_producto(
+            pg_conn,
+            _producto_row(
+                id_producto=code,
+                es_ean=False,
+                id_comercio=1,
+                id_bandera=1,
+                id_sucursal=20,
+            ),
+        )
+
+        assert sk1 == sk2
+
+    def test_invalid_ean_is_scoped_to_its_retailer(self, pg_conn):
+        invalid_ean = "7791234567897"
+        sk1 = resolve_producto(
+            pg_conn,
+            _producto_row(id_producto=invalid_ean, es_ean=True, id_comercio=1, id_bandera=1),
+        )
+        sk2 = resolve_producto(
+            pg_conn,
+            _producto_row(id_producto=invalid_ean, es_ean=True, id_comercio=2, id_bandera=1),
+        )
+
+        assert sk1 != sk2
+
 
 # ── resolve_fecha ─────────────────────────────────────────────────────────────
 
