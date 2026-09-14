@@ -1,6 +1,7 @@
 """Contract tests for terminal failures in the CLI ingestion entrypoint."""
 
 from datetime import date
+import sys
 
 import psycopg
 import pytest
@@ -75,3 +76,17 @@ def test_cli_propagates_critical_quality_failure_and_marks_run_failed(
     assert status == "failed"
     assert finished is True
     assert "min_row_count" in message
+
+
+def test_main_exits_nonzero_when_the_pipeline_fails(monkeypatch):
+    def fail_pipeline(**kwargs):
+        raise RuntimeError("pipeline failed")
+
+    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(pipeline, "run", fail_pipeline)
+    monkeypatch.setattr(sys, "argv", ["run_pipeline"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main()
+
+    assert exc_info.value.code == 1

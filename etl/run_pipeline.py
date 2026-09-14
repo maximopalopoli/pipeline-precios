@@ -210,7 +210,7 @@ def run(
                 failures=[r.name for r in exc.failures],
                 elapsed=round(time.perf_counter() - t3, 2),
             )
-            return 0
+            raise
 
         qr = reporters.report(results=check_results, run_id=run_id, conn=conn)
         conn.commit()
@@ -293,7 +293,7 @@ def run(
 
     except Exception as exc:
         conn.rollback()
-        if run_id is not None:
+        if run_id is not None and not isinstance(exc, quality_checks.QualityCheckError):
             reporters.mark_run_failed(conn, run_id, str(exc))
             alerting.notify_failure(run_id, str(exc), fecha=fecha)
         log.exception("pipeline.fatal_error", error=str(exc))
@@ -330,7 +330,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    run(fecha=args.fecha, raw_dir=args.raw_dir)
+    try:
+        run(fecha=args.fecha, raw_dir=args.raw_dir)
+    except Exception:
+        sys.exit(1)
     sys.exit(0)
 
 
