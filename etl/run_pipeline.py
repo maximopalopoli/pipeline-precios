@@ -34,7 +34,6 @@ import argparse
 import os
 import sys
 import time
-from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
 
@@ -46,17 +45,13 @@ import structlog.dev
 from etl import alerting
 from etl.extract import downloader
 from etl.ingestion_run import open_ingestion_run, should_process_raw_file
+from etl.ingestion_processing import stream_pending_product_facts
 from etl.load import warehouse_loader
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
 from etl.staging import loader as staging_loader
-from etl.transform.cleaner import clean_comercios, clean_productos, clean_sucursales
-from etl.transform.fact_builder import (
-    PRODUTO_CHUNK_SIZE,
-    build_fact_chunk,
-    build_sk_caches,
-)
+from etl.transform.cleaner import clean_comercios, clean_sucursales
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -137,40 +132,6 @@ def _read_small_staging(
         sucursales = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
 
     return comercios, sucursales
-
-
-def _iter_stg_productos(conn_read, run_id: int, chunk_size: int):
-    """Yield stg_productos rows for *run_id* as DataFrames of at most *chunk_size* rows.
-
-    Uses a server-side cursor on a separate read connection so the caller can
-    commit on its write connection without closing the cursor.
-    """
-    with conn_read.cursor("stg_productos_cursor") as cur:
-        cur.itersize = chunk_size
-        cur.execute(
-            "SELECT * FROM stg_productos WHERE run_id = %s ORDER BY id_comercio, id_sucursal, id_producto",
-            (run_id,),
-        )
-        cols: list[str] | None = None
-        while True:
-            rows = cur.fetchmany(chunk_size)
-            if not rows:
-                break
-            if cols is None:
-                cols = [d[0] for d in cur.description]
-            yield pd.DataFrame(rows, columns=cols)
-
-
-# ---------------------------------------------------------------------------
-# Double-buffer helper
-# ---------------------------------------------------------------------------
-
-
-def _commit_pending_fact_chunk(conn_write, df: "pd.DataFrame", run_id: int) -> int:
-    """Load one provisional fact chunk and commit it (runs in a background thread)."""
-    rows = warehouse_loader.load_pending_fact(conn_write, df, run_id)
-    conn_write.commit()
-    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -315,10 +276,7 @@ def run(
         rp = warehouse_loader.load_dim_produto_from_staging(conn, run_id)
         conn.commit()
 
-        # Build SK lookup caches from the now-populated dimension tables
-        fecha_id_int, comercio_cache, sucursal_cache, producto_cache = build_sk_caches(
-            conn, dl.fecha_datos
-        )
+        fecha_id_int = int(dl.fecha_datos.strftime("%Y%m%d"))
 
         logger.info(
             "pipeline.stage.done",
@@ -333,57 +291,19 @@ def run(
         logger.info("pipeline.stage.start", stage="fact_load")
         t6 = time.perf_counter()
 
-        total_fact_rows = 0
-        total_productos_valid = 0
-        chunk_num = 0
-
-        # Dedicated write connection for the background thread (psycopg2 is not thread-safe)
-        conn_write = _db_connect()
-        conn_read = _db_connect()
-        executor = ThreadPoolExecutor(max_workers=1)
-        pending: Future | None = None
-
-        try:
-            for chunk_df in _iter_stg_productos(conn_read, run_id, PRODUTO_CHUNK_SIZE):
-                chunk_num += 1
-                clean_p = clean_productos(chunk_df)
-                total_productos_valid += len(clean_p.clean)
-
-                chunk_result = build_fact_chunk(
-                    clean_p.clean,
-                    comercio_cache,
-                    sucursal_cache,
-                    producto_cache,
-                    fecha_id_int,
-                    run_id,
-                )
-
-                # Wait for previous chunk's write before submitting next
-                if pending is not None:
-                    total_fact_rows += pending.result()
-
-                # Submit this chunk's DB write to background thread
-                pending = executor.submit(
-                    _commit_pending_fact_chunk, conn_write, chunk_result.df, run_id
-                )
-                del chunk_df, clean_p, chunk_result
-
-            # Wait for the last chunk
-            if pending is not None:
-                total_fact_rows += pending.result()
-        finally:
-            executor.shutdown(wait=True)
-            conn_write.close()
-            conn_read.close()
-
-        warehouse_loader.register_rows_loaded(conn, run_id, total_fact_rows)
+        product_load = stream_pending_product_facts(
+            conn,
+            _db_connect,
+            run_id=run_id,
+            run_date=dl.fecha_datos,
+        )
         conn.commit()
 
         logger.info(
             "pipeline.stage.done",
             stage="fact_load",
-            chunks=chunk_num,
-            rows_fact=total_fact_rows,
+            chunks=product_load.chunks,
+            rows_fact=product_load.rows_fact,
             elapsed=round(time.perf_counter() - t6, 2),
         )
 
@@ -395,7 +315,7 @@ def run(
             conn,
             run_id=run_id,
             fecha_id=fecha_id_int,
-            rows_valid=total_productos_valid,
+            rows_valid=product_load.rows_valid,
         )
         conn.commit()
 
@@ -411,10 +331,10 @@ def run(
         logger.info(
             "pipeline.completed",
             fecha=str(dl.fecha_datos),
-            rows_loaded=total_fact_rows,
+            rows_loaded=product_load.rows_fact,
             elapsed_total=elapsed_total,
         )
-        return total_fact_rows
+        return product_load.rows_fact
 
     except Exception as exc:
         conn.rollback()
