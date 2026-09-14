@@ -145,7 +145,20 @@ edit it before running the commands above.
 make ingest-date DATE=2026-03-17
 ```
 
-The pipeline downloads the daily ZIP (~300 MB), processes ~12M price observations (staging → quality checks → transform → load → aggregate), and loads them into PostgreSQL. It's idempotent — re-running skips if the file hash hasn't changed.
+The pipeline downloads the daily ZIP (~300 MB), processes ~12M price observations
+(staging → quality checks → dimensions → pending facts → atomic publication), and
+loads them into PostgreSQL.
+
+### Ingestion results and failures
+
+The CLI exits with code `0` when it completes an ingestion or skips a raw file
+that already has a completed publication. It exits with a non-zero code when a
+critical quality check or an operational error aborts the run.
+
+Every run opened after a download is recorded in `ingestion_runs`. A failed run
+has `status = 'failed'`, `finished_at`, and an error message. The same raw file
+remains eligible for a later retry until a run completes successfully. Critical
+quality failures retain their structured check details in the error message.
 
 ### Run with Docker Compose (all services)
 
@@ -190,7 +203,11 @@ All variables have development defaults. Set them in `.env` (see
 
 ### Airflow
 
-The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs to capture government rectifications). 8 tasks: download → check hash → staging → quality checks → transform → load dimensions → load pending facts → publish the daily snapshot atomically.
+The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs
+to capture government rectifications). Its tasks run download → duplicate check
+→ staging → quality checks → dimensions → pending facts → atomic publication.
+If a task fails after opening an ingestion run, the DAG records the terminal
+failure before Airflow retries or marks the task as failed.
 
 ### Dashboard
 
@@ -198,7 +215,7 @@ The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs 
 
 ## Technical Decisions
 
-- **Idempotency:** SHA-256 to skip duplicate downloads; `ON CONFLICT DO UPDATE` on dimensions and facts; re-runs recalculate aggregates
+- **Idempotency:** SHA-256 plus a completed ingestion to skip duplicate downloads; failed runs remain retryable; `ON CONFLICT DO UPDATE` on dimensions and facts; re-runs recalculate aggregates
 - **Untyped staging:** all VARCHAR to preserve raw data and simplify quality check debugging
 - **SCD Type 1:** dimensions update with last-write-wins (no change history)
 - **Monthly partitioning:** `fact_precios` partitioned by `fecha_id` for efficient date-range queries
