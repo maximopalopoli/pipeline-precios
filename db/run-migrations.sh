@@ -2,7 +2,9 @@
 
 set -eu
 
-export PGPASSWORD
+db_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+export PGPASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}"
 
 script_path="$(mktemp)"
 trap 'rm -f "$script_path"' EXIT
@@ -18,7 +20,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 SELECT pg_advisory_lock(hashtext('pipeline-precios:migrations'));
 SQL
 
-for migration_path in /db/migrations/*.sql; do
+for migration_path in "$db_dir"/migrations/*.sql; do
     migration_name="$(basename "$migration_path")"
 
     cat >> "$script_path" <<SQL
@@ -33,7 +35,7 @@ INSERT INTO schema_migrations (version) VALUES (:'migration_name');
 SQL
 done
 
-for seed_path in /db/seeds/*.sql; do
+for seed_path in "$db_dir"/seeds/*.sql; do
     printf '\\i %s\n' "$seed_path" >> "$script_path"
 done
 

@@ -81,7 +81,7 @@ jobs:
         run: |
           sh db/run-migrations.sh
           sh db/run-migrations.sh
-          psql --host="$POSTGRES_HOST" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --command 'SELECT 1 / CASE WHEN (SELECT COUNT(*) FROM schema_migrations) = 8 AND (SELECT COUNT(*) FROM dim_fecha) = 365 AND (SELECT COUNT(*) FROM dim_provincia) = 24 THEN 1 ELSE 0 END;'
+          PGPASSWORD="$POSTGRES_PASSWORD" psql --host="$POSTGRES_HOST" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --command 'SELECT 1 / CASE WHEN (SELECT COUNT(*) FROM schema_migrations) = 8 AND (SELECT COUNT(*) FROM dim_fecha) = 365 AND (SELECT COUNT(*) FROM dim_provincia) = 24 THEN 1 ELSE 0 END;'
 
   container:
     runs-on: ubuntu-latest
