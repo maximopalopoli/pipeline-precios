@@ -6,7 +6,7 @@ on:
       - "etl/**"
       - "models/**"
       - "tests/**"
-      - "db/migrations/**"
+      - "db/**"
       - "api/**"
       - "dags/**"
       - "web/src/**"
@@ -15,6 +15,10 @@ on:
       - "web/vite.config.*"
       - "pyproject.toml"
       - "Makefile"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "docker-compose.yml"
+      - ".github/workflows/ci.yml"
   pull_request:
 
 jobs:
@@ -39,6 +43,57 @@ jobs:
 
       - name: Run tests
         run: make test PYTEST_ARGS="--postgresql-exec=/usr/lib/postgresql/16/bin/pg_ctl -v"
+
+      - name: Lint Python
+        run: make lint
+
+  migrations:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d ci_db"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client-16
+
+      - name: Apply migrations twice and validate the schema
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        run: |
+          sh db/run-migrations.sh
+          sh db/run-migrations.sh
+          psql --host="$POSTGRES_HOST" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --command 'SELECT 1 / CASE WHEN (SELECT COUNT(*) FROM schema_migrations) = 8 AND (SELECT COUNT(*) FROM dim_fecha) = 365 AND (SELECT COUNT(*) FROM dim_provincia) = 24 THEN 1 ELSE 0 END;'
+
+  container:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+
+      - name: Build API image
+        run: docker build --tag pipeline-precios-api:ci .
 
   frontend:
     runs-on: ubuntu-latest
