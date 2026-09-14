@@ -265,9 +265,9 @@ def load_dimensions(**kwargs):
         conn.close()
 
 
-def load_fact_precios(**kwargs):
-    """COPY fact_precios from built DataFrame."""
-    from etl.load.warehouse_loader import load_fact, register_rows_loaded
+def load_pending_fact_precios(**kwargs):
+    """COPY facts into the run-local pending table without publishing them."""
+    from etl.load.warehouse_loader import load_pending_fact, register_rows_loaded
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -277,68 +277,60 @@ def load_fact_precios(**kwargs):
 
     conn = _db_connect()
     try:
-        rows = load_fact(conn, fact_df, run_id)
+        rows = load_pending_fact(conn, fact_df, run_id)
         register_rows_loaded(conn, run_id, rows)
         conn.commit()
-        log.info("warehouse.fact_loaded", run_id=run_id, rows=rows)
+        log.info("warehouse.pending_fact_loaded", run_id=run_id, rows=rows)
     finally:
         conn.close()
 
 
-def compute_aggregations(**kwargs):
-    """Recompute daily aggregations for the run date."""
-    from etl.load.aggregator import aggregate
-
-    ti = kwargs["ti"]
-    dl_info = ti.xcom_pull(task_ids="download_zip")
-    fecha = date.fromisoformat(dl_info["fecha_datos"])
-    fecha_id = int(fecha.strftime("%Y%m%d"))
-
-    conn = _db_connect()
-    try:
-        agg = aggregate(conn, fecha_id)
-        conn.commit()
-        log.info(
-            "aggregations.done",
-            fecha_id=fecha_id,
-            rows_upserted=agg.rows_upserted,
-        )
-    finally:
-        conn.close()
-
-
-def finalize_run(**kwargs):
-    """Mark ingestion run as completed and clean up temp files."""
+def publish_daily_snapshot(**kwargs):
+    """Atomically publish facts, aggregates and the completed run state."""
     import shutil
+
+    from etl.load.publisher import publish_pending_facts
+    from etl.quality import reporters
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
     transform_info = ti.xcom_pull(task_ids="transform_and_resolve")
+    dl_info = ti.xcom_pull(task_ids="download_zip")
     run_id = stg_info["run_id"]
+    fecha = date.fromisoformat(dl_info["fecha_datos"])
+    fecha_id = int(fecha.strftime("%Y%m%d"))
     rows_valid = transform_info["rows_clean_productos"]
 
     conn = _db_connect()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE ingestion_runs
-                   SET status      = 'completed',
-                       finished_at = NOW(),
-                       rows_valid  = %s
-                 WHERE id = %s
-                """,
-                (rows_valid, run_id),
-            )
+        publication = publish_pending_facts(
+            conn,
+            run_id=run_id,
+            fecha_id=fecha_id,
+            rows_valid=rows_valid,
+        )
         conn.commit()
-        log.info("run.finalized", run_id=run_id, rows_valid=rows_valid)
+        log.info(
+            "publication.done",
+            run_id=run_id,
+            fecha_id=fecha_id,
+            rows_fact=publication.rows_fact,
+            rows_aggregated=publication.rows_aggregated,
+        )
+    except Exception as exc:
+        conn.rollback()
+        reporters.mark_run_failed(conn, run_id, str(exc))
+        raise
     finally:
         conn.close()
 
     # Cleanup temp pickle files
     temp_dir = _TEMP_DIR / str(run_id)
     if temp_dir.exists():
-        shutil.rmtree(temp_dir)
+        try:
+            shutil.rmtree(temp_dir)
+        except OSError as exc:
+            log.warning("publication.temp_cleanup_failed", run_id=run_id, error=str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -393,19 +385,14 @@ with DAG(
         python_callable=load_dimensions,
     )
 
-    t_fact = PythonOperator(
-        task_id="load_fact_precios",
-        python_callable=load_fact_precios,
+    t_pending_fact = PythonOperator(
+        task_id="load_pending_fact_precios",
+        python_callable=load_pending_fact_precios,
     )
 
-    t_agg = PythonOperator(
-        task_id="compute_aggregations",
-        python_callable=compute_aggregations,
-    )
-
-    t_finalize = PythonOperator(
-        task_id="finalize_run",
-        python_callable=finalize_run,
+    t_publish = PythonOperator(
+        task_id="publish_daily_snapshot",
+        python_callable=publish_daily_snapshot,
     )
 
     # Sequential chain
@@ -416,7 +403,6 @@ with DAG(
         >> t_quality
         >> t_transform
         >> t_dims
-        >> t_fact
-        >> t_agg
-        >> t_finalize
+        >> t_pending_fact
+        >> t_publish
     )
