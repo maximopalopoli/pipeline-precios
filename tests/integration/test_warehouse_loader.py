@@ -251,6 +251,7 @@ class TestLoadDimensionProductoFromStaging:
                     (run_id, "2", "1", "20", "internal-milk-1l", "0", "Leche B"),
                     (run_id, "1", "1", "10", "7791234567898", "1", "Leche EAN"),
                     (run_id, "2", "1", "20", "7791234567898", "1", "Leche EAN"),
+                    (run_id, "invalid", "1", "30", "ignored-product", "0", "Inválido"),
                 ],
             )
 

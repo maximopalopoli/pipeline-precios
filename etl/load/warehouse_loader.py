@@ -643,6 +643,9 @@ def load_dim_produto_from_staging(conn, run_id: int) -> int:
                 FROM stg_productos
                 WHERE run_id = %s
                   AND TRIM(productos_ean) IN ('0', '1')
+                  AND TRIM(id_comercio) ~ '^[0-9]+$'
+                  AND TRIM(id_bandera) ~ '^[0-9]+$'
+                  AND TRIM(id_sucursal) ~ '^[0-9]+$'
                   AND TRIM(id_producto) <> ''
                   AND TRIM(productos_descripcion) <> ''
             ) AS source_productos
