@@ -627,12 +627,12 @@ def load_dim_produto_from_staging(conn, run_id: int) -> int:
                     CASE
                         WHEN TRIM(productos_ean) = '1'
                              AND pipeline_is_valid_ean(TRIM(id_producto)) THEN NULL
-                        ELSE id_comercio
+                        ELSE TRIM(id_comercio)::INT
                     END AS source_id_comercio,
                     CASE
                         WHEN TRIM(productos_ean) = '1'
                              AND pipeline_is_valid_ean(TRIM(id_producto)) THEN NULL
-                        ELSE id_bandera
+                        ELSE TRIM(id_bandera)::INT
                     END AS source_id_bandera,
                     productos_descripcion,
                     productos_marca,
