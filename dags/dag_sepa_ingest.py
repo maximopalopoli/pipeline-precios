@@ -80,14 +80,29 @@ def download_zip(ds: str, **kwargs):
 
 
 def check_file_changed(**kwargs):
-    """ShortCircuit: skip downstream tasks if file hash already existed."""
+    """Short-circuit only files that have already been published successfully."""
+    from etl.ingestion_run import should_process_raw_file
+
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
-    return dl_info["is_new"]
+
+    conn = _db_connect()
+    try:
+        should_process = should_process_raw_file(conn, dl_info["raw_file_id"])
+        log.info(
+            "download.duplicate_decision",
+            raw_file_id=dl_info["raw_file_id"],
+            is_new=dl_info["is_new"],
+            should_process=should_process,
+        )
+        return should_process
+    finally:
+        conn.close()
 
 
 def load_staging(**kwargs):
     """Open ingestion run + load staging tables from ZIP."""
+    from etl.ingestion_run import open_ingestion_run
     from etl.staging import loader as staging_loader
 
     ti = kwargs["ti"]
@@ -95,15 +110,7 @@ def load_staging(**kwargs):
 
     conn = _db_connect()
     try:
-        # Open run
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO ingestion_runs (raw_file_id, status) "
-                "VALUES (%s, 'running') RETURNING id",
-                (dl_info["raw_file_id"],),
-            )
-            run_id = cur.fetchone()[0]
-        conn.commit()
+        run_id = open_ingestion_run(conn, dl_info["raw_file_id"])
 
         # Load staging
         stg = staging_loader.load(conn, Path(dl_info["path"]), run_id)
