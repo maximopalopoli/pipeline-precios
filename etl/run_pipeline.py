@@ -42,7 +42,7 @@ import structlog.dev
 
 from etl import alerting
 from etl.extract import downloader
-from etl.ingestion_run import open_ingestion_run, should_process_raw_file
+from etl.ingestion_run import IngestionResult, open_ingestion_run, should_process_raw_file
 from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
@@ -119,13 +119,12 @@ def _db_connect() -> psycopg2.extensions.connection:
 def run(
     fecha: date | None = None,
     raw_dir: Path | None = None,
-) -> int:
+) -> IngestionResult:
     """
     Execute the full pipeline for *fecha* (defaults to today).
 
-    Returns the number of fact rows loaded, or 0 if the file was already
-    processed (duplicate SHA-256) or a quality check aborted the run.
-    Raises on unexpected errors after marking the run as failed.
+    Returns an explicit completed or skipped result. Raises on unexpected
+    errors after marking the run as failed.
     """
     raw_dir = raw_dir or Path("data")
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -153,7 +152,7 @@ def run(
                     filename=dl.filename,
                 )
                 conn.close()
-                return 0
+                return IngestionResult.skipped()
             log.info(
                 "pipeline.reprocessing_failed_run",
                 raw_file_id=dl.raw_file_id,
@@ -290,7 +289,7 @@ def run(
             rows_loaded=product_load.rows_fact,
             elapsed_total=elapsed_total,
         )
-        return product_load.rows_fact
+        return IngestionResult.completed(product_load.rows_fact)
 
     except Exception as exc:
         conn.rollback()
@@ -331,8 +330,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    rows = run(fecha=args.fecha, raw_dir=args.raw_dir)
-    sys.exit(0 if rows >= 0 else 1)
+    run(fecha=args.fecha, raw_dir=args.raw_dir)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

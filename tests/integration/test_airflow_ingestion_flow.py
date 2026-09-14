@@ -223,7 +223,8 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
         lambda conn, run_id: original_run_all(conn, run_id, min_productos=1),
     )
 
-    assert cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path) == 7
+    cli_result = cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
+    assert cli_result.rows_loaded == 7
     with pg_conn.cursor() as cur:
         cur.execute("SELECT id FROM ingestion_runs WHERE raw_file_id = %s", (raw_file_id,))
         cli_run_id = cur.fetchone()[0]
