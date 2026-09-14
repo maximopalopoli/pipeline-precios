@@ -10,7 +10,6 @@ import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import pandas as pd
 import psycopg2
 import structlog
 
@@ -157,8 +156,7 @@ def run_quality_checks(**kwargs):
 
 def load_dimensions(**kwargs):
     """Load dimensions from staging without materializing all products."""
-    from etl.load import warehouse_loader
-    from etl.transform.cleaner import clean_comercios, clean_sucursales
+    from etl.ingestion_processing import load_staged_dimensions
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -166,35 +164,19 @@ def load_dimensions(**kwargs):
 
     conn = _db_connect()
     try:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM stg_comercios WHERE run_id = %s", (run_id,))
-            comercios_df = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
-            cur.execute("SELECT * FROM stg_sucursales WHERE run_id = %s", (run_id,))
-            sucursales_df = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
-
-        clean_comercios_result = clean_comercios(comercios_df)
-        clean_sucursales_result = clean_sucursales(sucursales_df)
-        rc, rs = warehouse_loader.load_dimensions_no_producto(
-            conn,
-            clean_comercios_result.clean,
-            clean_sucursales_result.clean,
-        )
-        rp = warehouse_loader.load_dim_produto_from_staging(conn, run_id)
+        result = load_staged_dimensions(conn, run_id)
         conn.commit()
         log.info(
             "warehouse.dimensions_loaded",
             run_id=run_id,
-            comercios=rc,
-            sucursales=rs,
-            productos=rp,
+            comercios=result.rows_comercios,
+            sucursales=result.rows_sucursales,
+            productos=result.rows_productos,
         )
         return {
-            "rows_clean_comercios": len(clean_comercios_result.clean),
-            "rows_clean_sucursales": len(clean_sucursales_result.clean),
-            "rows_rejected": (
-                len(clean_comercios_result.rejected)
-                + len(clean_sucursales_result.rejected)
-            ),
+            "rows_clean_comercios": result.rows_comercios,
+            "rows_clean_sucursales": result.rows_sucursales,
+            "rows_rejected": result.rows_rejected,
         }
     finally:
         conn.close()

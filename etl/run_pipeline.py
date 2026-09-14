@@ -37,7 +37,6 @@ import time
 from datetime import date
 from pathlib import Path
 
-import pandas as pd
 import psycopg2
 import structlog
 import structlog.dev
@@ -45,13 +44,11 @@ import structlog.dev
 from etl import alerting
 from etl.extract import downloader
 from etl.ingestion_run import open_ingestion_run, should_process_raw_file
-from etl.ingestion_processing import stream_pending_product_facts
-from etl.load import warehouse_loader
+from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
 from etl.staging import loader as staging_loader
-from etl.transform.cleaner import clean_comercios, clean_sucursales
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -113,25 +110,6 @@ def _db_connect() -> psycopg2.extensions.connection:
         user=os.environ["POSTGRES_USER"],
         password=os.environ["POSTGRES_PASSWORD"],
     )
-
-
-# ---------------------------------------------------------------------------
-# Staging read-back
-# ---------------------------------------------------------------------------
-
-
-def _read_small_staging(
-    conn, run_id: int
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return (comercios_df, sucursales_df) — the small tables only."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT * FROM stg_comercios  WHERE run_id = %s", (run_id,))
-        comercios = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
-
-        cur.execute("SELECT * FROM stg_sucursales WHERE run_id = %s", (run_id,))
-        sucursales = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
-
-    return comercios, sucursales
 
 
 # ---------------------------------------------------------------------------
@@ -247,33 +225,11 @@ def run(
             elapsed=round(time.perf_counter() - t3, 2),
         )
 
-        # ── 5. Clean small staging tables (comercios + sucursales) ───────────
-        logger.info("pipeline.stage.start", stage="clean")
-        t4 = time.perf_counter()
-
-        stg_comercios, stg_sucursales = _read_small_staging(conn, run_id)
-        clean_c = clean_comercios(stg_comercios)
-        clean_s = clean_sucursales(stg_sucursales)
-
-        logger.info(
-            "pipeline.stage.done",
-            stage="clean",
-            comercios=len(clean_c.clean),
-            sucursales=len(clean_s.clean),
-            rejected=len(clean_c.rejected) + len(clean_s.rejected),
-            elapsed=round(time.perf_counter() - t4, 2),
-        )
-
-        # ── 6. Load dimensions ───────────────────────────────────────────────
+        # ── 5. Clean + load dimensions ───────────────────────────────────────
         logger.info("pipeline.stage.start", stage="dimensions")
         t5 = time.perf_counter()
 
-        # comercio + sucursal via Python (small tables)
-        rc, rs = warehouse_loader.load_dimensions_no_producto(
-            conn, clean_c.clean, clean_s.clean
-        )
-        # producto via SQL INSERT...SELECT from staging (avoids 14M rows in Python)
-        rp = warehouse_loader.load_dim_produto_from_staging(conn, run_id)
+        dimensions = load_staged_dimensions(conn, run_id)
         conn.commit()
 
         fecha_id_int = int(dl.fecha_datos.strftime("%Y%m%d"))
@@ -281,9 +237,10 @@ def run(
         logger.info(
             "pipeline.stage.done",
             stage="dimensions",
-            rows_comercios=rc,
-            rows_sucursales=rs,
-            rows_productos=rp,
+            rows_comercios=dimensions.rows_comercios,
+            rows_sucursales=dimensions.rows_sucursales,
+            rows_productos=dimensions.rows_productos,
+            rows_rejected=dimensions.rows_rejected,
             elapsed=round(time.perf_counter() - t5, 2),
         )
 

@@ -10,7 +10,7 @@ from typing import Callable
 import pandas as pd
 
 from etl.load import warehouse_loader
-from etl.transform.cleaner import clean_productos
+from etl.transform.cleaner import clean_comercios, clean_productos, clean_sucursales
 from etl.transform.fact_builder import (
     PRODUTO_CHUNK_SIZE,
     build_fact_chunk,
@@ -25,6 +25,47 @@ class ProductLoadResult:
     chunks: int
     rows_fact: int
     rows_valid: int
+
+
+@dataclass(frozen=True)
+class DimensionLoadResult:
+    """Counts produced while loading dimensions from a staging run."""
+
+    rows_comercios: int
+    rows_sucursales: int
+    rows_productos: int
+    rows_rejected: int
+
+
+def load_staged_dimensions(conn, run_id: int) -> DimensionLoadResult:
+    """Clean and load every dimension needed by a staged ingestion run.
+
+    Comercio and sucursal tables are small enough to clean in memory.  Product
+    dimensions stay in PostgreSQL and are deduplicated with an INSERT…SELECT,
+    avoiding a full product DataFrame in either entry point.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM stg_comercios WHERE run_id = %s", (run_id,))
+        comercios_df = pd.DataFrame(
+            cur.fetchall(), columns=[description[0] for description in cur.description]
+        )
+        cur.execute("SELECT * FROM stg_sucursales WHERE run_id = %s", (run_id,))
+        sucursales_df = pd.DataFrame(
+            cur.fetchall(), columns=[description[0] for description in cur.description]
+        )
+
+    comercios = clean_comercios(comercios_df)
+    sucursales = clean_sucursales(sucursales_df)
+    rows_comercios, rows_sucursales = warehouse_loader.load_dimensions_no_producto(
+        conn, comercios.clean, sucursales.clean
+    )
+    rows_productos = warehouse_loader.load_dim_produto_from_staging(conn, run_id)
+    return DimensionLoadResult(
+        rows_comercios=rows_comercios,
+        rows_sucursales=rows_sucursales,
+        rows_productos=rows_productos,
+        rows_rejected=len(comercios.rejected) + len(sucursales.rejected),
+    )
 
 
 def iter_staged_products(conn_read, run_id: int, chunk_size: int = PRODUTO_CHUNK_SIZE):
