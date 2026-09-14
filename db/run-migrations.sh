@@ -12,12 +12,12 @@ trap 'rm -f "$script_path"' EXIT
 cat > "$script_path" <<'SQL'
 \set ON_ERROR_STOP on
 
+SELECT pg_advisory_lock(hashtext('pipeline-precios:migrations'));
+
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version TEXT PRIMARY KEY,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-SELECT pg_advisory_lock(hashtext('pipeline-precios:migrations'));
 SQL
 
 for migration_path in "$db_dir"/migrations/*.sql; do
@@ -29,8 +29,10 @@ SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM schema_migrations WHERE version = :'migration_name'
 ) THEN 'true' ELSE 'false' END AS should_apply \gset
 \if :should_apply
+BEGIN;
 \i $migration_path
 INSERT INTO schema_migrations (version) VALUES (:'migration_name');
+COMMIT;
 \endif
 SQL
 done

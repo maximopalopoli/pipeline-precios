@@ -9,7 +9,7 @@ help: ## Show this help
 # Setup
 
 setup: install web-install ## First-time setup: venv + Python deps + Node deps
-	@echo "\n✔ Setup complete. Copy .env.example to .env and edit credentials, then run: make db"
+	@echo "\n✔ Setup complete. Run: make db"
 
 install: ## Create venv and install Python dependencies
 	python -m venv .venv
