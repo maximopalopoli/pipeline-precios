@@ -45,8 +45,8 @@ import structlog.dev
 
 from etl import alerting
 from etl.extract import downloader
-from etl.load.aggregator import aggregate
 from etl.load import warehouse_loader
+from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
 from etl.staging import loader as staging_loader
@@ -145,21 +145,6 @@ def _open_run(conn, raw_file_id: int) -> int:
     return run_id
 
 
-def _mark_completed(conn, run_id: int, rows_valid: int) -> None:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE ingestion_runs
-               SET status      = 'completed',
-                   finished_at = NOW(),
-                   rows_valid  = %s
-             WHERE id = %s
-            """,
-            (rows_valid, run_id),
-        )
-    conn.commit()
-
-
 # ---------------------------------------------------------------------------
 # Staging read-back
 # ---------------------------------------------------------------------------
@@ -206,9 +191,9 @@ def _iter_stg_productos(conn_read, run_id: int, chunk_size: int):
 # ---------------------------------------------------------------------------
 
 
-def _commit_fact_chunk(conn_write, df: "pd.DataFrame", run_id: int) -> int:
-    """Load a single fact chunk and commit (runs in background thread)."""
-    rows = warehouse_loader.load_fact(conn_write, df, run_id)
+def _commit_pending_fact_chunk(conn_write, df: "pd.DataFrame", run_id: int) -> int:
+    """Load one provisional fact chunk and commit it (runs in a background thread)."""
+    rows = warehouse_loader.load_pending_fact(conn_write, df, run_id)
     conn_write.commit()
     return rows
 
@@ -377,10 +362,6 @@ def run(
         total_productos_valid = 0
         chunk_num = 0
 
-        # DELETE existing rows for this fecha — makes ON CONFLICT nearly free
-        warehouse_loader.delete_fact_for_fecha(conn, fecha_id_int)
-        conn.commit()
-
         # Dedicated write connection for the background thread (psycopg2 is not thread-safe)
         conn_write = _db_connect()
         conn_read = _db_connect()
@@ -408,7 +389,7 @@ def run(
 
                 # Submit this chunk's DB write to background thread
                 pending = executor.submit(
-                    _commit_fact_chunk, conn_write, chunk_result.df, run_id
+                    _commit_pending_fact_chunk, conn_write, chunk_result.df, run_id
                 )
                 del chunk_df, clean_p, chunk_result
 
@@ -416,7 +397,7 @@ def run(
             if pending is not None:
                 total_fact_rows += pending.result()
         finally:
-            executor.shutdown(wait=False)
+            executor.shutdown(wait=True)
             conn_write.close()
             conn_read.close()
 
@@ -431,22 +412,25 @@ def run(
             elapsed=round(time.perf_counter() - t6, 2),
         )
 
-        # ── 8. Aggregations ──────────────────────────────────────────────────
-        logger.info("pipeline.stage.start", stage="aggregations")
+        # ── 8. Publish facts + aggregations atomically ───────────────────────
+        logger.info("pipeline.stage.start", stage="publication")
         t7 = time.perf_counter()
 
-        agg = aggregate(conn, fecha_id_int)
+        publication = publish_pending_facts(
+            conn,
+            run_id=run_id,
+            fecha_id=fecha_id_int,
+            rows_valid=total_productos_valid,
+        )
         conn.commit()
 
         logger.info(
             "pipeline.stage.done",
-            stage="aggregations",
-            rows_upserted=agg.rows_upserted,
+            stage="publication",
+            rows_fact=publication.rows_fact,
+            rows_aggregated=publication.rows_aggregated,
             elapsed=round(time.perf_counter() - t7, 2),
         )
-
-        # ── 9. Mark completed ────────────────────────────────────────────────
-        _mark_completed(conn, run_id, rows_valid=total_productos_valid)
 
         elapsed_total = round(time.perf_counter() - t0, 2)
         logger.info(
@@ -458,6 +442,7 @@ def run(
         return total_fact_rows
 
     except Exception as exc:
+        conn.rollback()
         if run_id is not None:
             reporters.mark_run_failed(conn, run_id, str(exc))
             alerting.notify_failure(run_id, str(exc), fecha=fecha)

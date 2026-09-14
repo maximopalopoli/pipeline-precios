@@ -190,7 +190,7 @@ All variables have development defaults. Set them in `.env` (see
 
 ### Airflow
 
-The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs to capture government rectifications). 9 tasks: download → check hash → staging → quality checks → transform → load dimensions → load facts → aggregate → finalize.
+The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs to capture government rectifications). 8 tasks: download → check hash → staging → quality checks → transform → load dimensions → load pending facts → publish the daily snapshot atomically.
 
 ### Dashboard
 

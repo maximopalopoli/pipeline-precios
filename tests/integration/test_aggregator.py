@@ -204,7 +204,7 @@ class TestAggregate:
             cur.execute("SELECT COUNT(*) FROM agg_precios_diarios WHERE fecha_id = %s", (FECHA_ID,))
             assert cur.fetchone()[0] == 2
 
-    def test_idempotent_upsert(self, pg_conn, run_id):
+    def test_idempotent_replacement(self, pg_conn, run_id):
         """Running aggregate twice → same rows, updated values."""
         _load_all(pg_conn, run_id, [_producto(precio=Decimal("100.00"))])
         aggregate(pg_conn, FECHA_ID)
@@ -220,6 +220,47 @@ class TestAggregate:
             count, avg = cur.fetchone()
         assert count == 1
         assert float(avg) == pytest.approx(200.0)
+
+    def test_removes_aggregate_groups_absent_from_a_rectification(self, pg_conn, run_id):
+        productos = [
+            _producto(id_producto="AAA", id_sucursal=10, precio=Decimal("100.00")),
+            _producto(id_producto="BBB", id_sucursal=20, precio=Decimal("200.00")),
+        ]
+        sucursales = [_sucursal(id_sucursal=10), _sucursal(id_sucursal=20)]
+        _load_all(pg_conn, run_id, productos, sucursales=sucursales)
+        aggregate(pg_conn, FECHA_ID)
+        pg_conn.commit()
+
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM fact_precios
+                WHERE fecha_id = %s
+                  AND producto_sk = (
+                      SELECT producto_sk FROM dim_producto WHERE id_producto = 'BBB'
+                  )
+                """,
+                (FECHA_ID,),
+            )
+        aggregate(pg_conn, FECHA_ID)
+        pg_conn.commit()
+
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM agg_precios_diarios WHERE fecha_id = %s",
+                (FECHA_ID,),
+            )
+            assert cur.fetchone()[0] == 1
+            cur.execute(
+                """
+                SELECT p.id_producto
+                FROM agg_precios_diarios a
+                JOIN dim_producto p ON p.producto_sk = a.producto_sk
+                WHERE a.fecha_id = %s
+                """,
+                (FECHA_ID,),
+            )
+            assert cur.fetchone()[0] == "AAA"
 
     def test_no_rows_for_other_fecha(self, pg_conn, run_id):
         _load_all(pg_conn, run_id, [_producto()])

@@ -5,6 +5,7 @@ Strategy
 --------
 - Dimensions: COPY rows → temp table → INSERT ... ON CONFLICT (natural key) DO UPDATE
 - fact_precios: COPY DataFrame → temp table → INSERT ... ON CONFLICT (grain) DO UPDATE
+- pending_fact_precios: COPY DataFrame → temp table → rows isolated by ingestion run
 - Auto-creates monthly partitions for fact_precios when they are missing
 - Registers ``rows_loaded`` in ``ingestion_runs`` after fact load
 
@@ -19,6 +20,7 @@ Public API
 load(conn, comercios, sucursales, productos, fact_df, run_id) → LoadResult
 load_dimensions(conn, comercios, sucursales, productos)       → (int, int, int)
 load_fact(conn, df, run_id)                                   → int
+load_pending_fact(conn, df, run_id)                           → int
 register_rows_loaded(conn, run_id, rows_loaded)               → None
 """
 
@@ -422,7 +424,6 @@ def load_fact(conn, df: pd.DataFrame, run_id: int) -> int:
         "leyenda_promo2",
         "tiene_promo",
     ]
-
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -471,6 +472,83 @@ def load_fact(conn, df: pd.DataFrame, run_id: int) -> int:
         count = cur.rowcount
 
     log.info("warehouse.fact_loaded", run_id=run_id, rows=count)
+    return count
+
+
+def load_pending_fact(conn, df: pd.DataFrame, run_id: int) -> int:
+    """Load one fact chunk for *run_id* without publishing it to the warehouse.
+
+    The caller may commit each chunk.  Those commits only make data visible in
+    ``pending_fact_precios``; consumers continue reading ``fact_precios`` until
+    the later publication step moves a fully validated run atomically.
+    """
+    if df.empty:
+        log.info("warehouse.pending_fact_skipped", reason="empty_dataframe", run_id=run_id)
+        return 0
+
+    cols = [
+        "producto_sk",
+        "sucursal_sk",
+        "fecha_id",
+        "run_id",
+        "precio_lista",
+        "precio_referencia",
+        "precio_promo1",
+        "precio_promo2",
+        "leyenda_promo1",
+        "leyenda_promo2",
+        "tiene_promo",
+    ]
+    pending_df = df.copy()
+    pending_df["run_id"] = run_id
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TEMP TABLE tmp_pending_fact_precios (
+                producto_sk       INT,
+                sucursal_sk       INT,
+                fecha_id          INT,
+                run_id            INT,
+                precio_lista      NUMERIC(12, 2),
+                precio_referencia NUMERIC(12, 2),
+                precio_promo1     NUMERIC(12, 2),
+                precio_promo2     NUMERIC(12, 2),
+                leyenda_promo1    TEXT,
+                leyenda_promo2    TEXT,
+                tiene_promo       BOOLEAN
+            ) ON COMMIT DROP
+            """
+        )
+        _copy_df(cur, pending_df[cols], "tmp_pending_fact_precios")
+        cur.execute(
+            """
+            INSERT INTO pending_fact_precios (
+                run_id, producto_sk, sucursal_sk, fecha_id,
+                precio_lista, precio_referencia,
+                precio_promo1, precio_promo2,
+                leyenda_promo1, leyenda_promo2,
+                tiene_promo
+            )
+            SELECT run_id, producto_sk, sucursal_sk, fecha_id,
+                precio_lista, precio_referencia,
+                precio_promo1, precio_promo2,
+                leyenda_promo1, leyenda_promo2,
+                tiene_promo
+            FROM tmp_pending_fact_precios
+            ON CONFLICT (run_id, producto_sk, sucursal_sk, fecha_id) DO UPDATE SET
+                precio_lista      = EXCLUDED.precio_lista,
+                precio_referencia = EXCLUDED.precio_referencia,
+                precio_promo1     = EXCLUDED.precio_promo1,
+                precio_promo2     = EXCLUDED.precio_promo2,
+                leyenda_promo1    = EXCLUDED.leyenda_promo1,
+                leyenda_promo2    = EXCLUDED.leyenda_promo2,
+                tiene_promo       = EXCLUDED.tiene_promo
+            """
+        )
+        count = cur.rowcount
+
+    log.info("warehouse.pending_fact_loaded", run_id=run_id, rows=count)
     return count
 
 
