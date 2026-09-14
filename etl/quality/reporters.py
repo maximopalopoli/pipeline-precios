@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from etl.ingestion_run import mark_run_failed
 from etl.quality.checks import CheckResult, Severity
 
 if TYPE_CHECKING:
@@ -157,32 +158,6 @@ def _log_summary(qr: QualityReport) -> None:
         criticals_failed=qr.criticals_failed,
         ok=qr.ok,
     )
-
-
-def mark_run_failed(
-    conn: "psycopg2.connection",
-    run_id: int,
-    message: str,
-) -> None:
-    """
-    Set ingestion_runs.status = 'failed' and record *message* as the error.
-
-    Also stamps finished_at so duration_seconds is computed correctly.
-    Safe to call from any pipeline stage (not only quality checks).
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            UPDATE ingestion_runs
-               SET status        = 'failed',
-                   finished_at   = NOW(),
-                   error_message = %s
-             WHERE id = %s
-            """,
-            (message, run_id),
-        )
-    conn.commit()
-    log.error("pipeline.run.failed", run_id=run_id)
 
 
 def _persist(

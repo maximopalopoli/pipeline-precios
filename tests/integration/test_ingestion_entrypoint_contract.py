@@ -5,7 +5,7 @@ Both entry points decide whether a downloaded raw file may be processed from
 publication.  Failed or interrupted attempts remain eligible for a retry.
 """
 
-from etl.run_pipeline import _has_completed_run
+from etl.ingestion_run import should_process_raw_file
 
 
 def _create_raw_file(conn, sha256: str) -> int:
@@ -34,7 +34,7 @@ def test_new_raw_file_is_eligible_for_both_entrypoints(pg_conn):
     raw_file_id = _create_raw_file(pg_conn, "entrypoint-new")
     pg_conn.commit()
 
-    assert _has_completed_run(pg_conn, raw_file_id) is False
+    assert should_process_raw_file(pg_conn, raw_file_id) is True
 
 
 def test_failed_raw_file_remains_eligible_for_retry(pg_conn):
@@ -42,7 +42,7 @@ def test_failed_raw_file_remains_eligible_for_retry(pg_conn):
     _create_run(pg_conn, raw_file_id, "failed")
     pg_conn.commit()
 
-    assert _has_completed_run(pg_conn, raw_file_id) is False
+    assert should_process_raw_file(pg_conn, raw_file_id) is True
 
 
 def test_running_raw_file_is_not_treated_as_a_completed_ingestion(pg_conn):
@@ -50,7 +50,7 @@ def test_running_raw_file_is_not_treated_as_a_completed_ingestion(pg_conn):
     _create_run(pg_conn, raw_file_id, "running")
     pg_conn.commit()
 
-    assert _has_completed_run(pg_conn, raw_file_id) is False
+    assert should_process_raw_file(pg_conn, raw_file_id) is True
 
 
 def test_completed_raw_file_is_the_only_case_both_entrypoints_skip(pg_conn):
@@ -59,4 +59,4 @@ def test_completed_raw_file_is_the_only_case_both_entrypoints_skip(pg_conn):
     _create_run(pg_conn, raw_file_id, "completed")
     pg_conn.commit()
 
-    assert _has_completed_run(pg_conn, raw_file_id) is True
+    assert should_process_raw_file(pg_conn, raw_file_id) is False

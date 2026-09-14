@@ -45,6 +45,7 @@ import structlog.dev
 
 from etl import alerting
 from etl.extract import downloader
+from etl.ingestion_run import open_ingestion_run, should_process_raw_file
 from etl.load import warehouse_loader
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
@@ -117,32 +118,6 @@ def _db_connect() -> psycopg2.extensions.connection:
         user=os.environ["POSTGRES_USER"],
         password=os.environ["POSTGRES_PASSWORD"],
     )
-
-
-# ---------------------------------------------------------------------------
-# Run lifecycle helpers
-# ---------------------------------------------------------------------------
-
-
-def _has_completed_run(conn, raw_file_id: int) -> bool:
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT 1 FROM ingestion_runs WHERE raw_file_id = %s AND status = 'completed'",
-            (raw_file_id,),
-        )
-        return cur.fetchone() is not None
-
-
-def _open_run(conn, raw_file_id: int) -> int:
-    """Insert an ingestion_run in 'running' status; return its id."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO ingestion_runs (raw_file_id, status) VALUES (%s, 'running') RETURNING id",
-            (raw_file_id,),
-        )
-        run_id: int = cur.fetchone()[0]
-    conn.commit()
-    return run_id
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +207,7 @@ def run(
         dl = downloader.download(conn, raw_dir, fecha)
 
         if not dl.is_new:
-            if _has_completed_run(conn, dl.raw_file_id):
+            if not should_process_raw_file(conn, dl.raw_file_id):
                 log.info(
                     "pipeline.skipped",
                     reason="duplicate_sha256",
@@ -256,7 +231,7 @@ def run(
         )
 
         # ── 2. Open ingestion run ────────────────────────────────────────────
-        run_id = _open_run(conn, dl.raw_file_id)
+        run_id = open_ingestion_run(conn, dl.raw_file_id)
         logger = log.bind(run_id=run_id)
         logger.info("pipeline.run.opened", fecha=str(dl.fecha_datos))
 
