@@ -1,4 +1,4 @@
-include .env
+-include .env
 export
 
 .PHONY: help setup install up down restart logs db api web dev ingest test test-unit test-integration lint clean

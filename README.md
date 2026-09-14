@@ -127,7 +127,6 @@ See [sepa_datasets.md](sepa_datasets.md) for the full schema of each CSV.
 ## Quick Start
 
 ```bash
-cp .env.example .env      # edit with your credentials
 make setup                # create venv + install Python & Node deps
 make db                   # start PostgreSQL (migrations + seeds run on first start)
 make ingest               # download today's SEPA ZIP and run the full ETL pipeline
@@ -135,6 +134,10 @@ make dev                  # start DB + API + frontend for local development
 ```
 
 That's it. The dashboard will be at http://localhost:5173 and the API at http://localhost:8000.
+
+The checked-in development defaults are sufficient for a local run. To use
+different database or Airflow credentials, copy `.env.example` to `.env` and
+edit it before running the commands above.
 
 ### Ingest a specific date
 
@@ -173,7 +176,8 @@ make help
 
 ## Environment Variables
 
-Set in `.env` (see `.env.example`):
+All variables have development defaults. Set them in `.env` (see
+`.env.example`) when credentials or database names need to differ:
 
 | Variable | Description |
 |----------|-------------|
