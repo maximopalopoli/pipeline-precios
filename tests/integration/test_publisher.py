@@ -42,8 +42,8 @@ def seed_data(pg_conn):
         sucursal_sk = cur.fetchone()[0]
         cur.execute(
             """
-            INSERT INTO dim_producto (id_producto, productos_descripcion)
-            VALUES ('AAA', 'Producto A'), ('BBB', 'Producto B')
+            INSERT INTO dim_producto (producto_identity, id_producto, productos_descripcion)
+            VALUES ('test:AAA', 'AAA', 'Producto A'), ('test:BBB', 'BBB', 'Producto B')
             RETURNING producto_sk, id_producto
             """
         )

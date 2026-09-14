@@ -23,6 +23,7 @@ import psycopg2
 import structlog
 
 from etl.transform.cleaner import ComercioRow, ProductoRow, SucursalRow
+from etl.transform.product_identity import product_identity
 
 log = structlog.get_logger(__name__)
 
@@ -184,22 +185,26 @@ def resolve_producto(
     """
     Upsert into dim_producto and return producto_sk.
 
-    Natural key: id_producto (EAN or internal code).
+    Valid EANs are shared globally. Other source codes are scoped to the
+    reporting retailer.
     SCD Type 1: descriptive attributes are overwritten on conflict.
     """
+    identity = product_identity(row)
+    retailer_scoped = identity.startswith("chain:")
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO dim_producto
-                (id_producto, es_ean,
+                (producto_identity, source_id_comercio, source_id_bandera,
+                 id_producto, es_ean,
                  productos_descripcion, productos_marca,
                  productos_cantidad_presentacion,
                  productos_unidad_medida_presentacion,
                  productos_cantidad_referencia,
                  productos_unidad_medida_referencia,
                  updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
-            ON CONFLICT (id_producto) DO UPDATE SET
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (producto_identity) DO UPDATE SET
                 es_ean                              = EXCLUDED.es_ean,
                 productos_descripcion               = EXCLUDED.productos_descripcion,
                 productos_marca                     = EXCLUDED.productos_marca,
@@ -211,6 +216,9 @@ def resolve_producto(
             RETURNING producto_sk
             """,
             (
+                identity,
+                row.id_comercio if retailer_scoped else None,
+                row.id_bandera if retailer_scoped else None,
                 row.id_producto,
                 row.es_ean,
                 row.productos_descripcion or None,

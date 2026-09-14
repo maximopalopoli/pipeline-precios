@@ -30,6 +30,7 @@ from etl.transform.dimension_resolver import (
     resolve_provincia,
     resolve_sucursal,
 )
+from etl.transform.product_identity import product_identity, product_identity_for_values
 
 log = structlog.get_logger(__name__)
 
@@ -131,14 +132,14 @@ def build_fact_df(
 
     logger.info("fact_builder.sucursales_resolved", count=len(sucursal_cache))
 
-    # ── 5. Cache producto_sk by id_producto ──────────────────────────────────
+    # ── 5. Cache producto_sk by verified product identity ────────────────────
     producto_cache: dict[str, int] = {}
-    # deduplicate: same id_producto can appear many times across branches
+    # Deduplicate only products whose full identities match.
     seen_productos: dict[str, ProductoRow] = {}
     for p in productos:
-        seen_productos.setdefault(p.id_producto, p)
-    for id_producto, p in seen_productos.items():
-        producto_cache[id_producto] = resolve_producto(conn, p)
+        seen_productos.setdefault(product_identity(p), p)
+    for identity, p in seen_productos.items():
+        producto_cache[identity] = resolve_producto(conn, p)
 
     logger.info("fact_builder.productos_resolved", count=len(producto_cache))
 
@@ -160,7 +161,7 @@ def build_fact_df(
             })
             continue
 
-        producto_sk = producto_cache.get(p.id_producto)
+        producto_sk = producto_cache.get(product_identity(p))
         if producto_sk is None:
             rejected.append({
                 "row": p.__dict__,
@@ -232,7 +233,7 @@ def build_sk_caches(
             (r[0], r[1], r[2]): r[3] for r in cur.fetchall()
         }
 
-        cur.execute("SELECT id_producto, producto_sk FROM dim_producto")
+        cur.execute("SELECT producto_identity, producto_sk FROM dim_producto")
         producto_cache: dict[str, int] = {r[0]: r[1] for r in cur.fetchall()}
 
     log.info(
@@ -275,7 +276,19 @@ def build_fact_chunk(
         index=df.index,
     )
     df["sucursal_sk"] = suc_keys.map(sucursal_cache)
-    df["producto_sk"] = df["id_producto"].map(producto_cache)
+    product_keys = pd.Series(
+        [
+            product_identity_for_values(id_producto, es_ean, id_comercio, id_bandera)
+            for id_producto, es_ean, id_comercio, id_bandera in zip(
+                df["id_producto"],
+                df["es_ean"],
+                df["id_comercio"],
+                df["id_bandera"],
+            )
+        ],
+        index=df.index,
+    )
+    df["producto_sk"] = product_keys.map(producto_cache)
 
     # ── Identify rejected rows ────────────────────────────────────────────────
     missing_suc = df["sucursal_sk"].isna()
@@ -356,7 +369,7 @@ def _build_fact_chunk_list(
             })
             continue
 
-        producto_sk = producto_cache.get(p.id_producto)
+        producto_sk = producto_cache.get(product_identity(p))
         if producto_sk is None:
             rejected.append({
                 "row": p.__dict__,

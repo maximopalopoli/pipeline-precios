@@ -17,6 +17,7 @@ from etl.load.warehouse_loader import (
     LoadResult,
     load,
     load_dimensions,
+    load_dim_produto_from_staging,
     load_fact,
     load_pending_fact,
     register_rows_loaded,
@@ -172,6 +173,25 @@ class TestLoadDimensions:
         _, _, rp = load_dimensions(pg_conn, [], [], same)
         assert rp == 1
 
+    def test_scopes_internal_product_codes_to_the_retailer(self, pg_conn):
+        code = "internal-milk-1l"
+        products = [
+            _producto(code, es_ean=False, id_comercio=1, id_bandera=1),
+            _producto(code, es_ean=False, id_comercio=2, id_bandera=1),
+        ]
+
+        _, _, rows = load_dimensions(pg_conn, [], [], products)
+
+        assert rows == 2
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "SELECT producto_identity FROM dim_producto ORDER BY producto_identity"
+            )
+            assert [row[0] for row in cur.fetchall()] == [
+                "chain:1:1:internal-milk-1l",
+                "chain:2:1:internal-milk-1l",
+            ]
+
     def test_upsert_updates_comercio_attributes(self, pg_conn):
         """Second load with updated razon_social overwrites (SCD Type 1)."""
         load_dimensions(pg_conn, [_comercio()], [], [])
@@ -214,6 +234,43 @@ class TestLoadDimensions:
     def test_empty_inputs_are_noop(self, pg_conn):
         rc, rs, rp = load_dimensions(pg_conn, [], [], [])
         assert (rc, rs, rp) == (0, 0, 0)
+
+
+class TestLoadDimensionProductoFromStaging:
+    def test_scopes_internal_codes_and_shares_valid_eans(self, pg_conn, run_id):
+        with pg_conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO stg_productos (
+                    run_id, id_comercio, id_bandera, id_sucursal, id_producto,
+                    productos_ean, productos_descripcion
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                [
+                    (run_id, "1", "1", "10", "internal-milk-1l", "0", "Leche A"),
+                    (run_id, "2", "1", "20", "internal-milk-1l", "0", "Leche B"),
+                    (run_id, "1", "1", "10", "7791234567898", "1", "Leche EAN"),
+                    (run_id, "2", "1", "20", "7791234567898", "1", "Leche EAN"),
+                    (run_id, "invalid", "1", "30", "ignored-product", "0", "Inválido"),
+                ],
+            )
+
+        rows = load_dim_produto_from_staging(pg_conn, run_id)
+
+        assert rows == 3
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT producto_identity, source_id_comercio, source_id_bandera
+                FROM dim_producto
+                ORDER BY producto_identity
+                """
+            )
+            assert cur.fetchall() == [
+                ("chain:1:1:internal-milk-1l", 1, 1),
+                ("chain:2:1:internal-milk-1l", 2, 1),
+                ("ean:7791234567898", None, None),
+            ]
 
 
 # ---------------------------------------------------------------------------
