@@ -2,6 +2,8 @@
 dag_sepa_ingest.py — Airflow DAG for daily SEPA price ingestion.
 
 Schedule: 06:30 and 10:30 daily (two runs to capture rectified prices).
+Dimensions are loaded from staging and products are streamed in chunks into
+pending facts before the daily snapshot is published atomically.
 """
 
 from __future__ import annotations

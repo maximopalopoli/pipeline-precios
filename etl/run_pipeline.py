@@ -8,10 +8,9 @@ Execution order
 2.  Open ingestion_run (status = 'running')
 3.  Load staging  (stg_comercios / stg_sucursales / stg_productos)
 4.  Quality checks (CRITICAL failures abort the run)
-5.  Clean / type-cast staging rows
-6.  Resolve surrogate keys + build fact_precios DataFrame
-7.  Bulk-load warehouse (dimensions + fact)
-8.  Mark run 'completed'
+5.  Clean and load dimensions from staging
+6.  Stream products by chunk into pending facts using dimension caches
+7.  Publish facts and aggregates atomically, then mark the run completed
 
 Usage
 -----
