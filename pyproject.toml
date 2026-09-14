@@ -3,21 +3,21 @@ name = "pipeline-precios"
 version = "0.1.0"
 requires-python = ">=3.11"
 dependencies = [
-    "pandas>=2.2",
-    "psycopg2-binary>=2.9",
-    "pydantic>=2.0",
-    "requests>=2.32",
-    "geopy>=2.4",
-    "structlog>=24.0",
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.34",
-    "asyncpg>=0.30",
+    "pandas==2.3.3",
+    "psycopg2-binary==2.9.11",
+    "pydantic==2.12.5",
+    "requests==2.32.5",
+    "geopy==2.4.1",
+    "structlog==25.5.0",
+    "fastapi==0.135.2",
+    "uvicorn[standard]==0.42.0",
+    "asyncpg==0.31.0",
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8.0",
-    "pytest-postgresql",
+    "pytest==9.0.2",
+    "pytest-postgresql==8.0.0",
 ]
 
 [tool.setuptools.packages.find]
