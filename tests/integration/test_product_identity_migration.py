@@ -59,7 +59,7 @@ def test_upgrade_separates_existing_internal_codes_by_retailer(pre_identity_sche
         cur.execute(
             """
             INSERT INTO dim_comercio (id_comercio, id_bandera)
-            VALUES (1, 1), (2, 1)
+            VALUES (1, 1), (2, 1), (3, 1)
             RETURNING comercio_sk, id_comercio
             """
         )
@@ -69,10 +69,11 @@ def test_upgrade_separates_existing_internal_codes_by_retailer(pre_identity_sche
             INSERT INTO dim_sucursal (id_comercio, id_bandera, id_sucursal, comercio_sk, provincia_sk)
             VALUES
                 (1, 1, 10, %s, (SELECT provincia_sk FROM dim_provincia WHERE codigo_iso = 'AR-C')),
-                (2, 1, 20, %s, (SELECT provincia_sk FROM dim_provincia WHERE codigo_iso = 'AR-C'))
+                (2, 1, 20, %s, (SELECT provincia_sk FROM dim_provincia WHERE codigo_iso = 'AR-C')),
+                (3, 1, 30, %s, (SELECT provincia_sk FROM dim_provincia WHERE codigo_iso = 'AR-C'))
             RETURNING sucursal_sk, id_comercio
             """,
-            (comercios[1], comercios[2]),
+            (comercios[1], comercios[2], comercios[3]),
         )
         sucursales = {id_comercio: sucursal_sk for sucursal_sk, id_comercio in cur.fetchall()}
         cur.execute(
@@ -100,7 +101,7 @@ def test_upgrade_separates_existing_internal_codes_by_retailer(pre_identity_sche
                 run_id, producto_sk, sucursal_sk, fecha_id, precio_lista, tiene_promo
             ) VALUES (%s, %s, %s, 20260315, 150, FALSE)
             """,
-            (run_id, producto_sk, sucursales[2]),
+            (run_id, producto_sk, sucursales[3]),
         )
         cur.execute(
             """
@@ -155,7 +156,7 @@ def test_upgrade_separates_existing_internal_codes_by_retailer(pre_identity_sche
         ("chain:1:1:internal-milk-1l", 100),
         ("chain:2:1:internal-milk-1l", 200),
     ]
-    assert pending_identity == "chain:2:1:internal-milk-1l"
+    assert pending_identity == "chain:3:1:internal-milk-1l"
     assert aggregates == [
         ("chain:1:1:internal-milk-1l", 100, 1),
         ("chain:2:1:internal-milk-1l", 200, 1),

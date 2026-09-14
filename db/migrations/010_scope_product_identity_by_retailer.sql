@@ -47,7 +47,11 @@ SELECT DISTINCT
     'chain:' || c.id_comercio || ':' || c.id_bandera || ':' || p.id_producto
         AS producto_identity
 FROM dim_producto p
-JOIN fact_precios f ON f.producto_sk = p.producto_sk
+JOIN (
+    SELECT producto_sk, sucursal_sk FROM fact_precios
+    UNION
+    SELECT producto_sk, sucursal_sk FROM pending_fact_precios
+) f ON f.producto_sk = p.producto_sk
 JOIN dim_sucursal s ON s.sucursal_sk = f.sucursal_sk
 JOIN dim_comercio c ON c.comercio_sk = s.comercio_sk
 WHERE NOT (p.es_ean AND pipeline_is_valid_ean(p.id_producto));
