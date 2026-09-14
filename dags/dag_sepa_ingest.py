@@ -2,17 +2,16 @@
 dag_sepa_ingest.py — Airflow DAG for daily SEPA price ingestion.
 
 Schedule: 06:30 and 10:30 daily (two runs to capture rectified prices).
+Dimensions are loaded from staging and products are streamed in chunks into
+pending facts before the daily snapshot is published atomically.
 """
 
 from __future__ import annotations
 
 import os
-import pickle
-import tempfile
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
-import pandas as pd
 import psycopg2
 import structlog
 
@@ -25,9 +24,6 @@ log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-_TEMP_DIR = Path(tempfile.gettempdir()) / "sepa_airflow"
-
 
 def _db_connect() -> psycopg2.extensions.connection:
     """Connect using Airflow's postgres_default connection env vars."""
@@ -42,12 +38,6 @@ def _db_connect() -> psycopg2.extensions.connection:
 
 def _run_date(ds: str) -> date:
     return date.fromisoformat(ds)
-
-
-def _temp_path(run_id: int, name: str) -> Path:
-    d = _TEMP_DIR / str(run_id)
-    d.mkdir(parents=True, exist_ok=True)
-    return d / name
 
 
 # ---------------------------------------------------------------------------
@@ -80,14 +70,29 @@ def download_zip(ds: str, **kwargs):
 
 
 def check_file_changed(**kwargs):
-    """ShortCircuit: skip downstream tasks if file hash already existed."""
+    """Short-circuit only files that have already been published successfully."""
+    from etl.ingestion_run import should_process_raw_file
+
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
-    return dl_info["is_new"]
+
+    conn = _db_connect()
+    try:
+        should_process = should_process_raw_file(conn, dl_info["raw_file_id"])
+        log.info(
+            "download.duplicate_decision",
+            raw_file_id=dl_info["raw_file_id"],
+            is_new=dl_info["is_new"],
+            should_process=should_process,
+        )
+        return should_process
+    finally:
+        conn.close()
 
 
 def load_staging(**kwargs):
     """Open ingestion run + load staging tables from ZIP."""
+    from etl.ingestion_run import open_ingestion_run
     from etl.staging import loader as staging_loader
 
     ti = kwargs["ti"]
@@ -95,15 +100,7 @@ def load_staging(**kwargs):
 
     conn = _db_connect()
     try:
-        # Open run
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO ingestion_runs (raw_file_id, status) "
-                "VALUES (%s, 'running') RETURNING id",
-                (dl_info["raw_file_id"],),
-            )
-            run_id = cur.fetchone()[0]
-        conn.commit()
+        run_id = open_ingestion_run(conn, dl_info["raw_file_id"])
 
         # Load staging
         stg = staging_loader.load(conn, Path(dl_info["path"]), run_id)
@@ -159,14 +156,37 @@ def run_quality_checks(**kwargs):
         conn.close()
 
 
-def transform_and_resolve(**kwargs):
-    """Clean staging rows, resolve dimensions, build fact DataFrame."""
-    from etl.transform.cleaner import (
-        clean_comercios,
-        clean_productos,
-        clean_sucursales,
-    )
-    from etl.transform.fact_builder import build_fact_df
+def load_dimensions(**kwargs):
+    """Load dimensions from staging without materializing all products."""
+    from etl.ingestion_processing import load_staged_dimensions
+
+    ti = kwargs["ti"]
+    stg_info = ti.xcom_pull(task_ids="load_staging")
+    run_id = stg_info["run_id"]
+
+    conn = _db_connect()
+    try:
+        result = load_staged_dimensions(conn, run_id)
+        conn.commit()
+        log.info(
+            "warehouse.dimensions_loaded",
+            run_id=run_id,
+            comercios=result.rows_comercios,
+            sucursales=result.rows_sucursales,
+            productos=result.rows_productos,
+        )
+        return {
+            "rows_clean_comercios": result.rows_comercios,
+            "rows_clean_sucursales": result.rows_sucursales,
+            "rows_rejected": result.rows_rejected,
+        }
+    finally:
+        conn.close()
+
+
+def load_pending_fact_precios(**kwargs):
+    """Stream staging products into the run-local pending table."""
+    from etl.ingestion_processing import stream_pending_product_facts
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -176,130 +196,41 @@ def transform_and_resolve(**kwargs):
 
     conn = _db_connect()
     try:
-        # Read staging
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM stg_comercios WHERE run_id = %s", (run_id,))
-            df_c = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
-
-            cur.execute("SELECT * FROM stg_sucursales WHERE run_id = %s", (run_id,))
-            df_s = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
-
-            cur.execute("SELECT * FROM stg_productos WHERE run_id = %s", (run_id,))
-            df_p = pd.DataFrame(cur.fetchall(), columns=[d[0] for d in cur.description])
-
-        # Clean
-        clean_c = clean_comercios(df_c)
-        clean_s = clean_sucursales(df_s)
-        clean_p = clean_productos(df_p)
-
-        total_rejected = (
-            len(clean_c.rejected) + len(clean_s.rejected) + len(clean_p.rejected)
-        )
-        log.info(
-            "transform.cleaned",
-            run_id=run_id,
-            comercios=len(clean_c.clean),
-            sucursales=len(clean_s.clean),
-            productos=len(clean_p.clean),
-            rejected=total_rejected,
-        )
-
-        # Build fact
-        fact_result = build_fact_df(
+        result = stream_pending_product_facts(
             conn,
-            productos=clean_p.clean,
-            sucursales=clean_s.clean,
-            comercios=clean_c.clean,
+            _db_connect,
+            run_id=run_id,
             run_date=run_date,
-            run_id=run_id,
         )
-
+        conn.commit()
         log.info(
-            "transform.fact_built",
+            "warehouse.pending_fact_loaded",
             run_id=run_id,
-            fact_rows=len(fact_result.df),
-            fact_rejected=len(fact_result.rejected),
+            chunks=result.chunks,
+            rows=result.rows_fact,
         )
-
-        # Persist intermediate results for downstream tasks
-        pickle.dump(clean_c.clean, open(_temp_path(run_id, "comercios.pkl"), "wb"))
-        pickle.dump(clean_s.clean, open(_temp_path(run_id, "sucursales.pkl"), "wb"))
-        pickle.dump(clean_p.clean, open(_temp_path(run_id, "productos.pkl"), "wb"))
-        pickle.dump(fact_result.df, open(_temp_path(run_id, "fact_df.pkl"), "wb"))
-
         return {
-            "rows_clean_comercios": len(clean_c.clean),
-            "rows_clean_sucursales": len(clean_s.clean),
-            "rows_clean_productos": len(clean_p.clean),
-            "rows_fact": len(fact_result.df),
-            "total_rejected": total_rejected,
+            "chunks": result.chunks,
+            "rows_fact": result.rows_fact,
+            "rows_valid": result.rows_valid,
         }
-    finally:
-        conn.close()
-
-
-def load_dimensions(**kwargs):
-    """Bulk-upsert dimension tables from cleaned data."""
-    from etl.load.warehouse_loader import load_dimensions as wh_load_dims
-
-    ti = kwargs["ti"]
-    stg_info = ti.xcom_pull(task_ids="load_staging")
-    run_id = stg_info["run_id"]
-
-    comercios = pickle.load(open(_temp_path(run_id, "comercios.pkl"), "rb"))
-    sucursales = pickle.load(open(_temp_path(run_id, "sucursales.pkl"), "rb"))
-    productos = pickle.load(open(_temp_path(run_id, "productos.pkl"), "rb"))
-
-    conn = _db_connect()
-    try:
-        rc, rs, rp = wh_load_dims(conn, comercios, sucursales, productos)
-        conn.commit()
-        log.info(
-            "warehouse.dimensions_loaded",
-            run_id=run_id,
-            comercios=rc,
-            sucursales=rs,
-            productos=rp,
-        )
-    finally:
-        conn.close()
-
-
-def load_pending_fact_precios(**kwargs):
-    """COPY facts into the run-local pending table without publishing them."""
-    from etl.load.warehouse_loader import load_pending_fact, register_rows_loaded
-
-    ti = kwargs["ti"]
-    stg_info = ti.xcom_pull(task_ids="load_staging")
-    run_id = stg_info["run_id"]
-
-    fact_df = pickle.load(open(_temp_path(run_id, "fact_df.pkl"), "rb"))
-
-    conn = _db_connect()
-    try:
-        rows = load_pending_fact(conn, fact_df, run_id)
-        register_rows_loaded(conn, run_id, rows)
-        conn.commit()
-        log.info("warehouse.pending_fact_loaded", run_id=run_id, rows=rows)
     finally:
         conn.close()
 
 
 def publish_daily_snapshot(**kwargs):
     """Atomically publish facts, aggregates and the completed run state."""
-    import shutil
-
     from etl.load.publisher import publish_pending_facts
     from etl.quality import reporters
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
-    transform_info = ti.xcom_pull(task_ids="transform_and_resolve")
+    pending_info = ti.xcom_pull(task_ids="load_pending_fact_precios")
     dl_info = ti.xcom_pull(task_ids="download_zip")
     run_id = stg_info["run_id"]
     fecha = date.fromisoformat(dl_info["fecha_datos"])
     fecha_id = int(fecha.strftime("%Y%m%d"))
-    rows_valid = transform_info["rows_clean_productos"]
+    rows_valid = pending_info["rows_valid"]
 
     conn = _db_connect()
     try:
@@ -323,15 +254,6 @@ def publish_daily_snapshot(**kwargs):
         raise
     finally:
         conn.close()
-
-    # Cleanup temp pickle files
-    temp_dir = _TEMP_DIR / str(run_id)
-    if temp_dir.exists():
-        try:
-            shutil.rmtree(temp_dir)
-        except OSError as exc:
-            log.warning("publication.temp_cleanup_failed", run_id=run_id, error=str(exc))
-
 
 # ---------------------------------------------------------------------------
 # DAG definition
@@ -375,11 +297,6 @@ with DAG(
         python_callable=run_quality_checks,
     )
 
-    t_transform = PythonOperator(
-        task_id="transform_and_resolve",
-        python_callable=transform_and_resolve,
-    )
-
     t_dims = PythonOperator(
         task_id="load_dimensions",
         python_callable=load_dimensions,
@@ -401,7 +318,6 @@ with DAG(
         >> t_check
         >> t_staging
         >> t_quality
-        >> t_transform
         >> t_dims
         >> t_pending_fact
         >> t_publish
