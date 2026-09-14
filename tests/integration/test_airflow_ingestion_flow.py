@@ -9,6 +9,7 @@ from types import ModuleType
 import psycopg
 import pytest
 
+import etl.ingestion_processing as ingestion_processing
 import etl.run_pipeline as cli_pipeline
 from etl.extract.downloader import DownloadResult
 from etl.staging import loader as staging_loader
@@ -250,3 +251,65 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
         cur.execute("SELECT status, rows_valid, rows_loaded FROM ingestion_runs WHERE id = %s", (dag_run_id,))
         assert cur.fetchone() == ("completed", 7, 7)
     assert _published_snapshot(pg_conn, dag_run_id) == cli_snapshot
+
+
+def test_airflow_marks_the_run_failed_when_dimension_loading_fails(
+    pg_conn, dag_module, monkeypatch
+):
+    run_id = _create_run(pg_conn)
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    def fail_dimension_load(conn, run_id):
+        raise RuntimeError("dimension load failed")
+
+    monkeypatch.setattr(dag_module, "_db_connect", connect)
+    monkeypatch.setattr(ingestion_processing, "load_staged_dimensions", fail_dimension_load)
+    ti = _TaskInstance({"load_staging": {"run_id": run_id}})
+
+    with pytest.raises(RuntimeError, match="dimension load failed"):
+        dag_module.load_dimensions(ti=ti)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, finished_at IS NOT NULL, error_message
+            FROM ingestion_runs
+            WHERE id = %s
+            """,
+            (run_id,),
+        )
+        assert cur.fetchone() == ("failed", True, "dimension load failed")
+
+
+def test_airflow_marks_a_new_run_failed_when_staging_fails(
+    pg_conn, dag_module, monkeypatch
+):
+    raw_file_id = _create_raw_file(pg_conn, "staging-failure.zip", "staging-failure")
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    def fail_staging_load(conn, zip_path, run_id):
+        raise RuntimeError("staging load failed")
+
+    monkeypatch.setattr(dag_module, "_db_connect", connect)
+    monkeypatch.setattr(staging_loader, "load", fail_staging_load)
+    ti = _TaskInstance({"download_zip": {"raw_file_id": raw_file_id, "path": "/tmp/data.zip"}})
+
+    with pytest.raises(RuntimeError, match="staging load failed"):
+        dag_module.load_staging(ti=ti)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, finished_at IS NOT NULL, error_message
+            FROM ingestion_runs
+            WHERE raw_file_id = %s
+            """,
+            (raw_file_id,),
+        )
+        assert cur.fetchone() == ("failed", True, "staging load failed")

@@ -40,6 +40,14 @@ def _run_date(ds: str) -> date:
     return date.fromisoformat(ds)
 
 
+def _mark_task_failure(conn, run_id: int, exc: Exception) -> None:
+    """Persist a task error for an ingestion that has already been opened."""
+    from etl.ingestion_run import mark_run_failed
+
+    conn.rollback()
+    mark_run_failed(conn, run_id, str(exc))
+
+
 # ---------------------------------------------------------------------------
 # Task callables
 # ---------------------------------------------------------------------------
@@ -99,6 +107,7 @@ def load_staging(**kwargs):
     dl_info = ti.xcom_pull(task_ids="download_zip")
 
     conn = _db_connect()
+    run_id: int | None = None
     try:
         run_id = open_ingestion_run(conn, dl_info["raw_file_id"])
 
@@ -121,6 +130,10 @@ def load_staging(**kwargs):
             "rows_sucursales": stg.rows_sucursales,
             "rows_productos": stg.rows_productos,
         }
+    except Exception as exc:
+        if run_id is not None:
+            _mark_task_failure(conn, run_id, exc)
+        raise
     finally:
         conn.close()
 
@@ -152,6 +165,11 @@ def run_quality_checks(**kwargs):
             passed=qr.passed,
             warnings_failed=qr.warnings_failed,
         )
+    except quality_checks.QualityCheckError:
+        raise
+    except Exception as exc:
+        _mark_task_failure(conn, run_id, exc)
+        raise
     finally:
         conn.close()
 
@@ -180,6 +198,9 @@ def load_dimensions(**kwargs):
             "rows_clean_sucursales": result.rows_sucursales,
             "rows_rejected": result.rows_rejected,
         }
+    except Exception as exc:
+        _mark_task_failure(conn, run_id, exc)
+        raise
     finally:
         conn.close()
 
@@ -214,6 +235,9 @@ def load_pending_fact_precios(**kwargs):
             "rows_fact": result.rows_fact,
             "rows_valid": result.rows_valid,
         }
+    except Exception as exc:
+        _mark_task_failure(conn, run_id, exc)
+        raise
     finally:
         conn.close()
 
@@ -221,7 +245,6 @@ def load_pending_fact_precios(**kwargs):
 def publish_daily_snapshot(**kwargs):
     """Atomically publish facts, aggregates and the completed run state."""
     from etl.load.publisher import publish_pending_facts
-    from etl.quality import reporters
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -249,8 +272,7 @@ def publish_daily_snapshot(**kwargs):
             rows_aggregated=publication.rows_aggregated,
         )
     except Exception as exc:
-        conn.rollback()
-        reporters.mark_run_failed(conn, run_id, str(exc))
+        _mark_task_failure(conn, run_id, exc)
         raise
     finally:
         conn.close()
