@@ -1,4 +1,4 @@
-include .env
+-include .env
 export
 
 .PHONY: help setup install up down restart logs db api web dev ingest test test-unit test-integration lint clean
@@ -9,7 +9,7 @@ help: ## Show this help
 # Setup
 
 setup: install web-install ## First-time setup: venv + Python deps + Node deps
-	@echo "\n✔ Setup complete. Copy .env.example to .env and edit credentials, then run: make db"
+	@echo "\n✔ Setup complete. Run: make db"
 
 install: ## Create venv and install Python dependencies
 	python -m venv .venv
@@ -20,8 +20,9 @@ web-install: ## Install frontend Node dependencies
 
 # Docker compose
 
-db: ## Start PostgreSQL (runs migrations and seeds on first start)
+db: ## Start PostgreSQL and apply pending migrations and seeds
 	docker compose up -d postgres
+	docker compose run --rm migrate
 
 up: ## Start all services (PostgreSQL + Airflow + API + Web)
 	docker compose up -d

@@ -1,11 +1,15 @@
 x-airflow-common: &airflow-common
   image: apache/airflow:2.10.5-python3.11
-  env_file: .env
   environment:
+    POSTGRES_USER: "${POSTGRES_USER:-sepa}"
+    POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-changeme}"
+    POSTGRES_DB: "${POSTGRES_DB:-sepa_pipeline}"
+    AIRFLOW_ADMIN_USER: "${AIRFLOW_ADMIN_USER:-admin}"
+    AIRFLOW_ADMIN_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:-admin}"
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-sepa}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-sepa_pipeline}
     AIRFLOW__CORE__FERNET_KEY: ""
     AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-changeme}
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
@@ -22,26 +26,40 @@ x-airflow-common: &airflow-common
   depends_on:
     postgres:
       condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
 
 services:
   postgres:
     image: postgres:16-alpine
-    env_file: .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: "${POSTGRES_USER:-sepa}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-changeme}"
+      POSTGRES_DB: "${POSTGRES_DB:-sepa_pipeline}"
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./db/migrations:/docker-entrypoint-initdb.d/migrations:ro
-      - ./db/seeds:/docker-entrypoint-initdb.d/seeds:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sepa} -d ${POSTGRES_DB:-sepa_pipeline}"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  migrate:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: "${POSTGRES_USER:-sepa}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-changeme}"
+      POSTGRES_DB: "${POSTGRES_DB:-sepa_pipeline}"
+    volumes:
+      - ./db:/db:ro
+    command: ["/bin/sh", "/db/run-migrations.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   airflow-init:
     <<: *airflow-common
@@ -102,13 +120,17 @@ services:
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
-    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: "${POSTGRES_USER:-sepa}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-changeme}"
+      POSTGRES_DB: "${POSTGRES_DB:-sepa_pipeline}"
     volumes:
       - ./api:/app/api
     working_dir: /app
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   web:
@@ -116,6 +138,8 @@ services:
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0 --port 3000"
     ports:
       - "3000:3000"
+    environment:
+      VITE_API_PROXY_TARGET: http://api:8000
     volumes:
       - ./web:/app
     working_dir: /app

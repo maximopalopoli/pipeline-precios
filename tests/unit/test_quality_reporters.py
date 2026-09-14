@@ -8,7 +8,6 @@ section verifies _persist() using the pg_conn fixture.
 
 import json
 
-import pytest
 
 from etl.quality.checks import CheckResult, Severity
 from etl.quality.reporters import (

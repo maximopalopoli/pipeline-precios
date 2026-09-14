@@ -1,9 +1,8 @@
 """ComercioRecord — Pydantic v2 model for comercio.csv rows."""
 
 from datetime import datetime
-from typing import Annotated
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, field_validator
 
 
 class ComercioRecord(BaseModel):

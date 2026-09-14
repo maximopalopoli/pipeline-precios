@@ -19,6 +19,7 @@ from datetime import date
 from typing import Optional
 
 import pandas as pd
+import psycopg2
 import structlog
 
 from etl.transform.cleaner import ComercioRow, ProductoRow, SucursalRow

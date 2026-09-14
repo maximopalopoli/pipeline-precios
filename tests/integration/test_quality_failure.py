@@ -12,7 +12,6 @@ the CRITICAL min_row_count check failure.  The test verifies that:
 4. A duplicate-PK injection also triggers a CRITICAL failure.
 """
 
-from pathlib import Path
 
 import pytest
 

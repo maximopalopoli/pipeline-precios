@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+import psycopg2
 import structlog
 
 log = structlog.get_logger(__name__)

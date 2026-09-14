@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { searchProducts, type Product } from '../../lib/api';
 
 interface ProductSearchProps {
-  onSelect: (product: Product) => void;
+  onSelect: (product: Product | null) => void;
   onSearchAll?: (query: string) => void;
   selected?: Product | null;
   genericQuery?: string | null;
@@ -76,7 +76,7 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
             {selected.descripcion} — {selected.marca || ''} ({selected.id_producto})
           </span>
           <button
-            onClick={() => { onSelect(null as any); setQuery(''); }}
+            onClick={() => { onSelect(null); setQuery(''); }}
             className="text-slate-400 hover:text-slate-600"
           >
             ✕

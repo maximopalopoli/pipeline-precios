@@ -1,7 +1,6 @@
 """Database connection pool for the FastAPI backend."""
 
 import os
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 import asyncpg

@@ -12,14 +12,11 @@ sample.zip fixture content (2 inner ZIPs):
   Total:                   2 comercios, 3 sucursales, 7 productos
 """
 
-import pathlib
 
-import psycopg2
 import pytest
 
 from etl.staging.loader import load
 from etl.quality.checks import (
-    CheckResult,
     QualityCheckError,
     Severity,
     check_coordinates_bbox,

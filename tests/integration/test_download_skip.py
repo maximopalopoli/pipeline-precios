@@ -15,10 +15,8 @@ Verifies that:
 """
 
 from datetime import date
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 import etl.extract.downloader as downloader_mod
 from etl.extract.downloader import download

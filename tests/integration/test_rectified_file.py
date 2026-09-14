@@ -19,7 +19,6 @@ pipeline re-processing is covered by test_pipeline_rerun.py.
 from datetime import date
 from unittest.mock import patch
 
-import pytest
 
 import etl.extract.downloader as downloader_mod
 from etl.extract.downloader import download
