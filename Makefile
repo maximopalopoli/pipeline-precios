@@ -20,8 +20,9 @@ web-install: ## Install frontend Node dependencies
 
 # Docker compose
 
-db: ## Start PostgreSQL (runs migrations and seeds on first start)
+db: ## Start PostgreSQL and apply pending migrations and seeds
 	docker compose up -d postgres
+	docker compose run --rm migrate
 
 up: ## Start all services (PostgreSQL + Airflow + API + Web)
 	docker compose up -d

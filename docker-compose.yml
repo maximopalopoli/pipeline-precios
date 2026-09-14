@@ -26,6 +26,8 @@ x-airflow-common: &airflow-common
   depends_on:
     postgres:
       condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
 
 services:
   postgres:
@@ -38,13 +40,26 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./db/migrations:/docker-entrypoint-initdb.d/migrations:ro
-      - ./db/seeds:/docker-entrypoint-initdb.d/seeds:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sepa} -d ${POSTGRES_DB:-sepa_pipeline}"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  migrate:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: "${POSTGRES_USER:-sepa}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-changeme}"
+      POSTGRES_DB: "${POSTGRES_DB:-sepa_pipeline}"
+    volumes:
+      - ./db:/db:ro
+    command: ["/bin/sh", "/db/run-migrations.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   airflow-init:
     <<: *airflow-common
@@ -114,8 +129,8 @@ services:
       - ./api:/app/api
     working_dir: /app
     depends_on:
-      postgres:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
 
   web:

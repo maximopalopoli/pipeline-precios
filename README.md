@@ -128,7 +128,7 @@ See [sepa_datasets.md](sepa_datasets.md) for the full schema of each CSV.
 
 ```bash
 make setup                # create venv + install Python & Node deps
-make db                   # start PostgreSQL (migrations + seeds run on first start)
+make db                   # start PostgreSQL and apply pending migrations and seeds
 make ingest               # download today's SEPA ZIP and run the full ETL pipeline
 make dev                  # start DB + API + frontend for local development
 ```
