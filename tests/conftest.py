@@ -4,7 +4,6 @@ Shared pytest fixtures.
 
 import pathlib
 import pytest
-import psycopg2
 from pytest_postgresql import factories
 
 MIGRATIONS_DIR = pathlib.Path(__file__).parent.parent / "db" / "migrations"

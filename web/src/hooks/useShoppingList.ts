@@ -26,7 +26,7 @@ interface ShoppingListState {
 
 export const useShoppingList = create<ShoppingListState>()(
   persist(
-    (set, get) => ({
+    (set) => ({
       items: [],
       selections: {},
       currentStep: 0,

@@ -3,7 +3,6 @@
 from decimal import Decimal
 
 import pandas as pd
-import pytest
 
 from etl.transform.cleaner import (
     clean_comercios,
@@ -164,12 +163,12 @@ class TestCleanProductos:
         row = r.clean.iloc[0]
         assert row["productos_precio_lista"] == "250.50"
         assert row["productos_precio_referencia"] == "240.00"
-        assert row["es_ean"] == True
-        assert row["tiene_promo"] == False
+        assert bool(row["es_ean"])
+        assert not bool(row["tiene_promo"])
 
     def test_ean_zero_parsed(self):
         r = clean_productos(_df(_producto(productos_ean="0")))
-        assert r.clean.iloc[0]["es_ean"] == False
+        assert not bool(r.clean.iloc[0]["es_ean"])
 
     def test_invalid_ean_rejected(self):
         r = clean_productos(_df(_producto(productos_ean="2")))
@@ -178,19 +177,19 @@ class TestCleanProductos:
 
     def test_tiene_promo_true_when_promo1_set(self):
         r = clean_productos(_df(_producto(productos_precio_unitario_promo1="200.00")))
-        assert r.clean.iloc[0]["tiene_promo"] == True
+        assert bool(r.clean.iloc[0]["tiene_promo"])
         assert r.clean.iloc[0]["productos_precio_unitario_promo1"] == "200.00"
 
     def test_tiene_promo_true_when_promo2_set(self):
         r = clean_productos(_df(_producto(productos_precio_unitario_promo2="180.00")))
-        assert r.clean.iloc[0]["tiene_promo"] == True
+        assert bool(r.clean.iloc[0]["tiene_promo"])
 
     def test_tiene_promo_true_when_both_set(self):
         r = clean_productos(_df(_producto(
             productos_precio_unitario_promo1="200.00",
             productos_precio_unitario_promo2="180.00",
         )))
-        assert r.clean.iloc[0]["tiene_promo"] == True
+        assert bool(r.clean.iloc[0]["tiene_promo"])
 
     def test_zero_precio_lista_rejected(self):
         r = clean_productos(_df(_producto(productos_precio_lista="0")))

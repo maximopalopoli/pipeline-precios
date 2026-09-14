@@ -10,7 +10,7 @@ import { useState } from 'react';
 
 interface DataTableProps<T> {
   data: T[];
-  columns: ColumnDef<T, any>[];
+  columns: ColumnDef<T, never>[];
 }
 
 export function DataTable<T>({ data, columns }: DataTableProps<T>) {
@@ -18,7 +18,7 @@ export function DataTable<T>({ data, columns }: DataTableProps<T>) {
 
   const table = useReactTable({
     data,
-    columns,
+    columns: columns as never,
     state: { sorting },
     onSortingChange: setSorting,
     getCoreRowModel: getCoreRowModel(),

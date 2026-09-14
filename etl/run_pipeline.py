@@ -47,7 +47,6 @@ from etl import alerting
 from etl.extract import downloader
 from etl.load.aggregator import aggregate
 from etl.load import warehouse_loader
-from etl.load.warehouse_loader import load as warehouse_load
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
 from etl.staging import loader as staging_loader

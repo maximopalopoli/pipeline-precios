@@ -28,7 +28,7 @@ async def get_ofertas(
         return {"fecha": None, "items": []}
 
     fecha = latest["max_fecha"]
-    conditions = [f"fe.fecha = $1", "f.tiene_promo = TRUE"]
+    conditions = ["fe.fecha = $1", "f.tiene_promo = TRUE"]
     params: list = [fecha]
     idx = 2
 

@@ -8,9 +8,7 @@ sample.zip contains 2 inner ZIPs:
   Total:                     2 comercios, 3 sucursales, 7 productos
 """
 
-import pathlib
 
-import pytest
 
 from etl.staging.loader import LoadResult, load, register_counts
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Optional
 
+import psycopg2
 import structlog
 
 from etl.transform.cleaner import ComercioRow, ProductoRow, SucursalRow
