@@ -33,6 +33,7 @@ import pandas as pd
 import structlog
 
 from etl.transform.cleaner import ComercioRow, ProductoRow, SucursalRow
+from etl.transform.product_identity import product_identity
 
 log = structlog.get_logger(__name__)
 
@@ -225,11 +226,14 @@ def _load_dim_producto(conn, rows: list[ProductoRow]) -> int:
 
     seen: dict[str, ProductoRow] = {}
     for r in rows:
-        seen[r.id_producto] = r
+        seen[product_identity(r)] = r
 
     df = pd.DataFrame(
         [
             {
+                "producto_identity": product_identity(r),
+                "source_id_comercio": r.id_comercio if product_identity(r).startswith("chain:") else None,
+                "source_id_bandera": r.id_bandera if product_identity(r).startswith("chain:") else None,
                 "id_producto": r.id_producto,
                 "es_ean": r.es_ean,
                 "productos_descripcion": r.productos_descripcion,
@@ -247,6 +251,9 @@ def _load_dim_producto(conn, rows: list[ProductoRow]) -> int:
         cur.execute(
             """
             CREATE TEMP TABLE tmp_dim_producto (
+                producto_identity                    TEXT,
+                source_id_comercio                   INT,
+                source_id_bandera                    INT,
                 id_producto                          TEXT,
                 es_ean                               BOOLEAN,
                 productos_descripcion                TEXT,
@@ -262,18 +269,20 @@ def _load_dim_producto(conn, rows: list[ProductoRow]) -> int:
         cur.execute(
             """
             INSERT INTO dim_producto (
+                producto_identity, source_id_comercio, source_id_bandera,
                 id_producto, es_ean,
                 productos_descripcion, productos_marca,
                 productos_cantidad_presentacion, productos_unidad_medida_presentacion,
                 productos_cantidad_referencia,   productos_unidad_medida_referencia
             )
             SELECT
+                producto_identity, source_id_comercio, source_id_bandera,
                 id_producto, es_ean,
                 productos_descripcion, productos_marca,
                 productos_cantidad_presentacion, productos_unidad_medida_presentacion,
                 productos_cantidad_referencia,   productos_unidad_medida_referencia
             FROM tmp_dim_producto
-            ON CONFLICT (id_producto) DO UPDATE SET
+            ON CONFLICT (producto_identity) DO UPDATE SET
                 es_ean                               = EXCLUDED.es_ean,
                 productos_descripcion                = EXCLUDED.productos_descripcion,
                 productos_marca                      = EXCLUDED.productos_marca,
@@ -587,27 +596,58 @@ def load_dim_produto_from_staging(conn, run_id: int) -> int:
         cur.execute(
             """
             INSERT INTO dim_producto (
+                producto_identity, source_id_comercio, source_id_bandera,
                 id_producto, es_ean,
                 productos_descripcion, productos_marca,
                 productos_cantidad_presentacion, productos_unidad_medida_presentacion,
                 productos_cantidad_referencia,   productos_unidad_medida_referencia
             )
-            SELECT DISTINCT ON (TRIM(id_producto))
-                TRIM(id_producto),
-                (TRIM(productos_ean) = '1'),
+            SELECT DISTINCT ON (producto_identity)
+                producto_identity,
+                source_id_comercio,
+                source_id_bandera,
+                id_producto,
+                es_ean,
                 TRIM(productos_descripcion),
                 TRIM(productos_marca),
                 TRIM(productos_cantidad_presentacion),
                 TRIM(productos_unidad_medida_presentacion),
                 TRIM(productos_cantidad_referencia),
                 TRIM(productos_unidad_medida_referencia)
-            FROM stg_productos
-            WHERE run_id = %s
-              AND TRIM(productos_ean) IN ('0', '1')
-              AND TRIM(id_producto)          <> ''
-              AND TRIM(productos_descripcion) <> ''
-            ORDER BY TRIM(id_producto)
-            ON CONFLICT (id_producto) DO UPDATE SET
+            FROM (
+                SELECT
+                    TRIM(id_producto) AS id_producto,
+                    (TRIM(productos_ean) = '1') AS es_ean,
+                    CASE
+                        WHEN TRIM(productos_ean) = '1'
+                             AND pipeline_is_valid_ean(TRIM(id_producto))
+                            THEN 'ean:' || TRIM(id_producto)
+                        ELSE 'chain:' || id_comercio || ':' || id_bandera || ':' || TRIM(id_producto)
+                    END AS producto_identity,
+                    CASE
+                        WHEN TRIM(productos_ean) = '1'
+                             AND pipeline_is_valid_ean(TRIM(id_producto)) THEN NULL
+                        ELSE id_comercio
+                    END AS source_id_comercio,
+                    CASE
+                        WHEN TRIM(productos_ean) = '1'
+                             AND pipeline_is_valid_ean(TRIM(id_producto)) THEN NULL
+                        ELSE id_bandera
+                    END AS source_id_bandera,
+                    productos_descripcion,
+                    productos_marca,
+                    productos_cantidad_presentacion,
+                    productos_unidad_medida_presentacion,
+                    productos_cantidad_referencia,
+                    productos_unidad_medida_referencia
+                FROM stg_productos
+                WHERE run_id = %s
+                  AND TRIM(productos_ean) IN ('0', '1')
+                  AND TRIM(id_producto) <> ''
+                  AND TRIM(productos_descripcion) <> ''
+            ) AS source_productos
+            ORDER BY producto_identity
+            ON CONFLICT (producto_identity) DO UPDATE SET
                 es_ean                               = EXCLUDED.es_ean,
                 productos_descripcion                = EXCLUDED.productos_descripcion,
                 productos_marca                      = EXCLUDED.productos_marca,
