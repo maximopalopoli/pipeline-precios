@@ -134,6 +134,7 @@ def _airflow_lock_info(conn, raw_file_id: int) -> dict[str, str | int]:
         "owner": lock.owner,
         "token": lock.token,
         "acquired_at": lock.acquired_at.isoformat(),
+        "expires_at": lock.expires_at.isoformat(),
     }
 
 

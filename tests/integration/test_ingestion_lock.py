@@ -1,6 +1,6 @@
 """Database-backed behavior of the shared ingestion-date mutex."""
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -88,9 +88,50 @@ def test_only_the_owner_token_can_release_a_lock(pg_conn):
         owner=lock.owner,
         token="00000000-0000-0000-0000-000000000000",
         acquired_at=lock.acquired_at,
+        expires_at=lock.expires_at,
     )
 
     with pytest.raises(IngestionLockOwnershipError):
         release_ingestion_lock(pg_conn, wrong_lock)
 
     release_ingestion_lock(pg_conn, lock)
+
+
+def test_expired_lock_can_be_recovered_by_a_later_retry(pg_conn):
+    fecha_datos = date(2026, 3, 20)
+    first_raw_file_id = _create_raw_file(pg_conn, "lock-expired-first", fecha_datos)
+    second_raw_file_id = _create_raw_file(pg_conn, "lock-expired-second", fecha_datos)
+    first_lock = acquire_ingestion_lock(
+        pg_conn,
+        fecha_datos=fecha_datos,
+        raw_file_id=first_raw_file_id,
+        owner="cli:crashed",
+        lease=timedelta(microseconds=1),
+    )
+
+    recovered_lock = acquire_ingestion_lock(
+        pg_conn,
+        fecha_datos=fecha_datos,
+        raw_file_id=second_raw_file_id,
+        owner="airflow:retry",
+    )
+
+    assert recovered_lock.raw_file_id == second_raw_file_id
+    assert recovered_lock.token != first_lock.token
+    with pytest.raises(IngestionLockOwnershipError):
+        release_ingestion_lock(pg_conn, first_lock)
+    release_ingestion_lock(pg_conn, recovered_lock)
+
+
+def test_lock_lease_must_be_positive(pg_conn):
+    fecha_datos = date(2026, 3, 21)
+    raw_file_id = _create_raw_file(pg_conn, "lock-invalid-lease", fecha_datos)
+
+    with pytest.raises(ValueError, match="must be positive"):
+        acquire_ingestion_lock(
+            pg_conn,
+            fecha_datos=fecha_datos,
+            raw_file_id=raw_file_id,
+            owner="cli",
+            lease=timedelta(),
+        )

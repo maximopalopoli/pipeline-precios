@@ -61,6 +61,7 @@ def _lock_from_xcom(ti):
         owner=data["owner"],
         token=data["token"],
         acquired_at=datetime.fromisoformat(data["acquired_at"]),
+        expires_at=datetime.fromisoformat(data["expires_at"]),
     )
 
 
@@ -165,6 +166,7 @@ def check_file_changed(**kwargs):
                 "owner": lock.owner,
                 "token": lock.token,
                 "acquired_at": lock.acquired_at.isoformat(),
+                "expires_at": lock.expires_at.isoformat(),
             },
         )
         return should_process
