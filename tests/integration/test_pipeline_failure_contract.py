@@ -8,6 +8,7 @@ import pytest
 
 import etl.run_pipeline as pipeline
 from etl.extract.downloader import DownloadResult
+from etl.ingestion_lock import acquire_ingestion_lock
 from etl.quality import checks as quality_checks
 
 
@@ -76,6 +77,43 @@ def test_cli_propagates_critical_quality_failure_and_marks_run_failed(
     assert status == "failed"
     assert finished is True
     assert "min_row_count" in message
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
+        assert cur.fetchone()[0] == 0
+
+
+def test_cli_refuses_to_start_when_another_entrypoint_owns_the_date(
+    pg_conn, sample_zip_path, tmp_path, monkeypatch
+):
+    raw_file_id = _create_raw_file(pg_conn)
+    pg_conn.commit()
+    acquire_ingestion_lock(
+        pg_conn,
+        fecha_datos=_RUN_DATE,
+        raw_file_id=raw_file_id,
+        owner="airflow:active-run",
+    )
+    monkeypatch.setattr(pipeline, "_db_connect", lambda: _connect_to_fixture(pg_conn))
+    monkeypatch.setattr(
+        pipeline.downloader,
+        "download",
+        lambda conn, raw_dir, fecha: DownloadResult(
+            raw_file_id=raw_file_id,
+            filename="quality-failure.zip",
+            path=sample_zip_path,
+            sha256="quality-failure-contract",
+            size_bytes=sample_zip_path.stat().st_size,
+            fecha_datos=_RUN_DATE,
+            is_new=True,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="already locked by airflow:active-run"):
+        pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ingestion_runs WHERE raw_file_id = %s", (raw_file_id,))
+        assert cur.fetchone()[0] == 0
 
 
 def test_main_exits_nonzero_when_the_pipeline_fails(monkeypatch):

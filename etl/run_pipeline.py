@@ -42,6 +42,7 @@ import structlog.dev
 
 from etl import alerting
 from etl.extract import downloader
+from etl.ingestion_lock import IngestionLock, acquire_ingestion_lock, release_ingestion_lock
 from etl.ingestion_run import IngestionResult, open_ingestion_run, should_process_raw_file
 from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
 from etl.load.publisher import publish_pending_facts
@@ -132,6 +133,7 @@ def run(
     conn = _db_connect()
     t0 = time.perf_counter()
     run_id: int | None = None
+    ingestion_lock: IngestionLock | None = None
 
     try:
         # ── 0. Ensure reference seeds ─────────────────────────────────────
@@ -158,6 +160,25 @@ def run(
                 raw_file_id=dl.raw_file_id,
                 filename=dl.filename,
             )
+
+        # The lock is durable rather than connection-scoped because the
+        # pipeline uses auxiliary database connections while streaming facts.
+        # Recheck eligibility after acquiring it: another entrypoint may have
+        # finished the same date between the first duplicate check and here.
+        ingestion_lock = acquire_ingestion_lock(
+            conn,
+            fecha_datos=dl.fecha_datos,
+            raw_file_id=dl.raw_file_id,
+            owner="cli",
+        )
+        if not should_process_raw_file(conn, dl.raw_file_id):
+            log.info(
+                "pipeline.skipped",
+                reason="completed_while_waiting_for_ingestion_lock",
+                raw_file_id=dl.raw_file_id,
+                filename=dl.filename,
+            )
+            return IngestionResult.skipped()
 
         log.info(
             "pipeline.stage.done",
@@ -300,6 +321,18 @@ def run(
         raise
 
     finally:
+        if ingestion_lock is not None:
+            try:
+                release_ingestion_lock(conn, ingestion_lock)
+                log.info(
+                    "pipeline.ingestion_lock.released",
+                    fecha=str(ingestion_lock.fecha_datos),
+                )
+            except Exception:
+                log.exception(
+                    "pipeline.ingestion_lock.release_failed",
+                    fecha=str(ingestion_lock.fecha_datos),
+                )
         conn.close()
 
 

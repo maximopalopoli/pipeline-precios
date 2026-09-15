@@ -227,6 +227,8 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
     cli_result = cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
     assert cli_result.rows_loaded == 7
     with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
+        assert cur.fetchone()[0] == 0
         cur.execute("SELECT id FROM ingestion_runs WHERE raw_file_id = %s", (raw_file_id,))
         cli_run_id = cur.fetchone()[0]
         cur.execute("SELECT status, rows_valid, rows_loaded FROM ingestion_runs WHERE id = %s", (cli_run_id,))
