@@ -84,6 +84,18 @@ class TestDownloadSkipOnDuplicate:
 
         assert first.raw_file_id == second.raw_file_id
 
+    def test_duplicate_download_restores_a_missing_local_zip(self, pg_conn, tmp_path):
+        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
+            first = download(pg_conn, tmp_path, _FECHA)
+        first.path.unlink()
+
+        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
+            restored = download(pg_conn, tmp_path, _FECHA)
+
+        assert restored.is_new is False
+        assert restored.path == first.path
+        assert restored.path.read_bytes() == _ZIP_BYTES
+
     def test_sha256_and_metadata_preserved(self, pg_conn, tmp_path):
         """The registered SHA-256 and size_bytes must match the downloaded content."""
         import hashlib

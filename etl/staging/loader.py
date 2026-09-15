@@ -14,6 +14,7 @@ import io
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import pandas as pd
 import psycopg2
@@ -98,6 +99,7 @@ def load(
     conn: "psycopg2.connection",
     zip_path: Path,
     run_id: int,
+    heartbeat: Callable[[], None] | None = None,
 ) -> LoadResult:
     """
     Parse *zip_path* and load all three staging tables for *run_id*.
@@ -113,6 +115,9 @@ def load(
         Path to the main SEPA ZIP downloaded by the extract stage.
     run_id:
         ingestion_runs.id for this pipeline run.
+    heartbeat:
+        Optional callback invoked before each inner ZIP, for long-running
+        callers that need to refresh their execution lease.
 
     Returns
     -------
@@ -135,6 +140,8 @@ def load(
         logger.info("staging.inner_zips_found", count=len(inner_names))
 
         for inner_name in inner_names:
+            if heartbeat is not None:
+                heartbeat()
             inner_bytes = main_zip.read(inner_name)
             with zipfile.ZipFile(io.BytesIO(inner_bytes)) as inner_zip:
                 # Build a flat lookup: basename → full path inside inner ZIP

@@ -2,8 +2,8 @@
 downloader.py — Download daily SEPA ZIP and register it in raw_files.
 
 Returns a DownloadResult with is_new=False if the SHA-256 already exists
-in the DB (idempotent re-runs). Stores the ZIP in raw/ with the naming
-convention {fecha}_{dia}.zip.
+in the DB (idempotent re-runs). Stores each ZIP under an immutable filename
+that includes its SHA-256, preserving rectified versions of the same date.
 """
 
 import hashlib
@@ -99,10 +99,7 @@ def download(
     resource_id = RESOURCE_IDS[weekday]
     dia = DAY_NAMES[weekday]
     url = BASE_URL.format(resource_id=resource_id, dia=dia)
-    filename = f"{fecha.isoformat()}_{dia}.zip"
-    dest = raw_dir / filename
-
-    logger = log.bind(fecha=fecha.isoformat(), dia=dia, url=url, filename=filename)
+    logger = log.bind(fecha=fecha.isoformat(), dia=dia, url=url)
     logger.info("download.start")
 
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -112,12 +109,20 @@ def download(
 
     sha256 = hashlib.sha256(zip_bytes).hexdigest()
     size_bytes = len(zip_bytes)
+    filename = f"{fecha.isoformat()}_{dia}_{sha256}.zip"
+    dest = raw_dir / filename
 
-    logger = logger.bind(sha256=sha256[:12] + "…", size_bytes=size_bytes)
+    logger = logger.bind(
+        sha256=sha256[:12] + "…", size_bytes=size_bytes, filename=filename
+    )
 
     # Check for existing hash before writing anything
     existing_id = _find_by_sha256(conn, sha256)
     if existing_id is not None:
+        _update_filename(conn, existing_id, filename)
+        if not dest.exists():
+            dest.write_bytes(zip_bytes)
+            logger.info("download.restored_missing_file", path=str(dest))
         logger.info("download.duplicate_skipped", raw_file_id=existing_id)
         return DownloadResult(
             raw_file_id=existing_id,
@@ -214,3 +219,13 @@ def _register(
             row = cur.fetchone()
         conn.commit()
     return row[0]
+
+
+def _update_filename(conn: "psycopg2.connection", raw_file_id: int, filename: str) -> None:
+    """Associate a duplicate hash with its canonical immutable filename."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE raw_files SET filename = %s WHERE id = %s",
+            (filename, raw_file_id),
+        )
+    conn.commit()

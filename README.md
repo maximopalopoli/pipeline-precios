@@ -77,14 +77,14 @@ pipeline-precios/
 │   ├── sucursal.py                   # SucursalRecord
 │   └── producto.py                   # ProductoRecord
 ├── db/
-│   ├── migrations/                   # 6 numbered SQL migrations
+│   ├── migrations/                   # 10 numbered SQL migrations
 │   └── seeds/                        # Provinces (ISO 3166-2) + calendar
 ├── tests/
-│   ├── unit/                         # test_cleaner, test_quality_reporters
-│   ├── integration/                  # 7 tests: staging → quality → dimensions → fact → warehouse → aggregator → rerun
+│   ├── unit/                         # focused module and lifecycle tests
+│   ├── integration/                  # database-backed ETL, publication and entrypoint tests
 │   └── fixtures/sample.zip           # Sample ZIP (2 chains, 7 products)
 ├── scripts/benchmark_queries.py      # Benchmark: agg vs direct fact queries
-├── dags/dag_sepa_ingest.py           # Airflow DAG (9 tasks, dual daily schedule)
+├── dags/dag_sepa_ingest.py           # Airflow DAG (7 tasks, dual daily schedule)
 ├── api/                              # FastAPI backend (REST endpoints, asyncpg)
 ├── web/                              # React frontend (Vite + TypeScript + Tailwind)
 ├── notebooks/exploration.ipynb       # Exploratory analysis

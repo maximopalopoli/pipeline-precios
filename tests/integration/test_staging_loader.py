@@ -56,14 +56,21 @@ def _insert_raw_file(conn) -> int:
 def test_load_returns_correct_counts(pg_conn, sample_zip_path):
     raw_file_id = _insert_raw_file(pg_conn)
     run_id = _insert_run(pg_conn, raw_file_id=raw_file_id)
+    heartbeats: list[None] = []
 
-    result = load(pg_conn, sample_zip_path, run_id)
+    result = load(
+        pg_conn,
+        sample_zip_path,
+        run_id,
+        heartbeat=lambda: heartbeats.append(None),
+    )
 
     assert isinstance(result, LoadResult)
     assert result.inner_zips_count == EXPECTED_INNER_ZIPS
     assert result.rows_comercios == EXPECTED_COMERCIOS
     assert result.rows_sucursales == EXPECTED_SUCURSALES
     assert result.rows_productos == EXPECTED_PRODUCTOS
+    assert len(heartbeats) == EXPECTED_INNER_ZIPS
 
 
 def test_load_inserts_rows_into_staging(pg_conn, sample_zip_path):

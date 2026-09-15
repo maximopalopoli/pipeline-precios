@@ -12,6 +12,10 @@ import pytest
 import etl.ingestion_processing as ingestion_processing
 import etl.run_pipeline as cli_pipeline
 from etl.extract.downloader import DownloadResult
+from etl.ingestion_lock import IngestionLockBusyError, acquire_ingestion_lock
+from etl.load.publisher import PublicationResult
+from etl.load.warehouse_loader import _ensure_partition
+from etl.retention_policy import RetentionPolicy
 from etl.staging import loader as staging_loader
 
 _DAG_PATH = Path(__file__).parent.parent.parent / "dags" / "dag_sepa_ingest.py"
@@ -47,9 +51,15 @@ class _Variable:
 class _TaskInstance:
     def __init__(self, values: dict[str, dict]):
         self.values = values
+        self.pushed: dict[str, object] = {}
 
-    def xcom_pull(self, *, task_ids: str):
-        return self.values[task_ids]
+    def xcom_pull(self, *, task_ids: str, key: str | None = None):
+        if key is None:
+            return self.values[task_ids]
+        return self.values.get(task_ids, {}).get(key, self.pushed.get(key))
+
+    def xcom_push(self, *, key: str, value: object):
+        self.pushed[key] = value
 
 
 @pytest.fixture()
@@ -114,6 +124,29 @@ def _connect_to_fixture(pg_conn):
     )
 
 
+def _airflow_lock_info(conn, raw_file_id: int) -> dict[str, str | int]:
+    lock = acquire_ingestion_lock(
+        conn,
+        fecha_datos=_RUN_DATE,
+        raw_file_id=raw_file_id,
+        owner="airflow:test",
+    )
+    return {
+        "fecha_datos": str(lock.fecha_datos),
+        "raw_file_id": lock.raw_file_id,
+        "owner": lock.owner,
+        "token": lock.token,
+        "acquired_at": lock.acquired_at.isoformat(),
+        "expires_at": lock.expires_at.isoformat(),
+    }
+
+
+def _raw_file_id_for_run(conn, run_id: int) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT raw_file_id FROM ingestion_runs WHERE id = %s", (run_id,))
+        return cur.fetchone()[0]
+
+
 def _published_snapshot(conn, run_id: int):
     with conn.cursor() as cur:
         cur.execute(
@@ -171,6 +204,11 @@ def test_airflow_tasks_stream_and_publish_staged_products(
         {
             "load_staging": {"run_id": run_id},
             "download_zip": {"fecha_datos": str(_RUN_DATE)},
+            "check_file_changed": {
+                "ingestion_lock": _airflow_lock_info(
+                    pg_conn, _raw_file_id_for_run(pg_conn, run_id)
+                )
+            },
         }
     )
 
@@ -204,7 +242,23 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
         return _connect_to_fixture(pg_conn)
 
     original_run_all = cli_pipeline.quality_checks.run_all
+    staging_retention_calls = []
+    raw_retention_calls = []
     monkeypatch.setattr(cli_pipeline, "_db_connect", connect)
+    monkeypatch.setattr(
+        cli_pipeline,
+        "apply_staging_retention",
+        lambda conn, *, policy, fecha_datos: staging_retention_calls.append(
+            (policy, fecha_datos)
+        ),
+    )
+    monkeypatch.setattr(
+        cli_pipeline,
+        "apply_raw_retention",
+        lambda conn, *, raw_dir, policy, fecha_datos: raw_retention_calls.append(
+            (raw_dir, policy, fecha_datos)
+        ),
+    )
     monkeypatch.setattr(
         cli_pipeline.downloader,
         "download",
@@ -226,7 +280,11 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
 
     cli_result = cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
     assert cli_result.rows_loaded == 7
+    assert staging_retention_calls == [(cli_pipeline.from_environment(), _RUN_DATE)]
+    assert raw_retention_calls == [(tmp_path, cli_pipeline.from_environment(), _RUN_DATE)]
     with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
+        assert cur.fetchone()[0] == 0
         cur.execute("SELECT id FROM ingestion_runs WHERE raw_file_id = %s", (raw_file_id,))
         cli_run_id = cur.fetchone()[0]
         cur.execute("SELECT status, rows_valid, rows_loaded FROM ingestion_runs WHERE id = %s", (cli_run_id,))
@@ -241,6 +299,11 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
         {
             "load_staging": {"run_id": dag_run_id},
             "download_zip": {"fecha_datos": str(_RUN_DATE)},
+            "check_file_changed": {
+                "ingestion_lock": _airflow_lock_info(
+                    pg_conn, _raw_file_id_for_run(pg_conn, dag_run_id)
+                )
+            },
         }
     )
     dag_module.load_dimensions(ti=ti)
@@ -251,6 +314,161 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
         cur.execute("SELECT status, rows_valid, rows_loaded FROM ingestion_runs WHERE id = %s", (dag_run_id,))
         assert cur.fetchone() == ("completed", 7, 7)
     assert _published_snapshot(pg_conn, dag_run_id) == cli_snapshot
+
+
+def test_airflow_reserves_the_date_before_loading_staging(pg_conn, dag_module, monkeypatch):
+    raw_file_id = _create_raw_file(pg_conn, "airflow-lock.zip", "airflow-lock")
+    pg_conn.commit()
+    monkeypatch.setattr(dag_module, "_db_connect", lambda: _connect_to_fixture(pg_conn))
+    ti = _TaskInstance(
+        {
+            "download_zip": {
+                "raw_file_id": raw_file_id,
+                "is_new": True,
+                "fecha_datos": str(_RUN_DATE),
+            }
+        }
+    )
+
+    assert dag_module.check_file_changed(ti=ti, run_id="manual__lock") is True
+    assert ti.pushed["ingestion_lock"]["owner"] == "airflow:manual__lock"
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT owner FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
+        assert cur.fetchone()[0] == "airflow:manual__lock"
+
+    dag_module._release_ingestion_lock_on_failure({"ti": ti})
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
+        assert cur.fetchone()[0] == 0
+
+
+def test_cli_cannot_start_while_airflow_owns_the_same_date(
+    pg_conn, dag_module, monkeypatch, tmp_path
+):
+    raw_file_id = _create_raw_file(pg_conn, "shared-lock.zip", "shared-lock")
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    monkeypatch.setattr(dag_module, "_db_connect", connect)
+    airflow_ti = _TaskInstance(
+        {
+            "download_zip": {
+                "raw_file_id": raw_file_id,
+                "is_new": True,
+                "fecha_datos": str(_RUN_DATE),
+            }
+        }
+    )
+    assert dag_module.check_file_changed(ti=airflow_ti, run_id="manual__active") is True
+
+    monkeypatch.setattr(cli_pipeline, "_db_connect", connect)
+    monkeypatch.setattr(
+        cli_pipeline.downloader,
+        "download",
+        lambda conn, raw_dir, fecha: DownloadResult(
+            raw_file_id=raw_file_id,
+            filename="shared-lock.zip",
+            path=tmp_path / "not-read-before-lock.zip",
+            sha256="shared-lock",
+            size_bytes=1,
+            fecha_datos=_RUN_DATE,
+            is_new=True,
+        ),
+    )
+
+    with pytest.raises(IngestionLockBusyError, match="already locked by airflow:manual__active"):
+        cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ingestion_runs WHERE raw_file_id = %s", (raw_file_id,))
+        assert cur.fetchone()[0] == 0
+
+    dag_module._release_ingestion_lock_on_failure({"ti": airflow_ti})
+    retry_ti = _TaskInstance(airflow_ti.values)
+    assert dag_module.check_file_changed(ti=retry_ti, run_id="manual__retry") is True
+    dag_module._release_ingestion_lock_on_failure({"ti": retry_ti})
+
+
+def test_airflow_applies_enabled_retention_after_publication(
+    pg_conn, dag_module, monkeypatch, tmp_path
+):
+    raw_file_id = _create_raw_file(pg_conn, "airflow-retention.zip", "airflow-retention")
+    with pg_conn.cursor() as cur:
+        cur.execute("INSERT INTO ingestion_runs (raw_file_id) VALUES (%s) RETURNING id", (raw_file_id,))
+        run_id = cur.fetchone()[0]
+    _ensure_partition(pg_conn, 20250101)
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    monkeypatch.setattr(dag_module, "_db_connect", connect)
+    monkeypatch.setenv("SEPA_FACT_RETENTION_DAYS", "14")
+    monkeypatch.setenv("SEPA_STAGING_RETENTION_DAYS", "7")
+    monkeypatch.setenv("SEPA_RAW_RETENTION_DAYS", "30")
+    monkeypatch.setattr(
+        dag_module.Variable, "get", lambda *args, **kwargs: str(tmp_path)
+    )
+    staging_retention_calls = []
+    raw_retention_calls = []
+    monkeypatch.setattr(
+        "etl.staging_retention.apply_staging_retention",
+        lambda conn, *, policy, fecha_datos: staging_retention_calls.append(
+            (policy, fecha_datos)
+        ),
+    )
+    monkeypatch.setattr(
+        "etl.raw_retention.apply_raw_retention",
+        lambda conn, *, raw_dir, policy, fecha_datos: raw_retention_calls.append(
+            (raw_dir, policy, fecha_datos)
+        ),
+    )
+    monkeypatch.setattr(
+        "etl.load.publisher.publish_pending_facts",
+        lambda conn, **kwargs: PublicationResult(
+            run_id=kwargs["run_id"],
+            fecha_id=kwargs["fecha_id"],
+            rows_fact=0,
+            rows_aggregated=0,
+        ),
+    )
+    ti = _TaskInstance(
+        {
+            "load_staging": {"run_id": run_id},
+            "load_pending_fact_precios": {"rows_valid": 0},
+            "download_zip": {"fecha_datos": str(_RUN_DATE)},
+            "check_file_changed": {
+                "ingestion_lock": _airflow_lock_info(pg_conn, raw_file_id)
+            },
+        }
+    )
+
+    dag_module.publish_daily_snapshot(ti=ti)
+
+    assert staging_retention_calls == [
+        (
+            RetentionPolicy(
+                fact_retention_days=14, staging_retention_days=7, raw_retention_days=30
+            ),
+            _RUN_DATE,
+        )
+    ]
+    assert raw_retention_calls == [
+        (
+            tmp_path,
+            RetentionPolicy(
+                fact_retention_days=14, staging_retention_days=7, raw_retention_days=30
+            ),
+            _RUN_DATE,
+        )
+    ]
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.fact_precios_202501')")
+        assert cur.fetchone()[0] is None
+        cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
+        assert cur.fetchone()[0] == 0
 
 
 def test_airflow_marks_the_run_failed_when_dimension_loading_fails(
@@ -293,7 +511,7 @@ def test_airflow_marks_a_new_run_failed_when_staging_fails(
     def connect():
         return _connect_to_fixture(pg_conn)
 
-    def fail_staging_load(conn, zip_path, run_id):
+    def fail_staging_load(conn, zip_path, run_id, heartbeat=None):
         raise RuntimeError("staging load failed")
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)
@@ -357,7 +575,7 @@ def test_airflow_marks_the_run_failed_when_pending_fact_loading_fails(
     def connect():
         return _connect_to_fixture(pg_conn)
 
-    def fail_fact_load(conn, connect, *, run_id, run_date):
+    def fail_fact_load(conn, connect, *, run_id, run_date, heartbeat=None):
         raise RuntimeError("pending fact load failed")
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)

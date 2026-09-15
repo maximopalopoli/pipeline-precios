@@ -48,6 +48,58 @@ def _mark_task_failure(conn, run_id: int, exc: Exception) -> None:
     mark_run_failed(conn, run_id, str(exc))
 
 
+def _lock_from_xcom(ti):
+    """Read the durable date reservation made by ``check_file_changed``."""
+    from etl.ingestion_lock import IngestionLock
+
+    data = ti.xcom_pull(task_ids="check_file_changed", key="ingestion_lock")
+    if data is None:
+        raise RuntimeError("Airflow ingestion lock is missing from XCom.")
+    return IngestionLock(
+        fecha_datos=date.fromisoformat(data["fecha_datos"]),
+        raw_file_id=data["raw_file_id"],
+        owner=data["owner"],
+        token=data["token"],
+        acquired_at=datetime.fromisoformat(data["acquired_at"]),
+        expires_at=datetime.fromisoformat(data["expires_at"]),
+    )
+
+
+def _release_ingestion_lock_on_failure(context) -> None:
+    """Release the date after Airflow exhausts a task's configured retries."""
+    from etl.ingestion_lock import IngestionLockOwnershipError, release_ingestion_lock
+
+    try:
+        lock = _lock_from_xcom(context["ti"])
+    except RuntimeError:
+        # Download/check failures occur before a date can have been reserved.
+        return
+
+    conn = _db_connect()
+    try:
+        release_ingestion_lock(conn, lock)
+        log.info("airflow.ingestion_lock.released_after_failure", fecha=str(lock.fecha_datos))
+    except IngestionLockOwnershipError:
+        log.warning(
+            "airflow.ingestion_lock.already_released_after_failure",
+            fecha=str(lock.fecha_datos),
+        )
+    finally:
+        conn.close()
+
+
+def _renew_ingestion_lock(conn, ti) -> None:
+    """Refresh the lock at task boundaries and during product streaming."""
+    from etl.ingestion_lock import renew_ingestion_lock
+
+    try:
+        lock = _lock_from_xcom(ti)
+    except RuntimeError:
+        # Direct callable tests and pre-lock failures have no reservation.
+        return
+    renew_ingestion_lock(conn, lock)
+
+
 # ---------------------------------------------------------------------------
 # Task callables
 # ---------------------------------------------------------------------------
@@ -79,13 +131,38 @@ def download_zip(ds: str, **kwargs):
 
 def check_file_changed(**kwargs):
     """Short-circuit only files that have already been published successfully."""
+    from etl.ingestion_lock import acquire_ingestion_lock, release_ingestion_lock
     from etl.ingestion_run import should_process_raw_file
+    from etl.retention_policy import from_environment
 
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
 
+    # Fail before reserving the date if a destructive retention setting is
+    # malformed. Every task later reads the same process environment.
+    from_environment()
+
     conn = _db_connect()
+    lock = None
     try:
+        should_process = should_process_raw_file(conn, dl_info["raw_file_id"])
+        if not should_process:
+            log.info(
+                "download.duplicate_decision",
+                raw_file_id=dl_info["raw_file_id"],
+                is_new=dl_info["is_new"],
+                should_process=False,
+            )
+            return False
+
+        lock = acquire_ingestion_lock(
+            conn,
+            fecha_datos=date.fromisoformat(dl_info["fecha_datos"]),
+            raw_file_id=dl_info["raw_file_id"],
+            owner=f"airflow:{kwargs.get('run_id', 'unknown')}",
+        )
+        # A CLI execution could have published between the first check and the
+        # reservation. Do not start staging when that happened.
         should_process = should_process_raw_file(conn, dl_info["raw_file_id"])
         log.info(
             "download.duplicate_decision",
@@ -93,7 +170,27 @@ def check_file_changed(**kwargs):
             is_new=dl_info["is_new"],
             should_process=should_process,
         )
+        if not should_process:
+            release_ingestion_lock(conn, lock)
+            lock = None
+            return False
+
+        ti.xcom_push(
+            key="ingestion_lock",
+            value={
+                "fecha_datos": str(lock.fecha_datos),
+                "raw_file_id": lock.raw_file_id,
+                "owner": lock.owner,
+                "token": lock.token,
+                "acquired_at": lock.acquired_at.isoformat(),
+                "expires_at": lock.expires_at.isoformat(),
+            },
+        )
         return should_process
+    except Exception:
+        if lock is not None:
+            release_ingestion_lock(conn, lock)
+        raise
     finally:
         conn.close()
 
@@ -109,10 +206,16 @@ def load_staging(**kwargs):
     conn = _db_connect()
     run_id: int | None = None
     try:
+        _renew_ingestion_lock(conn, ti)
         run_id = open_ingestion_run(conn, dl_info["raw_file_id"])
 
         # Load staging
-        stg = staging_loader.load(conn, Path(dl_info["path"]), run_id)
+        stg = staging_loader.load(
+            conn,
+            Path(dl_info["path"]),
+            run_id,
+            heartbeat=lambda: _renew_ingestion_lock(conn, ti),
+        )
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
 
@@ -149,6 +252,7 @@ def run_quality_checks(**kwargs):
 
     conn = _db_connect()
     try:
+        _renew_ingestion_lock(conn, ti)
         try:
             check_results = quality_checks.run_all(conn, run_id)
         except quality_checks.QualityCheckError as exc:
@@ -184,6 +288,7 @@ def load_dimensions(**kwargs):
 
     conn = _db_connect()
     try:
+        _renew_ingestion_lock(conn, ti)
         result = load_staged_dimensions(conn, run_id)
         conn.commit()
         log.info(
@@ -217,11 +322,13 @@ def load_pending_fact_precios(**kwargs):
 
     conn = _db_connect()
     try:
+        _renew_ingestion_lock(conn, ti)
         result = stream_pending_product_facts(
             conn,
             _db_connect,
             run_id=run_id,
             run_date=run_date,
+            heartbeat=lambda: _renew_ingestion_lock(conn, ti),
         )
         conn.commit()
         log.info(
@@ -244,7 +351,12 @@ def load_pending_fact_precios(**kwargs):
 
 def publish_daily_snapshot(**kwargs):
     """Atomically publish facts, aggregates and the completed run state."""
+    from etl.fact_retention import apply_fact_retention
+    from etl.ingestion_lock import release_ingestion_lock
     from etl.load.publisher import publish_pending_facts
+    from etl.raw_retention import apply_raw_retention
+    from etl.retention_policy import from_environment
+    from etl.staging_retention import apply_staging_retention
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -257,6 +369,7 @@ def publish_daily_snapshot(**kwargs):
 
     conn = _db_connect()
     try:
+        _renew_ingestion_lock(conn, ti)
         publication = publish_pending_facts(
             conn,
             run_id=run_id,
@@ -271,6 +384,64 @@ def publish_daily_snapshot(**kwargs):
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
         )
+        retention_policy = None
+        try:
+            retention_policy = from_environment()
+            retention_result = apply_fact_retention(
+                conn,
+                policy=retention_policy,
+                fecha_datos=fecha,
+            )
+            if retention_result is not None:
+                log.info(
+                    "airflow.fact_retention.completed",
+                    cutoff=str(retention_policy.fact_cutoff(fecha)),
+                    partitions=retention_result.partitions,
+                )
+        except Exception:
+            # The snapshot is already committed. Do not report a successful
+            # publication as failed only because its best-effort cleanup fails.
+            conn.rollback()
+            log.exception("airflow.fact_retention.failed", run_id=run_id)
+        if retention_policy is not None:
+            try:
+                staging_retention_result = apply_staging_retention(
+                    conn,
+                    policy=retention_policy,
+                    fecha_datos=fecha,
+                )
+                if staging_retention_result is not None:
+                    log.info(
+                        "airflow.staging_retention.completed",
+                        cutoff=str(retention_policy.staging_cutoff(fecha)),
+                        run_ids=staging_retention_result.run_ids,
+                    )
+            except Exception:
+                # Staging cleanup must not prevent fact cleanup or lock release.
+                conn.rollback()
+                log.exception("airflow.staging_retention.failed", run_id=run_id)
+            try:
+                raw_retention_result = apply_raw_retention(
+                    conn,
+                    raw_dir=Path(
+                        Variable.get("sepa_raw_dir", default_var="/opt/airflow/data")
+                    ),
+                    policy=retention_policy,
+                    fecha_datos=fecha,
+                )
+                if raw_retention_result is not None:
+                    log.info(
+                        "airflow.raw_retention.completed",
+                        cutoff=str(retention_policy.raw_cutoff(fecha)),
+                        deleted_file_ids=raw_retention_result.deleted_file_ids,
+                        missing_file_ids=raw_retention_result.missing_file_ids,
+                    )
+            except Exception:
+                # Raw ZIP cleanup is last and must not prevent lock release.
+                conn.rollback()
+                log.exception("airflow.raw_retention.failed", run_id=run_id)
+        release_ingestion_lock(conn, _lock_from_xcom(ti))
+        log.info("airflow.ingestion_lock.released", fecha=str(fecha))
     except Exception as exc:
         _mark_task_failure(conn, run_id, exc)
         raise
@@ -286,6 +457,7 @@ default_args = {
     "retries": 2,
     "retry_delay": timedelta(minutes=15),
     "execution_timeout": timedelta(minutes=30),
+    "on_failure_callback": _release_ingestion_lock_on_failure,
 }
 
 with DAG(

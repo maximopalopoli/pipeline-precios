@@ -42,11 +42,21 @@ import structlog.dev
 
 from etl import alerting
 from etl.extract import downloader
+from etl.fact_retention import apply_fact_retention
+from etl.ingestion_lock import (
+    IngestionLock,
+    acquire_ingestion_lock,
+    release_ingestion_lock,
+    renew_ingestion_lock,
+)
 from etl.ingestion_run import IngestionResult, open_ingestion_run, should_process_raw_file
 from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
+from etl.raw_retention import apply_raw_retention
+from etl.retention_policy import from_environment
+from etl.staging_retention import apply_staging_retention
 from etl.staging import loader as staging_loader
 
 # ---------------------------------------------------------------------------
@@ -128,10 +138,12 @@ def run(
     """
     raw_dir = raw_dir or Path("data")
     raw_dir.mkdir(parents=True, exist_ok=True)
+    retention_policy = from_environment()
 
     conn = _db_connect()
     t0 = time.perf_counter()
     run_id: int | None = None
+    ingestion_lock: IngestionLock | None = None
 
     try:
         # ── 0. Ensure reference seeds ─────────────────────────────────────
@@ -159,6 +171,25 @@ def run(
                 filename=dl.filename,
             )
 
+        # The lock is durable rather than connection-scoped because the
+        # pipeline uses auxiliary database connections while streaming facts.
+        # Recheck eligibility after acquiring it: another entrypoint may have
+        # finished the same date between the first duplicate check and here.
+        ingestion_lock = acquire_ingestion_lock(
+            conn,
+            fecha_datos=dl.fecha_datos,
+            raw_file_id=dl.raw_file_id,
+            owner="cli",
+        )
+        if not should_process_raw_file(conn, dl.raw_file_id):
+            log.info(
+                "pipeline.skipped",
+                reason="completed_while_waiting_for_ingestion_lock",
+                raw_file_id=dl.raw_file_id,
+                filename=dl.filename,
+            )
+            return IngestionResult.skipped()
+
         log.info(
             "pipeline.stage.done",
             stage="download",
@@ -176,7 +207,13 @@ def run(
         logger.info("pipeline.stage.start", stage="staging")
         t2 = time.perf_counter()
 
-        stg = staging_loader.load(conn, dl.path, run_id)
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
+        stg = staging_loader.load(
+            conn,
+            dl.path,
+            run_id,
+            heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
+        )
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
 
@@ -194,6 +231,7 @@ def run(
         logger.info("pipeline.stage.start", stage="quality")
         t3 = time.perf_counter()
 
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         check_results: list[quality_checks.CheckResult] = []
         try:
             check_results = quality_checks.run_all(conn, run_id)
@@ -227,6 +265,7 @@ def run(
         logger.info("pipeline.stage.start", stage="dimensions")
         t5 = time.perf_counter()
 
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         dimensions = load_staged_dimensions(conn, run_id)
         conn.commit()
 
@@ -246,11 +285,13 @@ def run(
         logger.info("pipeline.stage.start", stage="fact_load")
         t6 = time.perf_counter()
 
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         product_load = stream_pending_product_facts(
             conn,
             _db_connect,
             run_id=run_id,
             run_date=dl.fecha_datos,
+            heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
         )
         conn.commit()
 
@@ -266,6 +307,7 @@ def run(
         logger.info("pipeline.stage.start", stage="publication")
         t7 = time.perf_counter()
 
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         publication = publish_pending_facts(
             conn,
             run_id=run_id,
@@ -289,6 +331,57 @@ def run(
             rows_loaded=product_load.rows_fact,
             elapsed_total=elapsed_total,
         )
+        try:
+            retention_result = apply_fact_retention(
+                conn,
+                policy=retention_policy,
+                fecha_datos=dl.fecha_datos,
+            )
+            if retention_result is not None:
+                logger.info(
+                    "pipeline.fact_retention.completed",
+                    cutoff=str(retention_policy.fact_cutoff(dl.fecha_datos)),
+                    partitions=retention_result.partitions,
+                )
+        except Exception:
+            # Publication is already committed. Retention is best-effort and
+            # must not incorrectly turn that successful ingestion into failed.
+            conn.rollback()
+            logger.exception("pipeline.fact_retention.failed")
+        try:
+            staging_retention_result = apply_staging_retention(
+                conn,
+                policy=retention_policy,
+                fecha_datos=dl.fecha_datos,
+            )
+            if staging_retention_result is not None:
+                logger.info(
+                    "pipeline.staging_retention.completed",
+                    cutoff=str(retention_policy.staging_cutoff(dl.fecha_datos)),
+                    run_ids=staging_retention_result.run_ids,
+                )
+        except Exception:
+            # Staging cleanup is independent from fact cleanup and publication.
+            conn.rollback()
+            logger.exception("pipeline.staging_retention.failed")
+        try:
+            raw_retention_result = apply_raw_retention(
+                conn,
+                raw_dir=raw_dir,
+                policy=retention_policy,
+                fecha_datos=dl.fecha_datos,
+            )
+            if raw_retention_result is not None:
+                logger.info(
+                    "pipeline.raw_retention.completed",
+                    cutoff=str(retention_policy.raw_cutoff(dl.fecha_datos)),
+                    deleted_file_ids=raw_retention_result.deleted_file_ids,
+                    missing_file_ids=raw_retention_result.missing_file_ids,
+                )
+        except Exception:
+            # ZIP cleanup is last and must not affect the published snapshot.
+            conn.rollback()
+            logger.exception("pipeline.raw_retention.failed")
         return IngestionResult.completed(product_load.rows_fact)
 
     except Exception as exc:
@@ -300,6 +393,18 @@ def run(
         raise
 
     finally:
+        if ingestion_lock is not None:
+            try:
+                release_ingestion_lock(conn, ingestion_lock)
+                log.info(
+                    "pipeline.ingestion_lock.released",
+                    fecha=str(ingestion_lock.fecha_datos),
+                )
+            except Exception:
+                log.exception(
+                    "pipeline.ingestion_lock.release_failed",
+                    fecha=str(ingestion_lock.fecha_datos),
+                )
         conn.close()
 
 
