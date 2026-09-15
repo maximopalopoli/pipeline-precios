@@ -3,13 +3,11 @@
 from fastapi import APIRouter, Query
 
 from api.db import fetch, fetchrow
+from api.pricing import effective_price_sql
 
 router = APIRouter()
 
-BEST_PRICE = (
-    "COALESCE(LEAST(NULLIF(f.precio_promo1, 0), "
-    "NULLIF(f.precio_promo2, 0)), f.precio_lista)"
-)
+BEST_PRICE = effective_price_sql()
 
 
 @router.get("/ofertas")
