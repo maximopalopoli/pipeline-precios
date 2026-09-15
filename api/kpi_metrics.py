@@ -28,12 +28,20 @@ WEEKLY_VARIATION_SQL = """
         GROUP BY aggregate.producto_sk, aggregate.provincia_sk
         HAVING COUNT(*) FILTER (WHERE calendar.fecha = latest.fecha - 7) = 1
            AND COUNT(*) FILTER (WHERE calendar.fecha = latest.fecha) = 1
+    ), weekly_variation AS (
+        SELECT
+            ROUND(
+                AVG(100.0 * (precio_final - precio_inicial) / NULLIF(precio_inicial, 0)),
+                2
+            ) AS variacion_semanal,
+            COUNT(*) AS series_comparadas
+        FROM endpoint_prices
     )
     SELECT
-        ROUND(
-            AVG(100.0 * (precio_final - precio_inicial) / NULLIF(precio_inicial, 0)),
-            2
-        ) AS variacion_semanal,
-        COUNT(*) AS series_comparadas
-    FROM endpoint_prices
+        weekly_variation.variacion_semanal,
+        weekly_variation.series_comparadas,
+        latest.fecha - 7 AS fecha_inicio,
+        latest.fecha AS fecha_fin
+    FROM weekly_variation
+    CROSS JOIN latest
 """

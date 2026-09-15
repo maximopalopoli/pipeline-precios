@@ -85,12 +85,13 @@ def test_weekly_variation_compares_exact_endpoints_and_excludes_incomplete_serie
 
     with pg_conn.cursor() as cur:
         cur.execute(WEEKLY_VARIATION_SQL)
-        variation, series = cur.fetchone()
+        variation, series, start, end = cur.fetchone()
 
     # +10%, -10% and +10%: the middle observation and incomplete series do
     # not alter the endpoint comparison.
     assert variation == Decimal("3.33")
     assert series == 3
+    assert (start, end) == (initial, latest)
 
 
 def test_weekly_variation_is_null_without_both_window_endpoints(pg_conn):
@@ -109,7 +110,8 @@ def test_weekly_variation_is_null_without_both_window_endpoints(pg_conn):
 
     with pg_conn.cursor() as cur:
         cur.execute(WEEKLY_VARIATION_SQL)
-        variation, series = cur.fetchone()
+        variation, series, start, end = cur.fetchone()
 
     assert variation is None
     assert series == 0
+    assert (start, end) == (date(2026, 3, 10), latest)
