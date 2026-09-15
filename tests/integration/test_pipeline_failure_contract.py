@@ -38,6 +38,19 @@ def _create_raw_file(conn) -> int:
         return cur.fetchone()[0]
 
 
+def _create_raw_file_for_date(conn, fecha_datos: date, sha256: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
+            VALUES ('source-date-mismatch.zip', 'http://example.test/data.zip', %s, 1, %s)
+            RETURNING id
+            """,
+            (sha256, fecha_datos),
+        )
+        return cur.fetchone()[0]
+
+
 def test_cli_propagates_critical_quality_failure_and_marks_run_failed(
     pg_conn, sample_zip_path, tmp_path, monkeypatch
 ):
@@ -113,6 +126,52 @@ def test_cli_refuses_to_start_when_another_entrypoint_owns_the_date(
 
     with pg_conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM ingestion_runs WHERE raw_file_id = %s", (raw_file_id,))
+        assert cur.fetchone()[0] == 0
+
+
+def test_cli_marks_a_source_date_mismatch_failed_and_keeps_the_audit_dates(
+    pg_conn, sample_zip_path, tmp_path, monkeypatch
+):
+    requested_date = date(2026, 3, 16)
+    raw_file_id = _create_raw_file_for_date(
+        pg_conn, requested_date, "source-date-mismatch-cli"
+    )
+    pg_conn.commit()
+
+    monkeypatch.setattr(pipeline, "_db_connect", lambda: _connect_to_fixture(pg_conn))
+    monkeypatch.setattr(
+        pipeline.downloader,
+        "download",
+        lambda conn, raw_dir, fecha: DownloadResult(
+            raw_file_id=raw_file_id,
+            filename="source-date-mismatch.zip",
+            path=sample_zip_path,
+            sha256="source-date-mismatch-cli",
+            size_bytes=sample_zip_path.stat().st_size,
+            fecha_datos=requested_date,
+            is_new=True,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="does not match logical ingestion date"):
+        pipeline.run(fecha=requested_date, raw_dir=tmp_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, fecha_solicitada, fecha_logica, fecha_fuente
+            FROM ingestion_runs
+            WHERE raw_file_id = %s
+            """,
+            (raw_file_id,),
+        )
+        assert cur.fetchone() == (
+            "failed",
+            requested_date,
+            requested_date,
+            date(2026, 3, 17),
+        )
+        cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (requested_date,))
         assert cur.fetchone()[0] == 0
 
 
