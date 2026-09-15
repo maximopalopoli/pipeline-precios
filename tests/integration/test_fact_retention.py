@@ -4,6 +4,8 @@ from datetime import date
 
 from etl.fact_retention import find_expired_fact_partitions, purge_expired_fact_partitions
 from etl.load.warehouse_loader import _ensure_partition
+from etl.retention_policy import RetentionPolicy
+from etl.run_pipeline import _apply_configured_fact_retention
 
 
 def _create_monthly_partitions(conn, *fecha_ids: int) -> None:
@@ -48,6 +50,30 @@ def test_explicit_non_dry_run_drops_only_expired_whole_partitions(pg_conn):
 
     assert result.partitions == ("fact_precios_202501",)
     assert result.dropped is True
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.fact_precios_202501')")
+        assert cur.fetchone()[0] is None
+        cur.execute("SELECT to_regclass('public.fact_precios_202502')")
+        assert cur.fetchone()[0] == "fact_precios_202502"
+
+
+def test_cli_retention_hook_applies_only_an_enabled_policy(pg_conn):
+    _create_monthly_partitions(pg_conn, 20250101, 20250201)
+
+    disabled = _apply_configured_fact_retention(
+        pg_conn,
+        policy=RetentionPolicy(),
+        fecha_datos=date(2025, 2, 15),
+    )
+    enabled = _apply_configured_fact_retention(
+        pg_conn,
+        policy=RetentionPolicy(fact_retention_days=14),
+        fecha_datos=date(2025, 2, 15),
+    )
+
+    assert disabled is None
+    assert enabled is not None
+    assert enabled.partitions == ("fact_precios_202501",)
     with pg_conn.cursor() as cur:
         cur.execute("SELECT to_regclass('public.fact_precios_202501')")
         assert cur.fetchone()[0] is None

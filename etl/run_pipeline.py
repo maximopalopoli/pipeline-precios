@@ -42,12 +42,14 @@ import structlog.dev
 
 from etl import alerting
 from etl.extract import downloader
+from etl.fact_retention import FactRetentionResult, purge_expired_fact_partitions
 from etl.ingestion_lock import IngestionLock, acquire_ingestion_lock, release_ingestion_lock
 from etl.ingestion_run import IngestionResult, open_ingestion_run, should_process_raw_file
 from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
+from etl.retention_policy import RetentionPolicy, from_environment
 from etl.staging import loader as staging_loader
 
 # ---------------------------------------------------------------------------
@@ -112,6 +114,21 @@ def _db_connect() -> psycopg2.extensions.connection:
     )
 
 
+def _apply_configured_fact_retention(
+    conn,
+    *,
+    policy: RetentionPolicy,
+    fecha_datos: date,
+) -> FactRetentionResult | None:
+    """Drop expired complete fact partitions only when retention is enabled."""
+    cutoff = policy.fact_cutoff(fecha_datos)
+    if cutoff is None:
+        return None
+    result = purge_expired_fact_partitions(conn, cutoff=cutoff, dry_run=False)
+    conn.commit()
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -129,6 +146,7 @@ def run(
     """
     raw_dir = raw_dir or Path("data")
     raw_dir.mkdir(parents=True, exist_ok=True)
+    retention_policy = from_environment()
 
     conn = _db_connect()
     t0 = time.perf_counter()
@@ -310,6 +328,23 @@ def run(
             rows_loaded=product_load.rows_fact,
             elapsed_total=elapsed_total,
         )
+        try:
+            retention_result = _apply_configured_fact_retention(
+                conn,
+                policy=retention_policy,
+                fecha_datos=dl.fecha_datos,
+            )
+            if retention_result is not None:
+                logger.info(
+                    "pipeline.fact_retention.completed",
+                    cutoff=str(retention_policy.fact_cutoff(dl.fecha_datos)),
+                    partitions=retention_result.partitions,
+                )
+        except Exception:
+            # Publication is already committed. Retention is best-effort and
+            # must not incorrectly turn that successful ingestion into failed.
+            conn.rollback()
+            logger.exception("pipeline.fact_retention.failed")
         return IngestionResult.completed(product_load.rows_fact)
 
     except Exception as exc:
