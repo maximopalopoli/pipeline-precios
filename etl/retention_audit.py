@@ -6,7 +6,7 @@ import json
 from datetime import date
 from typing import Literal, Sequence
 
-RetentionKind = Literal["fact_partitions", "staging_runs"]
+RetentionKind = Literal["fact_partitions", "staging_runs", "raw_files"]
 
 
 def record_retention_event(

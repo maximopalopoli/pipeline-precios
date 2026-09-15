@@ -1,0 +1,66 @@
+"""Retention of immutable local raw ZIPs after successful ingestion."""
+
+from datetime import date
+
+from etl.raw_retention import find_expired_raw_files, purge_expired_raw_files
+
+
+def _create_raw_file(conn, *, suffix: str, status: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
+            VALUES (%s, 'http://example.test/data.zip', %s, 1, '2026-01-01')
+            RETURNING id
+            """,
+            (f"2026-01-01_lunes_{suffix}.zip", suffix),
+        )
+        raw_file_id = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO ingestion_runs (raw_file_id, status, finished_at)
+            VALUES (%s, %s, CASE WHEN %s = 'running' THEN NULL ELSE NOW() END)
+            """,
+            (raw_file_id, status, status),
+        )
+    conn.commit()
+    return raw_file_id
+
+
+def _filename(conn, raw_file_id: int) -> str:
+    with conn.cursor() as cur:
+        cur.execute("SELECT filename FROM raw_files WHERE id = %s", (raw_file_id,))
+        return cur.fetchone()[0]
+
+
+def test_raw_retention_excludes_unresolved_runs(pg_conn, tmp_path):
+    completed = _create_raw_file(pg_conn, suffix="completed", status="completed")
+    failed = _create_raw_file(pg_conn, suffix="failed", status="failed")
+    running = _create_raw_file(pg_conn, suffix="running", status="running")
+    for raw_file_id in (completed, failed, running):
+        (tmp_path / _filename(pg_conn, raw_file_id)).write_bytes(b"zip")
+
+    eligible = find_expired_raw_files(pg_conn, cutoff=date(2026, 2, 1))
+
+    assert tuple(raw_file.id for raw_file in eligible) == (completed,)
+
+
+def test_explicit_raw_purge_removes_only_eligible_local_zip_and_audits_it(pg_conn, tmp_path):
+    completed = _create_raw_file(pg_conn, suffix="completed-delete", status="completed")
+    failed = _create_raw_file(pg_conn, suffix="failed-keep", status="failed")
+    completed_path = tmp_path / _filename(pg_conn, completed)
+    failed_path = tmp_path / _filename(pg_conn, failed)
+    completed_path.write_bytes(b"completed")
+    failed_path.write_bytes(b"failed")
+
+    result = purge_expired_raw_files(
+        pg_conn, raw_dir=tmp_path, cutoff=date(2026, 2, 1), dry_run=False
+    )
+    pg_conn.commit()
+
+    assert result.deleted_file_ids == (completed,)
+    assert completed_path.exists() is False
+    assert failed_path.exists() is True
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT kind, cutoff, targets FROM retention_events")
+        assert cur.fetchone() == ("raw_files", date(2026, 2, 1), [completed])

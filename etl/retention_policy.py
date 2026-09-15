@@ -10,6 +10,7 @@ from typing import Mapping
 
 _FACT_RETENTION_DAYS_ENV = "SEPA_FACT_RETENTION_DAYS"
 _STAGING_RETENTION_DAYS_ENV = "SEPA_STAGING_RETENTION_DAYS"
+_RAW_RETENTION_DAYS_ENV = "SEPA_RAW_RETENTION_DAYS"
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class RetentionPolicy:
 
     fact_retention_days: int | None = None
     staging_retention_days: int | None = None
+    raw_retention_days: int | None = None
 
     @property
     def fact_retention_enabled(self) -> bool:
@@ -31,6 +33,10 @@ class RetentionPolicy:
     @property
     def staging_retention_enabled(self) -> bool:
         return self.staging_retention_days is not None
+
+    @property
+    def raw_retention_enabled(self) -> bool:
+        return self.raw_retention_days is not None
 
     def fact_cutoff(self, as_of: date) -> date | None:
         """Return the oldest date to retain, or ``None`` when disabled."""
@@ -44,6 +50,12 @@ class RetentionPolicy:
             return None
         return as_of - timedelta(days=self.staging_retention_days)
 
+    def raw_cutoff(self, as_of: date) -> date | None:
+        """Return the oldest completed raw ZIP to retain, if enabled."""
+        if self.raw_retention_days is None:
+            return None
+        return as_of - timedelta(days=self.raw_retention_days)
+
 
 def from_environment(env: Mapping[str, str] | None = None) -> RetentionPolicy:
     """Read the opt-in fact retention window from the environment.
@@ -56,6 +68,7 @@ def from_environment(env: Mapping[str, str] | None = None) -> RetentionPolicy:
     return RetentionPolicy(
         fact_retention_days=_read_positive_days(values, _FACT_RETENTION_DAYS_ENV),
         staging_retention_days=_read_positive_days(values, _STAGING_RETENTION_DAYS_ENV),
+        raw_retention_days=_read_positive_days(values, _RAW_RETENTION_DAYS_ENV),
     )
 
 
