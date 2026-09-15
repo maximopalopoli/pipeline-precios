@@ -392,7 +392,7 @@ def test_cli_cannot_start_while_airflow_owns_the_same_date(
 
 
 def test_airflow_applies_enabled_retention_after_publication(
-    pg_conn, dag_module, monkeypatch
+    pg_conn, dag_module, monkeypatch, tmp_path
 ):
     raw_file_id = _create_raw_file(pg_conn, "airflow-retention.zip", "airflow-retention")
     with pg_conn.cursor() as cur:
@@ -407,11 +407,22 @@ def test_airflow_applies_enabled_retention_after_publication(
     monkeypatch.setattr(dag_module, "_db_connect", connect)
     monkeypatch.setenv("SEPA_FACT_RETENTION_DAYS", "14")
     monkeypatch.setenv("SEPA_STAGING_RETENTION_DAYS", "7")
+    monkeypatch.setenv("SEPA_RAW_RETENTION_DAYS", "30")
+    monkeypatch.setattr(
+        dag_module.Variable, "get", lambda *args, **kwargs: str(tmp_path)
+    )
     staging_retention_calls = []
+    raw_retention_calls = []
     monkeypatch.setattr(
         "etl.staging_retention.apply_staging_retention",
         lambda conn, *, policy, fecha_datos: staging_retention_calls.append(
             (policy, fecha_datos)
+        ),
+    )
+    monkeypatch.setattr(
+        "etl.raw_retention.apply_raw_retention",
+        lambda conn, *, raw_dir, policy, fecha_datos: raw_retention_calls.append(
+            (raw_dir, policy, fecha_datos)
         ),
     )
     monkeypatch.setattr(
@@ -437,7 +448,21 @@ def test_airflow_applies_enabled_retention_after_publication(
     dag_module.publish_daily_snapshot(ti=ti)
 
     assert staging_retention_calls == [
-        (RetentionPolicy(fact_retention_days=14, staging_retention_days=7), _RUN_DATE)
+        (
+            RetentionPolicy(
+                fact_retention_days=14, staging_retention_days=7, raw_retention_days=30
+            ),
+            _RUN_DATE,
+        )
+    ]
+    assert raw_retention_calls == [
+        (
+            tmp_path,
+            RetentionPolicy(
+                fact_retention_days=14, staging_retention_days=7, raw_retention_days=30
+            ),
+            _RUN_DATE,
+        )
     ]
     with pg_conn.cursor() as cur:
         cur.execute("SELECT to_regclass('public.fact_precios_202501')")

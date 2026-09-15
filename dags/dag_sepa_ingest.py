@@ -332,6 +332,7 @@ def publish_daily_snapshot(**kwargs):
     from etl.fact_retention import apply_fact_retention
     from etl.ingestion_lock import release_ingestion_lock
     from etl.load.publisher import publish_pending_facts
+    from etl.raw_retention import apply_raw_retention
     from etl.retention_policy import from_environment
     from etl.staging_retention import apply_staging_retention
 
@@ -396,6 +397,26 @@ def publish_daily_snapshot(**kwargs):
                 # Staging cleanup must not prevent fact cleanup or lock release.
                 conn.rollback()
                 log.exception("airflow.staging_retention.failed", run_id=run_id)
+            try:
+                raw_retention_result = apply_raw_retention(
+                    conn,
+                    raw_dir=Path(
+                        Variable.get("sepa_raw_dir", default_var="/opt/airflow/data")
+                    ),
+                    policy=retention_policy,
+                    fecha_datos=fecha,
+                )
+                if raw_retention_result is not None:
+                    log.info(
+                        "airflow.raw_retention.completed",
+                        cutoff=str(retention_policy.raw_cutoff(fecha)),
+                        deleted_file_ids=raw_retention_result.deleted_file_ids,
+                        missing_file_ids=raw_retention_result.missing_file_ids,
+                    )
+            except Exception:
+                # Raw ZIP cleanup is last and must not prevent lock release.
+                conn.rollback()
+                log.exception("airflow.raw_retention.failed", run_id=run_id)
         release_ingestion_lock(conn, _lock_from_xcom(ti))
         log.info("airflow.ingestion_lock.released", fecha=str(fecha))
     except Exception as exc:
