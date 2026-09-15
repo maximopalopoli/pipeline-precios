@@ -3,8 +3,10 @@
 from fastapi import APIRouter, Query
 
 from api.db import fetch, fetchrow
+from api.pricing import effective_price_sql
 
 router = APIRouter()
+BEST_PRICE = effective_price_sql()
 
 
 @router.get("/variaciones")
@@ -61,12 +63,7 @@ async def get_variaciones(
                     fe.fecha,
                     pr.nombre AS provincia,
                     ROUND(AVG(f.precio_lista)::numeric, 2) AS precio_lista_avg,
-                    ROUND(AVG(
-                        COALESCE(
-                            LEAST(NULLIF(f.precio_promo1, 0), NULLIF(f.precio_promo2, 0)),
-                            f.precio_lista
-                        )
-                    )::numeric, 2) AS precio_promo_avg
+                    ROUND(AVG({BEST_PRICE})::numeric, 2) AS precio_promo_avg
                 FROM fact_precios f
                 JOIN dim_producto  p  ON f.producto_sk  = p.producto_sk
                 JOIN dim_fecha     fe ON f.fecha_id     = fe.fecha_id

@@ -14,9 +14,9 @@ def effective_price(*prices: Decimal | None) -> Decimal | None:
 def effective_price_sql(alias: str = "f") -> str:
     """Return the SQL expression matching :func:`effective_price` for facts."""
     return (
-        "LEAST("
-        f"NULLIF({alias}.precio_lista, 0), "
-        f"NULLIF({alias}.precio_promo1, 0), "
-        f"NULLIF({alias}.precio_promo2, 0)"
+        "pipeline_effective_price("
+        f"{alias}.precio_lista, "
+        f"{alias}.precio_promo1, "
+        f"{alias}.precio_promo2"
         ")"
     )

@@ -56,12 +56,9 @@ SELECT
     MAX(f.precio_lista)                                         AS precio_lista_max,
     ROUND(percentile_cont(0.5) WITHIN GROUP (
               ORDER BY f.precio_lista)::NUMERIC,             2) AS precio_lista_median,
-    ROUND(AVG(
-        LEAST(
-            COALESCE(f.precio_promo1, f.precio_lista),
-            COALESCE(f.precio_promo2, f.precio_lista)
-        )
-    ),                                                       2) AS precio_promo_avg,
+    ROUND(AVG(pipeline_effective_price(
+        f.precio_lista, f.precio_promo1, f.precio_promo2
+    )),                                                      2) AS precio_promo_avg,
     COUNT(*)                                                    AS cantidad_obs,
     COUNT(*) FILTER (WHERE f.tiene_promo)                       AS cantidad_con_promo,
     NOW()

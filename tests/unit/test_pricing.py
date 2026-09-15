@@ -21,7 +21,6 @@ def test_effective_price_returns_none_when_no_positive_price_exists():
 
 def test_effective_price_sql_uses_the_same_three_fact_columns():
     assert effective_price_sql("price") == (
-        "LEAST(NULLIF(price.precio_lista, 0), "
-        "NULLIF(price.precio_promo1, 0), "
-        "NULLIF(price.precio_promo2, 0))"
+        "pipeline_effective_price(price.precio_lista, "
+        "price.precio_promo1, price.precio_promo2)"
     )
