@@ -50,6 +50,7 @@ from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
 from etl.retention_policy import from_environment
+from etl.staging_retention import apply_staging_retention
 from etl.staging import loader as staging_loader
 
 # ---------------------------------------------------------------------------
@@ -330,6 +331,22 @@ def run(
             # must not incorrectly turn that successful ingestion into failed.
             conn.rollback()
             logger.exception("pipeline.fact_retention.failed")
+        try:
+            staging_retention_result = apply_staging_retention(
+                conn,
+                policy=retention_policy,
+                fecha_datos=dl.fecha_datos,
+            )
+            if staging_retention_result is not None:
+                logger.info(
+                    "pipeline.staging_retention.completed",
+                    cutoff=str(retention_policy.staging_cutoff(dl.fecha_datos)),
+                    run_ids=staging_retention_result.run_ids,
+                )
+        except Exception:
+            # Staging cleanup is independent from fact cleanup and publication.
+            conn.rollback()
+            logger.exception("pipeline.staging_retention.failed")
         return IngestionResult.completed(product_load.rows_fact)
 
     except Exception as exc:

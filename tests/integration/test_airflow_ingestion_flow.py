@@ -241,7 +241,15 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
         return _connect_to_fixture(pg_conn)
 
     original_run_all = cli_pipeline.quality_checks.run_all
+    staging_retention_calls = []
     monkeypatch.setattr(cli_pipeline, "_db_connect", connect)
+    monkeypatch.setattr(
+        cli_pipeline,
+        "apply_staging_retention",
+        lambda conn, *, policy, fecha_datos: staging_retention_calls.append(
+            (policy, fecha_datos)
+        ),
+    )
     monkeypatch.setattr(
         cli_pipeline.downloader,
         "download",
@@ -263,6 +271,7 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
 
     cli_result = cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
     assert cli_result.rows_loaded == 7
+    assert staging_retention_calls == [(cli_pipeline.from_environment(), _RUN_DATE)]
     with pg_conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
         assert cur.fetchone()[0] == 0
