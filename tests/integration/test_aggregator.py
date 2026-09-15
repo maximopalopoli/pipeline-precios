@@ -14,6 +14,12 @@ from etl.load.warehouse_loader import load as warehouse_load
 from etl.load.aggregator import AggResult, aggregate
 
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds" / "seed_provincias.sql"
+_BACKFILL_MIGRATION = (
+    Path(__file__).parent.parent.parent
+    / "db"
+    / "migrations"
+    / "017_backfill_effective_price_aggregates.sql"
+)
 
 RUN_DATE = date(2026, 3, 15)
 FECHA_ID = 20260315
@@ -213,6 +219,38 @@ class TestAggregate:
             )
             price = cur.fetchone()[0]
         assert float(price) == pytest.approx(93.33)
+
+    def test_backfill_recalculates_existing_effective_price_aggregates(self, pg_conn, run_id):
+        _load_all(
+            pg_conn,
+            run_id,
+            [
+                _producto(
+                    id_producto="AAA",
+                    precio=Decimal("100"),
+                    promo=Decimal("0"),
+                )
+            ],
+        )
+        aggregate(pg_conn, FECHA_ID)
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agg_precios_diarios
+                SET precio_promo_avg = 0
+                WHERE fecha_id = %s
+                """,
+                (FECHA_ID,),
+            )
+            cur.execute(_BACKFILL_MIGRATION.read_text())
+        pg_conn.commit()
+
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "SELECT precio_promo_avg FROM agg_precios_diarios WHERE fecha_id = %s",
+                (FECHA_ID,),
+            )
+            assert cur.fetchone()[0] == Decimal("100.00")
 
     def test_two_provinces_produce_two_rows(self, pg_conn, run_id):
         prods = [
