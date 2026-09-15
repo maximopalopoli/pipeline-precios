@@ -84,7 +84,10 @@ def publish_pending_facts(
         cur.execute(
             """
             UPDATE ingestion_runs
-               SET status = 'completed', finished_at = NOW(), rows_valid = %s
+               SET status = 'completed',
+                   finished_at = NOW(),
+                   rows_valid = %s,
+                   error_message = NULL
              WHERE id = %s
             """,
             (rows_valid, run_id),
