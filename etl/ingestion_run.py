@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
 
 import structlog
@@ -52,16 +53,58 @@ def should_process_raw_file(conn, raw_file_id: int) -> bool:
     return not has_completed_run(conn, raw_file_id)
 
 
-def open_ingestion_run(conn, raw_file_id: int) -> int:
-    """Create and commit a running ingestion record for *raw_file_id*."""
+def open_ingestion_run(
+    conn,
+    raw_file_id: int,
+    *,
+    fecha_solicitada: date | None = None,
+    fecha_logica: date | None = None,
+) -> int:
+    """Create a running record and persist the dates known at its opening.
+
+    Legacy callers may omit the dates; in that case the raw-file date supplies
+    both values.  Entrypoints should pass them explicitly so a future source
+    date discrepancy remains traceable.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO ingestion_runs (raw_file_id, status) VALUES (%s, 'running') RETURNING id",
-            (raw_file_id,),
+            """
+            INSERT INTO ingestion_runs (
+                raw_file_id, status, fecha_solicitada, fecha_logica
+            )
+            SELECT
+                id,
+                'running',
+                COALESCE(%s, fecha_datos),
+                COALESCE(%s, fecha_datos)
+            FROM raw_files
+            WHERE id = %s
+            RETURNING id
+            """,
+            (fecha_solicitada, fecha_logica, raw_file_id),
         )
-        run_id: int = cur.fetchone()[0]
+        row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"Raw file {raw_file_id} does not exist.")
+    run_id: int = row[0]
     conn.commit()
     return run_id
+
+
+def record_source_date(conn, run_id: int, fecha_fuente: date | None) -> None:
+    """Record the date declared by the source archive once it is available."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingestion_runs
+               SET fecha_fuente = %s
+             WHERE id = %s
+            """,
+            (fecha_fuente, run_id),
+        )
+        if cur.rowcount != 1:
+            raise ValueError(f"Ingestion run {run_id} does not exist.")
+    conn.commit()
 
 
 def mark_run_failed(conn, run_id: int, message: str) -> None:

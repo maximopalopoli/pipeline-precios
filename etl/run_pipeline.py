@@ -201,7 +201,12 @@ def run(
         )
 
         # ── 2. Open ingestion run ────────────────────────────────────────────
-        run_id = open_ingestion_run(conn, dl.raw_file_id)
+        run_id = open_ingestion_run(
+            conn,
+            dl.raw_file_id,
+            fecha_solicitada=fecha,
+            fecha_logica=fecha,
+        )
         logger = log.bind(run_id=run_id)
         logger.info("pipeline.run.opened", fecha=str(dl.fecha_datos))
 

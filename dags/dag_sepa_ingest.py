@@ -117,7 +117,8 @@ def download_zip(ds: str, **kwargs):
         raw_dir = Path(Variable.get("sepa_raw_dir", default_var="/opt/airflow/data"))
         raw_dir.mkdir(parents=True, exist_ok=True)
 
-        dl = downloader.download(conn, raw_dir, _run_date(ds))
+        fecha_logica = _run_date(ds)
+        dl = downloader.download(conn, raw_dir, fecha_logica)
 
         return {
             "raw_file_id": dl.raw_file_id,
@@ -126,6 +127,8 @@ def download_zip(ds: str, **kwargs):
             "sha256": dl.sha256,
             "size_bytes": dl.size_bytes,
             "fecha_datos": str(dl.fecha_datos),
+            "fecha_solicitada": str(dl.fecha_datos),
+            "fecha_logica": str(fecha_logica),
             "is_new": dl.is_new,
         }
     finally:
@@ -210,7 +213,20 @@ def load_staging(**kwargs):
     run_id: int | None = None
     try:
         _renew_ingestion_lock(conn, ti)
-        run_id = open_ingestion_run(conn, dl_info["raw_file_id"])
+        fecha_solicitada = dl_info.get("fecha_solicitada")
+        fecha_logica = dl_info.get("fecha_logica")
+        run_id = open_ingestion_run(
+            conn,
+            dl_info["raw_file_id"],
+            fecha_solicitada=(
+                date.fromisoformat(fecha_solicitada)
+                if fecha_solicitada is not None
+                else None
+            ),
+            fecha_logica=(
+                date.fromisoformat(fecha_logica) if fecha_logica is not None else None
+            ),
+        )
 
         # Load staging
         stg = staging_loader.load(
