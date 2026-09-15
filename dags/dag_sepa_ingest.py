@@ -48,6 +48,45 @@ def _mark_task_failure(conn, run_id: int, exc: Exception) -> None:
     mark_run_failed(conn, run_id, str(exc))
 
 
+def _lock_from_xcom(ti):
+    """Read the durable date reservation made by ``check_file_changed``."""
+    from etl.ingestion_lock import IngestionLock
+
+    data = ti.xcom_pull(task_ids="check_file_changed", key="ingestion_lock")
+    if data is None:
+        raise RuntimeError("Airflow ingestion lock is missing from XCom.")
+    return IngestionLock(
+        fecha_datos=date.fromisoformat(data["fecha_datos"]),
+        raw_file_id=data["raw_file_id"],
+        owner=data["owner"],
+        token=data["token"],
+        acquired_at=datetime.fromisoformat(data["acquired_at"]),
+    )
+
+
+def _release_ingestion_lock_on_failure(context) -> None:
+    """Release the date after Airflow exhausts a task's configured retries."""
+    from etl.ingestion_lock import IngestionLockOwnershipError, release_ingestion_lock
+
+    try:
+        lock = _lock_from_xcom(context["ti"])
+    except RuntimeError:
+        # Download/check failures occur before a date can have been reserved.
+        return
+
+    conn = _db_connect()
+    try:
+        release_ingestion_lock(conn, lock)
+        log.info("airflow.ingestion_lock.released_after_failure", fecha=str(lock.fecha_datos))
+    except IngestionLockOwnershipError:
+        log.warning(
+            "airflow.ingestion_lock.already_released_after_failure",
+            fecha=str(lock.fecha_datos),
+        )
+    finally:
+        conn.close()
+
+
 # ---------------------------------------------------------------------------
 # Task callables
 # ---------------------------------------------------------------------------
@@ -79,13 +118,33 @@ def download_zip(ds: str, **kwargs):
 
 def check_file_changed(**kwargs):
     """Short-circuit only files that have already been published successfully."""
+    from etl.ingestion_lock import acquire_ingestion_lock, release_ingestion_lock
     from etl.ingestion_run import should_process_raw_file
 
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
 
     conn = _db_connect()
+    lock = None
     try:
+        should_process = should_process_raw_file(conn, dl_info["raw_file_id"])
+        if not should_process:
+            log.info(
+                "download.duplicate_decision",
+                raw_file_id=dl_info["raw_file_id"],
+                is_new=dl_info["is_new"],
+                should_process=False,
+            )
+            return False
+
+        lock = acquire_ingestion_lock(
+            conn,
+            fecha_datos=date.fromisoformat(dl_info["fecha_datos"]),
+            raw_file_id=dl_info["raw_file_id"],
+            owner=f"airflow:{kwargs.get('run_id', 'unknown')}",
+        )
+        # A CLI execution could have published between the first check and the
+        # reservation. Do not start staging when that happened.
         should_process = should_process_raw_file(conn, dl_info["raw_file_id"])
         log.info(
             "download.duplicate_decision",
@@ -93,7 +152,26 @@ def check_file_changed(**kwargs):
             is_new=dl_info["is_new"],
             should_process=should_process,
         )
+        if not should_process:
+            release_ingestion_lock(conn, lock)
+            lock = None
+            return False
+
+        ti.xcom_push(
+            key="ingestion_lock",
+            value={
+                "fecha_datos": str(lock.fecha_datos),
+                "raw_file_id": lock.raw_file_id,
+                "owner": lock.owner,
+                "token": lock.token,
+                "acquired_at": lock.acquired_at.isoformat(),
+            },
+        )
         return should_process
+    except Exception:
+        if lock is not None:
+            release_ingestion_lock(conn, lock)
+        raise
     finally:
         conn.close()
 
@@ -244,6 +322,7 @@ def load_pending_fact_precios(**kwargs):
 
 def publish_daily_snapshot(**kwargs):
     """Atomically publish facts, aggregates and the completed run state."""
+    from etl.ingestion_lock import release_ingestion_lock
     from etl.load.publisher import publish_pending_facts
 
     ti = kwargs["ti"]
@@ -271,6 +350,8 @@ def publish_daily_snapshot(**kwargs):
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
         )
+        release_ingestion_lock(conn, _lock_from_xcom(ti))
+        log.info("airflow.ingestion_lock.released", fecha=str(fecha))
     except Exception as exc:
         _mark_task_failure(conn, run_id, exc)
         raise
@@ -286,6 +367,7 @@ default_args = {
     "retries": 2,
     "retry_delay": timedelta(minutes=15),
     "execution_timeout": timedelta(minutes=30),
+    "on_failure_callback": _release_ingestion_lock_on_failure,
 }
 
 with DAG(
