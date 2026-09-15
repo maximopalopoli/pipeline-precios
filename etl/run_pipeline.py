@@ -42,14 +42,14 @@ import structlog.dev
 
 from etl import alerting
 from etl.extract import downloader
-from etl.fact_retention import FactRetentionResult, purge_expired_fact_partitions
+from etl.fact_retention import apply_fact_retention
 from etl.ingestion_lock import IngestionLock, acquire_ingestion_lock, release_ingestion_lock
 from etl.ingestion_run import IngestionResult, open_ingestion_run, should_process_raw_file
 from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
-from etl.retention_policy import RetentionPolicy, from_environment
+from etl.retention_policy import from_environment
 from etl.staging import loader as staging_loader
 
 # ---------------------------------------------------------------------------
@@ -112,21 +112,6 @@ def _db_connect() -> psycopg2.extensions.connection:
         user=os.environ["POSTGRES_USER"],
         password=os.environ["POSTGRES_PASSWORD"],
     )
-
-
-def _apply_configured_fact_retention(
-    conn,
-    *,
-    policy: RetentionPolicy,
-    fecha_datos: date,
-) -> FactRetentionResult | None:
-    """Drop expired complete fact partitions only when retention is enabled."""
-    cutoff = policy.fact_cutoff(fecha_datos)
-    if cutoff is None:
-        return None
-    result = purge_expired_fact_partitions(conn, cutoff=cutoff, dry_run=False)
-    conn.commit()
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +314,7 @@ def run(
             elapsed_total=elapsed_total,
         )
         try:
-            retention_result = _apply_configured_fact_retention(
+            retention_result = apply_fact_retention(
                 conn,
                 policy=retention_policy,
                 fecha_datos=dl.fecha_datos,

@@ -8,6 +8,8 @@ from datetime import date
 
 import structlog
 
+from etl.retention_policy import RetentionPolicy
+
 log = structlog.get_logger(__name__)
 
 _PARTITION_NAME = re.compile(r"^fact_precios_(\d{4})(\d{2})$")
@@ -19,6 +21,25 @@ class FactRetentionResult:
 
     partitions: tuple[str, ...]
     dropped: bool
+
+
+def apply_fact_retention(
+    conn,
+    *,
+    policy: RetentionPolicy,
+    fecha_datos: date,
+) -> FactRetentionResult | None:
+    """Apply an enabled fact-retention policy after publication commits.
+
+    The caller owns the transaction.  This intentionally does nothing when
+    retention is disabled, keeping the destructive action opt-in.
+    """
+    cutoff = policy.fact_cutoff(fecha_datos)
+    if cutoff is None:
+        return None
+    result = purge_expired_fact_partitions(conn, cutoff=cutoff, dry_run=False)
+    conn.commit()
+    return result
 
 
 def find_expired_fact_partitions(conn, *, cutoff: date) -> tuple[str, ...]:

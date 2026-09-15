@@ -121,9 +121,14 @@ def check_file_changed(**kwargs):
     """Short-circuit only files that have already been published successfully."""
     from etl.ingestion_lock import acquire_ingestion_lock, release_ingestion_lock
     from etl.ingestion_run import should_process_raw_file
+    from etl.retention_policy import from_environment
 
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
+
+    # Fail before reserving the date if a destructive retention setting is
+    # malformed. Every task later reads the same process environment.
+    from_environment()
 
     conn = _db_connect()
     lock = None
@@ -324,8 +329,10 @@ def load_pending_fact_precios(**kwargs):
 
 def publish_daily_snapshot(**kwargs):
     """Atomically publish facts, aggregates and the completed run state."""
+    from etl.fact_retention import apply_fact_retention
     from etl.ingestion_lock import release_ingestion_lock
     from etl.load.publisher import publish_pending_facts
+    from etl.retention_policy import from_environment
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -352,6 +359,24 @@ def publish_daily_snapshot(**kwargs):
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
         )
+        try:
+            retention_policy = from_environment()
+            retention_result = apply_fact_retention(
+                conn,
+                policy=retention_policy,
+                fecha_datos=fecha,
+            )
+            if retention_result is not None:
+                log.info(
+                    "airflow.fact_retention.completed",
+                    cutoff=str(retention_policy.fact_cutoff(fecha)),
+                    partitions=retention_result.partitions,
+                )
+        except Exception:
+            # The snapshot is already committed. Do not report a successful
+            # publication as failed only because its best-effort cleanup fails.
+            conn.rollback()
+            log.exception("airflow.fact_retention.failed", run_id=run_id)
         release_ingestion_lock(conn, _lock_from_xcom(ti))
         log.info("airflow.ingestion_lock.released", fecha=str(fecha))
     except Exception as exc:

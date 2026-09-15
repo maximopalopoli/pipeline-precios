@@ -5,7 +5,7 @@ from datetime import date
 from etl.fact_retention import find_expired_fact_partitions, purge_expired_fact_partitions
 from etl.load.warehouse_loader import _ensure_partition
 from etl.retention_policy import RetentionPolicy
-from etl.run_pipeline import _apply_configured_fact_retention
+from etl.fact_retention import apply_fact_retention
 
 
 def _create_monthly_partitions(conn, *fecha_ids: int) -> None:
@@ -60,12 +60,12 @@ def test_explicit_non_dry_run_drops_only_expired_whole_partitions(pg_conn):
 def test_cli_retention_hook_applies_only_an_enabled_policy(pg_conn):
     _create_monthly_partitions(pg_conn, 20250101, 20250201)
 
-    disabled = _apply_configured_fact_retention(
+    disabled = apply_fact_retention(
         pg_conn,
         policy=RetentionPolicy(),
         fecha_datos=date(2025, 2, 15),
     )
-    enabled = _apply_configured_fact_retention(
+    enabled = apply_fact_retention(
         pg_conn,
         policy=RetentionPolicy(fact_retention_days=14),
         fecha_datos=date(2025, 2, 15),

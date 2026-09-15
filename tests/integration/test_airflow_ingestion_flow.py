@@ -13,6 +13,8 @@ import etl.ingestion_processing as ingestion_processing
 import etl.run_pipeline as cli_pipeline
 from etl.extract.downloader import DownloadResult
 from etl.ingestion_lock import IngestionLockBusyError, acquire_ingestion_lock
+from etl.load.publisher import PublicationResult
+from etl.load.warehouse_loader import _ensure_partition
 from etl.staging import loader as staging_loader
 
 _DAG_PATH = Path(__file__).parent.parent.parent / "dags" / "dag_sepa_ingest.py"
@@ -368,6 +370,50 @@ def test_cli_cannot_start_while_airflow_owns_the_same_date(
     retry_ti = _TaskInstance(airflow_ti.values)
     assert dag_module.check_file_changed(ti=retry_ti, run_id="manual__retry") is True
     dag_module._release_ingestion_lock_on_failure({"ti": retry_ti})
+
+
+def test_airflow_applies_enabled_retention_after_publication(
+    pg_conn, dag_module, monkeypatch
+):
+    raw_file_id = _create_raw_file(pg_conn, "airflow-retention.zip", "airflow-retention")
+    with pg_conn.cursor() as cur:
+        cur.execute("INSERT INTO ingestion_runs (raw_file_id) VALUES (%s) RETURNING id", (raw_file_id,))
+        run_id = cur.fetchone()[0]
+    _ensure_partition(pg_conn, 20250101)
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    monkeypatch.setattr(dag_module, "_db_connect", connect)
+    monkeypatch.setenv("SEPA_FACT_RETENTION_DAYS", "14")
+    monkeypatch.setattr(
+        "etl.load.publisher.publish_pending_facts",
+        lambda conn, **kwargs: PublicationResult(
+            run_id=kwargs["run_id"],
+            fecha_id=kwargs["fecha_id"],
+            rows_fact=0,
+            rows_aggregated=0,
+        ),
+    )
+    ti = _TaskInstance(
+        {
+            "load_staging": {"run_id": run_id},
+            "load_pending_fact_precios": {"rows_valid": 0},
+            "download_zip": {"fecha_datos": str(_RUN_DATE)},
+            "check_file_changed": {
+                "ingestion_lock": _airflow_lock_info(pg_conn, raw_file_id)
+            },
+        }
+    )
+
+    dag_module.publish_daily_snapshot(ti=ti)
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass('public.fact_precios_202501')")
+        assert cur.fetchone()[0] is None
+        cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
+        assert cur.fetchone()[0] == 0
 
 
 def test_airflow_marks_the_run_failed_when_dimension_loading_fails(
