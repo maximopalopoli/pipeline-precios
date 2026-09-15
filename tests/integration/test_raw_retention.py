@@ -45,6 +45,23 @@ def test_raw_retention_excludes_unresolved_runs(pg_conn, tmp_path):
     assert tuple(raw_file.id for raw_file in eligible) == (completed,)
 
 
+def test_raw_retention_accepts_a_file_recovered_after_a_failed_run(pg_conn):
+    raw_file_id = _create_raw_file(pg_conn, suffix="recovered", status="failed")
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO ingestion_runs (raw_file_id, status, finished_at)
+            VALUES (%s, 'completed', NOW())
+            """,
+            (raw_file_id,),
+        )
+    pg_conn.commit()
+
+    eligible = find_expired_raw_files(pg_conn, cutoff=date(2026, 2, 1))
+
+    assert tuple(raw_file.id for raw_file in eligible) == (raw_file_id,)
+
+
 def test_explicit_raw_purge_removes_only_eligible_local_zip_and_audits_it(pg_conn, tmp_path):
     completed = _create_raw_file(pg_conn, suffix="completed-delete", status="completed")
     failed = _create_raw_file(pg_conn, suffix="failed-keep", status="failed")

@@ -121,3 +121,32 @@ def release_ingestion_lock(conn, lock: IngestionLock) -> None:
             f"Ingestion lock for {lock.fecha_datos.isoformat()} is not owned by this run."
         )
     conn.commit()
+
+
+def renew_ingestion_lock(
+    conn,
+    lock: IngestionLock,
+    *,
+    lease: timedelta = DEFAULT_INGESTION_LOCK_LEASE,
+) -> IngestionLock:
+    """Extend a lock lease while preserving its owner token."""
+    if lease <= timedelta():
+        raise ValueError("Ingestion lock lease must be positive.")
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingestion_locks
+            SET expires_at = NOW() + %s
+            WHERE fecha_datos = %s AND token = %s::uuid
+            RETURNING fecha_datos, raw_file_id, owner, token::text, acquired_at, expires_at
+            """,
+            (lease, lock.fecha_datos, lock.token),
+        )
+        row = cur.fetchone()
+    if row is None:
+        conn.rollback()
+        raise IngestionLockOwnershipError(
+            f"Ingestion lock for {lock.fecha_datos.isoformat()} is not owned by this run."
+        )
+    conn.commit()
+    return IngestionLock(*row)

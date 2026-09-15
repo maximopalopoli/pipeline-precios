@@ -43,7 +43,12 @@ import structlog.dev
 from etl import alerting
 from etl.extract import downloader
 from etl.fact_retention import apply_fact_retention
-from etl.ingestion_lock import IngestionLock, acquire_ingestion_lock, release_ingestion_lock
+from etl.ingestion_lock import (
+    IngestionLock,
+    acquire_ingestion_lock,
+    release_ingestion_lock,
+    renew_ingestion_lock,
+)
 from etl.ingestion_run import IngestionResult, open_ingestion_run, should_process_raw_file
 from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
 from etl.load.publisher import publish_pending_facts
@@ -202,7 +207,13 @@ def run(
         logger.info("pipeline.stage.start", stage="staging")
         t2 = time.perf_counter()
 
-        stg = staging_loader.load(conn, dl.path, run_id)
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
+        stg = staging_loader.load(
+            conn,
+            dl.path,
+            run_id,
+            heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
+        )
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
 
@@ -220,6 +231,7 @@ def run(
         logger.info("pipeline.stage.start", stage="quality")
         t3 = time.perf_counter()
 
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         check_results: list[quality_checks.CheckResult] = []
         try:
             check_results = quality_checks.run_all(conn, run_id)
@@ -253,6 +265,7 @@ def run(
         logger.info("pipeline.stage.start", stage="dimensions")
         t5 = time.perf_counter()
 
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         dimensions = load_staged_dimensions(conn, run_id)
         conn.commit()
 
@@ -272,11 +285,13 @@ def run(
         logger.info("pipeline.stage.start", stage="fact_load")
         t6 = time.perf_counter()
 
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         product_load = stream_pending_product_facts(
             conn,
             _db_connect,
             run_id=run_id,
             run_date=dl.fecha_datos,
+            heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
         )
         conn.commit()
 
@@ -292,6 +307,7 @@ def run(
         logger.info("pipeline.stage.start", stage="publication")
         t7 = time.perf_counter()
 
+        ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         publication = publish_pending_facts(
             conn,
             run_id=run_id,

@@ -10,6 +10,7 @@ from etl.ingestion_lock import (
     IngestionLockOwnershipError,
     acquire_ingestion_lock,
     release_ingestion_lock,
+    renew_ingestion_lock,
 )
 
 
@@ -97,8 +98,30 @@ def test_only_the_owner_token_can_release_a_lock(pg_conn):
     release_ingestion_lock(pg_conn, lock)
 
 
-def test_expired_lock_can_be_recovered_by_a_later_retry(pg_conn):
+def test_owner_can_renew_a_lock_lease(pg_conn):
     fecha_datos = date(2026, 3, 20)
+    raw_file_id = _create_raw_file(pg_conn, "lock-renew", fecha_datos)
+    lock = acquire_ingestion_lock(
+        pg_conn,
+        fecha_datos=fecha_datos,
+        raw_file_id=raw_file_id,
+        owner="cli",
+        lease=timedelta(seconds=1),
+    )
+
+    renewed_lock = renew_ingestion_lock(
+        pg_conn,
+        lock,
+        lease=timedelta(hours=1),
+    )
+
+    assert renewed_lock.token == lock.token
+    assert renewed_lock.expires_at > lock.expires_at
+    release_ingestion_lock(pg_conn, renewed_lock)
+
+
+def test_expired_lock_can_be_recovered_by_a_later_retry(pg_conn):
+    fecha_datos = date(2026, 3, 21)
     first_raw_file_id = _create_raw_file(pg_conn, "lock-expired-first", fecha_datos)
     second_raw_file_id = _create_raw_file(pg_conn, "lock-expired-second", fecha_datos)
     first_lock = acquire_ingestion_lock(
@@ -124,7 +147,7 @@ def test_expired_lock_can_be_recovered_by_a_later_retry(pg_conn):
 
 
 def test_lock_lease_must_be_positive(pg_conn):
-    fecha_datos = date(2026, 3, 21)
+    fecha_datos = date(2026, 3, 22)
     raw_file_id = _create_raw_file(pg_conn, "lock-invalid-lease", fecha_datos)
 
     with pytest.raises(ValueError, match="must be positive"):

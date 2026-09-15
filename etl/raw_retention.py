@@ -38,16 +38,13 @@ def find_expired_raw_files(conn, *, cutoff: date) -> tuple[RawFile, ...]:
             SELECT raw.id, raw.filename
             FROM raw_files raw
             WHERE raw.fecha_datos < %s
-              AND EXISTS (
-                  SELECT 1 FROM ingestion_runs completed
-                  WHERE completed.raw_file_id = raw.id
-                    AND completed.status = 'completed'
-              )
-              AND NOT EXISTS (
-                  SELECT 1 FROM ingestion_runs unresolved
-                  WHERE unresolved.raw_file_id = raw.id
-                    AND unresolved.status IN ('running', 'failed')
-              )
+              AND (
+                  SELECT latest.status
+                  FROM ingestion_runs latest
+                  WHERE latest.raw_file_id = raw.id
+                  ORDER BY latest.started_at DESC, latest.id DESC
+                  LIMIT 1
+              ) = 'completed'
             ORDER BY raw.id
             """,
             (cutoff,),

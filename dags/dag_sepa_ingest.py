@@ -88,6 +88,18 @@ def _release_ingestion_lock_on_failure(context) -> None:
         conn.close()
 
 
+def _renew_ingestion_lock(conn, ti) -> None:
+    """Refresh the lock at task boundaries and during product streaming."""
+    from etl.ingestion_lock import renew_ingestion_lock
+
+    try:
+        lock = _lock_from_xcom(ti)
+    except RuntimeError:
+        # Direct callable tests and pre-lock failures have no reservation.
+        return
+    renew_ingestion_lock(conn, lock)
+
+
 # ---------------------------------------------------------------------------
 # Task callables
 # ---------------------------------------------------------------------------
@@ -194,10 +206,16 @@ def load_staging(**kwargs):
     conn = _db_connect()
     run_id: int | None = None
     try:
+        _renew_ingestion_lock(conn, ti)
         run_id = open_ingestion_run(conn, dl_info["raw_file_id"])
 
         # Load staging
-        stg = staging_loader.load(conn, Path(dl_info["path"]), run_id)
+        stg = staging_loader.load(
+            conn,
+            Path(dl_info["path"]),
+            run_id,
+            heartbeat=lambda: _renew_ingestion_lock(conn, ti),
+        )
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
 
@@ -234,6 +252,7 @@ def run_quality_checks(**kwargs):
 
     conn = _db_connect()
     try:
+        _renew_ingestion_lock(conn, ti)
         try:
             check_results = quality_checks.run_all(conn, run_id)
         except quality_checks.QualityCheckError as exc:
@@ -269,6 +288,7 @@ def load_dimensions(**kwargs):
 
     conn = _db_connect()
     try:
+        _renew_ingestion_lock(conn, ti)
         result = load_staged_dimensions(conn, run_id)
         conn.commit()
         log.info(
@@ -302,11 +322,13 @@ def load_pending_fact_precios(**kwargs):
 
     conn = _db_connect()
     try:
+        _renew_ingestion_lock(conn, ti)
         result = stream_pending_product_facts(
             conn,
             _db_connect,
             run_id=run_id,
             run_date=run_date,
+            heartbeat=lambda: _renew_ingestion_lock(conn, ti),
         )
         conn.commit()
         log.info(
@@ -347,6 +369,7 @@ def publish_daily_snapshot(**kwargs):
 
     conn = _db_connect()
     try:
+        _renew_ingestion_lock(conn, ti)
         publication = publish_pending_facts(
             conn,
             run_id=run_id,

@@ -40,6 +40,7 @@ def test_streaming_product_processing_loads_pending_facts_in_chunks(pg_conn, sam
     dimensions = load_staged_dimensions(pg_conn, run_id)
     pg_conn.commit()
 
+    heartbeats: list[None] = []
     result = stream_pending_product_facts(
         pg_conn,
         lambda: psycopg.connect(
@@ -51,6 +52,7 @@ def test_streaming_product_processing_loads_pending_facts_in_chunks(pg_conn, sam
         run_id=run_id,
         run_date=_RUN_DATE,
         chunk_size=2,
+        heartbeat=lambda: heartbeats.append(None),
     )
     pg_conn.commit()
 
@@ -61,6 +63,7 @@ def test_streaming_product_processing_loads_pending_facts_in_chunks(pg_conn, sam
     assert result.chunks == 4
     assert result.rows_valid == 7
     assert result.rows_fact == 7
+    assert len(heartbeats) == result.chunks
     with pg_conn.cursor() as cur:
         cur.execute("SELECT rows_loaded FROM ingestion_runs WHERE id = %s", (run_id,))
         assert cur.fetchone()[0] == 7

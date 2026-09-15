@@ -95,13 +95,15 @@ def stream_pending_product_facts(
     run_id: int,
     run_date: date,
     chunk_size: int = PRODUTO_CHUNK_SIZE,
+    heartbeat: Callable[[], None] | None = None,
 ) -> ProductLoadResult:
     """Build and load a run's pending facts without materializing all products.
 
     Dimensions must already be populated.  A read connection streams staging
     rows while a separate write connection commits each pending-fact chunk;
     those provisional rows cannot become visible to consumers until the caller
-    publishes the run atomically.
+    publishes the run atomically. ``heartbeat`` runs once per processed chunk
+    when supplied.
     """
     fecha_id, comercio_cache, sucursal_cache, producto_cache = build_sk_caches(
         conn, run_date
@@ -116,6 +118,8 @@ def stream_pending_product_facts(
 
     try:
         for chunk_df in iter_staged_products(conn_read, run_id, chunk_size):
+            if heartbeat is not None:
+                heartbeat()
             chunks += 1
             clean_result = clean_productos(chunk_df)
             rows_valid += len(clean_result.clean)

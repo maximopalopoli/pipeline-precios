@@ -511,7 +511,7 @@ def test_airflow_marks_a_new_run_failed_when_staging_fails(
     def connect():
         return _connect_to_fixture(pg_conn)
 
-    def fail_staging_load(conn, zip_path, run_id):
+    def fail_staging_load(conn, zip_path, run_id, heartbeat=None):
         raise RuntimeError("staging load failed")
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)
@@ -575,7 +575,7 @@ def test_airflow_marks_the_run_failed_when_pending_fact_loading_fails(
     def connect():
         return _connect_to_fixture(pg_conn)
 
-    def fail_fact_load(conn, connect, *, run_id, run_date):
+    def fail_fact_load(conn, connect, *, run_id, run_date, heartbeat=None):
         raise RuntimeError("pending fact load failed")
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)
