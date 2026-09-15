@@ -49,6 +49,7 @@ from etl.ingestion_processing import load_staged_dimensions, stream_pending_prod
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
+from etl.raw_retention import apply_raw_retention
 from etl.retention_policy import from_environment
 from etl.staging_retention import apply_staging_retention
 from etl.staging import loader as staging_loader
@@ -347,6 +348,24 @@ def run(
             # Staging cleanup is independent from fact cleanup and publication.
             conn.rollback()
             logger.exception("pipeline.staging_retention.failed")
+        try:
+            raw_retention_result = apply_raw_retention(
+                conn,
+                raw_dir=raw_dir,
+                policy=retention_policy,
+                fecha_datos=dl.fecha_datos,
+            )
+            if raw_retention_result is not None:
+                logger.info(
+                    "pipeline.raw_retention.completed",
+                    cutoff=str(retention_policy.raw_cutoff(dl.fecha_datos)),
+                    deleted_file_ids=raw_retention_result.deleted_file_ids,
+                    missing_file_ids=raw_retention_result.missing_file_ids,
+                )
+        except Exception:
+            # ZIP cleanup is last and must not affect the published snapshot.
+            conn.rollback()
+            logger.exception("pipeline.raw_retention.failed")
         return IngestionResult.completed(product_load.rows_fact)
 
     except Exception as exc:
