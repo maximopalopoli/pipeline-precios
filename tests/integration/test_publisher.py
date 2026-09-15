@@ -158,6 +158,42 @@ def test_publish_replaces_the_full_daily_snapshot(pg_conn, seed_data):
         assert cur.fetchone()[0] == 0
 
 
+def test_successful_retry_clears_a_previous_failure_message(pg_conn, seed_data):
+    run_id = _create_run(pg_conn, "retried-run.zip")
+    _insert_pending_fact(
+        pg_conn,
+        run_id=run_id,
+        producto_sk=seed_data["productos"]["AAA"],
+        sucursal_sk=seed_data["sucursal_sk"],
+        price=Decimal("125.00"),
+    )
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingestion_runs
+               SET status = 'failed', finished_at = NOW(), error_message = 'temporary failure'
+             WHERE id = %s
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+
+    publisher.publish_pending_facts(
+        pg_conn,
+        run_id=run_id,
+        fecha_id=FECHA_ID,
+        rows_valid=1,
+    )
+    pg_conn.commit()
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, error_message FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        assert cur.fetchone() == ("completed", None)
+
+
 def test_failed_publication_keeps_the_previous_snapshot(pg_conn, seed_data, monkeypatch):
     _seed_published_day(pg_conn, seed_data)
     pending_run_id = _create_run(pg_conn, "failed-rectification.zip")

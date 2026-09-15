@@ -2,9 +2,35 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import StrEnum
+
 import structlog
 
 log = structlog.get_logger(__name__)
+
+
+class IngestionOutcome(StrEnum):
+    """Terminal non-error outcomes exposed by an ingestion entrypoint."""
+
+    COMPLETED = "completed"
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True)
+class IngestionResult:
+    """Result of an ingestion that completed without an operational failure."""
+
+    outcome: IngestionOutcome
+    rows_loaded: int = 0
+
+    @classmethod
+    def completed(cls, rows_loaded: int) -> IngestionResult:
+        return cls(outcome=IngestionOutcome.COMPLETED, rows_loaded=rows_loaded)
+
+    @classmethod
+    def skipped(cls) -> IngestionResult:
+        return cls(outcome=IngestionOutcome.SKIPPED)
 
 
 def has_completed_run(conn, raw_file_id: int) -> bool:
