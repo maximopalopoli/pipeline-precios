@@ -66,6 +66,9 @@ class TestRectifiedFileDetected:
         assert r1.is_new is True
         assert r2.is_new is True
         assert r1.raw_file_id != r2.raw_file_id
+        assert r1.path != r2.path
+        assert r1.path.read_bytes() == _ZIP_V1
+        assert r2.path.read_bytes() == _ZIP_V2
 
     def test_two_raw_file_rows_for_same_date(self, pg_conn, tmp_path):
         """raw_files must contain two distinct rows for the same fecha_datos."""
@@ -108,6 +111,8 @@ class TestRectifiedFileDetected:
 
         assert r3.is_new is False
         assert r3.raw_file_id == r1.raw_file_id
+        assert r3.path == r1.path
+        assert r3.path.read_bytes() == _ZIP_V1
         # Still only 2 distinct files in the DB
         assert _count_raw_files(pg_conn) == 2
 
