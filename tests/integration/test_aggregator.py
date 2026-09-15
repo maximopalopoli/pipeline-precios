@@ -14,6 +14,12 @@ from etl.load.warehouse_loader import load as warehouse_load
 from etl.load.aggregator import AggResult, aggregate
 
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds" / "seed_provincias.sql"
+_BACKFILL_MIGRATION = (
+    Path(__file__).parent.parent.parent
+    / "db"
+    / "migrations"
+    / "017_backfill_effective_price_aggregates.sql"
+)
 
 RUN_DATE = date(2026, 3, 15)
 FECHA_ID = 20260315
@@ -78,7 +84,13 @@ def _sucursal(id_sucursal=10, provincia="AR-C") -> SucursalRow:
     )
 
 
-def _producto(id_producto="7790001234567", id_sucursal=10, precio=Decimal("100.00"), promo=None) -> ProductoRow:
+def _producto(
+    id_producto="7790001234567",
+    id_sucursal=10,
+    precio=Decimal("100.00"),
+    promo=None,
+    promo2=None,
+) -> ProductoRow:
     return ProductoRow(
         id_comercio=1, id_bandera=2, id_sucursal=id_sucursal,
         id_producto=id_producto, es_ean=True,
@@ -91,9 +103,9 @@ def _producto(id_producto="7790001234567", id_sucursal=10, precio=Decimal("100.0
         productos_unidad_medida_referencia="L",
         productos_precio_unitario_promo1=promo,
         productos_leyenda_promo1="2x1" if promo else None,
-        productos_precio_unitario_promo2=None,
-        productos_leyenda_promo2=None,
-        tiene_promo=promo is not None,
+        productos_precio_unitario_promo2=promo2,
+        productos_leyenda_promo2="Promo 2" if promo2 else None,
+        tiene_promo=promo is not None or promo2 is not None,
     )
 
 
@@ -188,6 +200,57 @@ class TestAggregate:
         assert row[0] == 1
         # promo_avg = LEAST(80, 100) + LEAST(100, 100) / 2 = (80 + 100) / 2 = 90
         assert float(row[1]) == pytest.approx(90.0)
+
+    def test_promo_average_ignores_zero_and_prices_higher_than_list(self, pg_conn, run_id):
+        prods = [
+            _producto(id_producto="AAA", id_sucursal=10, precio=Decimal("100"), promo=Decimal("0")),
+            _producto(id_producto="AAA", id_sucursal=20, precio=Decimal("100"), promo2=Decimal("200")),
+            _producto(id_producto="AAA", id_sucursal=30, precio=Decimal("100"), promo=Decimal("80")),
+        ]
+        suc = [_sucursal(id_sucursal=10), _sucursal(id_sucursal=20), _sucursal(id_sucursal=30)]
+        _load_all(pg_conn, run_id, prods, sucursales=suc)
+        aggregate(pg_conn, FECHA_ID)
+        pg_conn.commit()
+
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "SELECT precio_promo_avg FROM agg_precios_diarios WHERE fecha_id = %s",
+                (FECHA_ID,),
+            )
+            price = cur.fetchone()[0]
+        assert float(price) == pytest.approx(93.33)
+
+    def test_backfill_recalculates_existing_effective_price_aggregates(self, pg_conn, run_id):
+        _load_all(
+            pg_conn,
+            run_id,
+            [
+                _producto(
+                    id_producto="AAA",
+                    precio=Decimal("100"),
+                    promo=Decimal("0"),
+                )
+            ],
+        )
+        aggregate(pg_conn, FECHA_ID)
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE agg_precios_diarios
+                SET precio_promo_avg = 0
+                WHERE fecha_id = %s
+                """,
+                (FECHA_ID,),
+            )
+            cur.execute(_BACKFILL_MIGRATION.read_text())
+        pg_conn.commit()
+
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "SELECT precio_promo_avg FROM agg_precios_diarios WHERE fecha_id = %s",
+                (FECHA_ID,),
+            )
+            assert cur.fetchone()[0] == Decimal("100.00")
 
     def test_two_provinces_produce_two_rows(self, pg_conn, run_id):
         prods = [

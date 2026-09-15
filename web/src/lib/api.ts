@@ -29,8 +29,18 @@ export interface HealthData {
 export const fetchHealth = () => api.get<HealthData>('/health').then(r => r.data);
 
 // ── KPIs ──
+export interface WeeklyVariation {
+  valor: number | null;
+  fecha_inicio: string | null;
+  fecha_fin: string | null;
+  series_comparadas: number;
+  metodologia: string;
+}
+
 export interface KpiData {
+  /** @deprecated Use variacion_semanal.valor instead. */
   inflacion_semanal: number | null;
+  variacion_semanal: WeeklyVariation;
   total_productos: number;
   total_sucursales: number;
   pct_promo: number | null;

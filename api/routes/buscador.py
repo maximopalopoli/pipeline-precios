@@ -3,13 +3,11 @@
 from fastapi import APIRouter, Query
 
 from api.db import fetch
+from api.pricing import effective_price_sql
 
 router = APIRouter()
 
-BEST_PRICE = (
-    "COALESCE(LEAST(NULLIF(f.precio_promo1, 0), "
-    "NULLIF(f.precio_promo2, 0)), f.precio_lista)"
-)
+BEST_PRICE = effective_price_sql()
 
 
 def _distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

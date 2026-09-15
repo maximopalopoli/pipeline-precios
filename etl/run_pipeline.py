@@ -43,13 +43,19 @@ import structlog.dev
 from etl import alerting
 from etl.extract import downloader
 from etl.fact_retention import apply_fact_retention
+from etl.ingestion_date import resolve_ingestion_date
 from etl.ingestion_lock import (
     IngestionLock,
     acquire_ingestion_lock,
     release_ingestion_lock,
     renew_ingestion_lock,
 )
-from etl.ingestion_run import IngestionResult, open_ingestion_run, should_process_raw_file
+from etl.ingestion_run import (
+    IngestionResult,
+    open_ingestion_run,
+    record_source_date,
+    should_process_raw_file,
+)
 from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
@@ -58,6 +64,7 @@ from etl.raw_retention import apply_raw_retention
 from etl.retention_policy import from_environment
 from etl.staging_retention import apply_staging_retention
 from etl.staging import loader as staging_loader
+from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -131,7 +138,7 @@ def run(
     raw_dir: Path | None = None,
 ) -> IngestionResult:
     """
-    Execute the full pipeline for *fecha* (defaults to today).
+    Execute the full pipeline for *fecha* (defaults to today in Argentina).
 
     Returns an explicit completed or skipped result. Raises on unexpected
     errors after marking the run as failed.
@@ -139,6 +146,7 @@ def run(
     raw_dir = raw_dir or Path("data")
     raw_dir.mkdir(parents=True, exist_ok=True)
     retention_policy = from_environment()
+    fecha = resolve_ingestion_date(fecha)
 
     conn = _db_connect()
     t0 = time.perf_counter()
@@ -199,9 +207,21 @@ def run(
         )
 
         # ── 2. Open ingestion run ────────────────────────────────────────────
-        run_id = open_ingestion_run(conn, dl.raw_file_id)
+        run_id = open_ingestion_run(
+            conn,
+            dl.raw_file_id,
+            fecha_solicitada=fecha,
+            fecha_logica=fecha,
+        )
         logger = log.bind(run_id=run_id)
         logger.info("pipeline.run.opened", fecha=str(dl.fecha_datos))
+
+        fecha_fuente = inspect_source_archive_date(str(dl.path))
+        record_source_date(conn, run_id, fecha_fuente)
+        validate_source_archive_date(
+            fecha_logica=fecha,
+            fecha_fuente=fecha_fuente,
+        )
 
         # ── 3. Staging ───────────────────────────────────────────────────────
         logger.info("pipeline.stage.start", stage="staging")
@@ -424,7 +444,7 @@ def main() -> None:
         type=date.fromisoformat,
         default=None,
         metavar="YYYY-MM-DD",
-        help="Date to process (defaults to today).",
+        help="Date to process (defaults to today in America/Argentina/Buenos_Aires).",
     )
     parser.add_argument(
         "--raw-dir",

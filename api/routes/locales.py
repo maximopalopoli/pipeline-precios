@@ -7,13 +7,11 @@ from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from geopy.geocoders import Nominatim
 
 from api.db import fetch, fetchrow
+from api.pricing import effective_price_sql
 
 router = APIRouter()
 
-BEST_PRICE = (
-    "COALESCE(LEAST(NULLIF(f.precio_promo1, 0), "
-    "NULLIF(f.precio_promo2, 0)), f.precio_lista)"
-)
+BEST_PRICE = effective_price_sql()
 
 
 @lru_cache(maxsize=256)
@@ -130,6 +128,7 @@ async def get_store_promos(sucursal_sk: int):
         WHERE f.sucursal_sk = $1
           AND f.fecha_id = $2
           AND f.tiene_promo = TRUE
+          AND {BEST_PRICE} < f.precio_lista
         ORDER BY descuento_pct DESC
         LIMIT 10
         """,

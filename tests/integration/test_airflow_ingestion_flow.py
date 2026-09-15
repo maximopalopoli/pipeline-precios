@@ -11,6 +11,7 @@ import pytest
 
 import etl.ingestion_processing as ingestion_processing
 import etl.run_pipeline as cli_pipeline
+import etl.source_archive as source_archive
 from etl.extract.downloader import DownloadResult
 from etl.ingestion_lock import IngestionLockBusyError, acquire_ingestion_lock
 from etl.load.publisher import PublicationResult
@@ -20,7 +21,7 @@ from etl.staging import loader as staging_loader
 
 _DAG_PATH = Path(__file__).parent.parent.parent / "dags" / "dag_sepa_ingest.py"
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds"
-_RUN_DATE = date(2026, 3, 15)
+_RUN_DATE = date(2026, 3, 17)
 
 
 class _Task:
@@ -102,7 +103,9 @@ def _create_run(conn) -> int:
         return cur.fetchone()[0]
 
 
-def _create_raw_file(conn, filename: str, sha256: str) -> int:
+def _create_raw_file(
+    conn, filename: str, sha256: str, fecha_datos: date = _RUN_DATE
+) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -110,7 +113,7 @@ def _create_raw_file(conn, filename: str, sha256: str) -> int:
             VALUES (%s, 'http://example.test/data.zip', %s, 1, %s)
             RETURNING id
             """,
-            (filename, sha256, _RUN_DATE),
+            (filename, sha256, fecha_datos),
         )
         return cur.fetchone()[0]
 
@@ -516,6 +519,9 @@ def test_airflow_marks_a_new_run_failed_when_staging_fails(
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)
     monkeypatch.setattr(staging_loader, "load", fail_staging_load)
+    monkeypatch.setattr(
+        source_archive, "inspect_source_archive_date", lambda path: _RUN_DATE
+    )
     ti = _TaskInstance({"download_zip": {"raw_file_id": raw_file_id, "path": "/tmp/data.zip"}})
 
     with pytest.raises(RuntimeError, match="staging load failed"):
@@ -531,6 +537,53 @@ def test_airflow_marks_a_new_run_failed_when_staging_fails(
             (raw_file_id,),
         )
         assert cur.fetchone() == ("failed", True, "staging load failed")
+
+
+def test_airflow_marks_source_date_mismatch_failed_and_keeps_audit_dates(
+    pg_conn, sample_zip_path, dag_module, monkeypatch
+):
+    requested_date = date(2026, 3, 16)
+    raw_file_id = _create_raw_file(
+        pg_conn,
+        "source-date-mismatch.zip",
+        "source-date-mismatch-airflow",
+        fecha_datos=requested_date,
+    )
+    pg_conn.commit()
+
+    monkeypatch.setattr(
+        dag_module, "_db_connect", lambda: _connect_to_fixture(pg_conn)
+    )
+    ti = _TaskInstance(
+        {
+            "download_zip": {
+                "raw_file_id": raw_file_id,
+                "path": str(sample_zip_path),
+                "fecha_datos": str(requested_date),
+                "fecha_solicitada": str(requested_date),
+                "fecha_logica": str(requested_date),
+            }
+        }
+    )
+
+    with pytest.raises(ValueError, match="does not match logical ingestion date"):
+        dag_module.load_staging(ti=ti)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT status, fecha_solicitada, fecha_logica, fecha_fuente
+            FROM ingestion_runs
+            WHERE raw_file_id = %s
+            """,
+            (raw_file_id,),
+        )
+        assert cur.fetchone() == (
+            "failed",
+            requested_date,
+            requested_date,
+            date(2026, 3, 17),
+        )
 
 
 def test_airflow_keeps_structured_quality_failure_details(

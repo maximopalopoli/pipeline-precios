@@ -21,6 +21,13 @@ const NAV_CARDS = [
 export function Home() {
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: fetchHealth });
   const { data: kpis, isLoading } = useQuery({ queryKey: ['kpis'], queryFn: fetchKpis });
+  const weeklyVariation = kpis?.variacion_semanal;
+  const weeklyPeriod = weeklyVariation?.fecha_inicio && weeklyVariation.fecha_fin
+    ? `${weeklyVariation.fecha_inicio} a ${weeklyVariation.fecha_fin}`
+    : null;
+  const weeklyCoverage = weeklyPeriod && weeklyVariation
+    ? `${weeklyPeriod} · ${weeklyVariation.series_comparadas} series comparadas`
+    : 'Sin período comparable';
 
   return (
     <div className="space-y-6">
@@ -44,9 +51,10 @@ export function Home() {
         ) : kpis ? (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <KpiCard
-              label="Variacion semanal prom."
-              value={kpis.inflacion_semanal != null ? `${kpis.inflacion_semanal > 0 ? '+' : ''}${kpis.inflacion_semanal}%` : '—'}
-              deltaColor={kpis.inflacion_semanal != null ? (kpis.inflacion_semanal > 0 ? 'red' : 'green') : 'neutral'}
+              label="Variación semanal promedio"
+              value={weeklyVariation?.valor != null ? `${weeklyVariation.valor > 0 ? '+' : ''}${weeklyVariation.valor}%` : '—'}
+              delta={weeklyCoverage}
+              deltaColor={weeklyVariation?.valor != null ? (weeklyVariation.valor > 0 ? 'red' : 'green') : 'neutral'}
             />
             <KpiCard label="Productos" value={kpis.total_productos.toLocaleString()} />
             <KpiCard label="Sucursales" value={kpis.total_sucursales.toLocaleString()} />

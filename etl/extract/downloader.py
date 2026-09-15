@@ -16,6 +16,8 @@ import psycopg2
 import requests
 import structlog
 
+from etl.ingestion_date import resolve_ingestion_date
+
 log = structlog.get_logger(__name__)
 
 # ── Resource IDs (one ZIP per weekday, overwritten weekly by the source) ──────
@@ -86,14 +88,13 @@ def download(
     raw_dir:
         Directory where the ZIP will be stored.
     fecha:
-        Date to download. Defaults to today (UTC-3 is fine for scheduling).
+        Date to download. Defaults to the current calendar day in Argentina.
 
     Returns
     -------
     DownloadResult with is_new=False when the file was already downloaded.
     """
-    if fecha is None:
-        fecha = date.today()
+    fecha = resolve_ingestion_date(fecha)
 
     weekday = fecha.weekday()  # 0=Monday … 6=Sunday
     resource_id = RESOURCE_IDS[weekday]
