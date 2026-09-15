@@ -70,3 +70,5 @@ def test_explicit_staging_purge_removes_only_expired_terminal_run_data(pg_conn):
         assert cur.fetchone()[0] is None
         cur.execute("SELECT to_regclass(%s)", (f"public.stg_productos_{recent}",))
         assert cur.fetchone()[0] == f"stg_productos_{recent}"
+        cur.execute("SELECT kind, cutoff, targets FROM retention_events")
+        assert cur.fetchone() == ("staging_runs", date(2026, 3, 1), [expired])

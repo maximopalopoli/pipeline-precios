@@ -55,6 +55,12 @@ def test_explicit_non_dry_run_drops_only_expired_whole_partitions(pg_conn):
         assert cur.fetchone()[0] is None
         cur.execute("SELECT to_regclass('public.fact_precios_202502')")
         assert cur.fetchone()[0] == "fact_precios_202502"
+        cur.execute("SELECT kind, cutoff, targets FROM retention_events")
+        assert cur.fetchone() == (
+            "fact_partitions",
+            date(2025, 2, 1),
+            ["fact_precios_202501"],
+        )
 
 
 def test_cli_retention_hook_applies_only_an_enabled_policy(pg_conn):

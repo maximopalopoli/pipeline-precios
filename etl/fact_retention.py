@@ -9,6 +9,7 @@ from datetime import date
 import structlog
 
 from etl.retention_policy import RetentionPolicy
+from etl.retention_audit import record_retention_event
 
 log = structlog.get_logger(__name__)
 
@@ -92,6 +93,12 @@ def purge_expired_fact_partitions(
                 raise ValueError(f"Unexpected fact partition name: {partition}")
             cur.execute(f"DROP TABLE {partition}")
 
+    record_retention_event(
+        conn,
+        kind="fact_partitions",
+        cutoff=cutoff,
+        targets=partitions,
+    )
     result = FactRetentionResult(partitions=partitions, dropped=True)
     log.info("retention.fact_partitions_dropped", cutoff=str(cutoff), **result.__dict__)
     return result

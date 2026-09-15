@@ -8,6 +8,7 @@ from datetime import date
 import structlog
 
 from etl.retention_policy import RetentionPolicy
+from etl.retention_audit import record_retention_event
 
 log = structlog.get_logger(__name__)
 
@@ -81,6 +82,12 @@ def purge_expired_staging_runs(
                 cur.execute(f"DROP TABLE {partition_name}")
                 dropped_product_partitions += 1
 
+    record_retention_event(
+        conn,
+        kind="staging_runs",
+        cutoff=cutoff,
+        targets=run_ids,
+    )
     result = StagingRetentionResult(
         run_ids,
         rows_comercios,
