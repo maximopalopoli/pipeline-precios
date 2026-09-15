@@ -128,6 +128,7 @@ async def get_store_promos(sucursal_sk: int):
         WHERE f.sucursal_sk = $1
           AND f.fecha_id = $2
           AND f.tiene_promo = TRUE
+          AND {BEST_PRICE} < f.precio_lista
         ORDER BY descuento_pct DESC
         LIMIT 10
         """,
