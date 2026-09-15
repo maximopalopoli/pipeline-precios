@@ -333,6 +333,7 @@ def publish_daily_snapshot(**kwargs):
     from etl.ingestion_lock import release_ingestion_lock
     from etl.load.publisher import publish_pending_facts
     from etl.retention_policy import from_environment
+    from etl.staging_retention import apply_staging_retention
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -359,6 +360,7 @@ def publish_daily_snapshot(**kwargs):
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
         )
+        retention_policy = None
         try:
             retention_policy = from_environment()
             retention_result = apply_fact_retention(
@@ -377,6 +379,23 @@ def publish_daily_snapshot(**kwargs):
             # publication as failed only because its best-effort cleanup fails.
             conn.rollback()
             log.exception("airflow.fact_retention.failed", run_id=run_id)
+        if retention_policy is not None:
+            try:
+                staging_retention_result = apply_staging_retention(
+                    conn,
+                    policy=retention_policy,
+                    fecha_datos=fecha,
+                )
+                if staging_retention_result is not None:
+                    log.info(
+                        "airflow.staging_retention.completed",
+                        cutoff=str(retention_policy.staging_cutoff(fecha)),
+                        run_ids=staging_retention_result.run_ids,
+                    )
+            except Exception:
+                # Staging cleanup must not prevent fact cleanup or lock release.
+                conn.rollback()
+                log.exception("airflow.staging_retention.failed", run_id=run_id)
         release_ingestion_lock(conn, _lock_from_xcom(ti))
         log.info("airflow.ingestion_lock.released", fecha=str(fecha))
     except Exception as exc:

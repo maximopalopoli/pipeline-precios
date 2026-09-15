@@ -15,6 +15,7 @@ from etl.extract.downloader import DownloadResult
 from etl.ingestion_lock import IngestionLockBusyError, acquire_ingestion_lock
 from etl.load.publisher import PublicationResult
 from etl.load.warehouse_loader import _ensure_partition
+from etl.retention_policy import RetentionPolicy
 from etl.staging import loader as staging_loader
 
 _DAG_PATH = Path(__file__).parent.parent.parent / "dags" / "dag_sepa_ingest.py"
@@ -396,6 +397,14 @@ def test_airflow_applies_enabled_retention_after_publication(
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)
     monkeypatch.setenv("SEPA_FACT_RETENTION_DAYS", "14")
+    monkeypatch.setenv("SEPA_STAGING_RETENTION_DAYS", "7")
+    staging_retention_calls = []
+    monkeypatch.setattr(
+        "etl.staging_retention.apply_staging_retention",
+        lambda conn, *, policy, fecha_datos: staging_retention_calls.append(
+            (policy, fecha_datos)
+        ),
+    )
     monkeypatch.setattr(
         "etl.load.publisher.publish_pending_facts",
         lambda conn, **kwargs: PublicationResult(
@@ -418,6 +427,9 @@ def test_airflow_applies_enabled_retention_after_publication(
 
     dag_module.publish_daily_snapshot(ti=ti)
 
+    assert staging_retention_calls == [
+        (RetentionPolicy(fact_retention_days=14, staging_retention_days=7), _RUN_DATE)
+    ]
     with pg_conn.cursor() as cur:
         cur.execute("SELECT to_regclass('public.fact_precios_202501')")
         assert cur.fetchone()[0] is None
