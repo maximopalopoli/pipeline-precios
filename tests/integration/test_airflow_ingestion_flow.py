@@ -12,7 +12,7 @@ import pytest
 import etl.ingestion_processing as ingestion_processing
 import etl.run_pipeline as cli_pipeline
 from etl.extract.downloader import DownloadResult
-from etl.ingestion_lock import acquire_ingestion_lock
+from etl.ingestion_lock import IngestionLockBusyError, acquire_ingestion_lock
 from etl.staging import loader as staging_loader
 
 _DAG_PATH = Path(__file__).parent.parent.parent / "dags" / "dag_sepa_ingest.py"
@@ -319,6 +319,55 @@ def test_airflow_reserves_the_date_before_loading_staging(pg_conn, dag_module, m
     with pg_conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
         assert cur.fetchone()[0] == 0
+
+
+def test_cli_cannot_start_while_airflow_owns_the_same_date(
+    pg_conn, dag_module, monkeypatch, tmp_path
+):
+    raw_file_id = _create_raw_file(pg_conn, "shared-lock.zip", "shared-lock")
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    monkeypatch.setattr(dag_module, "_db_connect", connect)
+    airflow_ti = _TaskInstance(
+        {
+            "download_zip": {
+                "raw_file_id": raw_file_id,
+                "is_new": True,
+                "fecha_datos": str(_RUN_DATE),
+            }
+        }
+    )
+    assert dag_module.check_file_changed(ti=airflow_ti, run_id="manual__active") is True
+
+    monkeypatch.setattr(cli_pipeline, "_db_connect", connect)
+    monkeypatch.setattr(
+        cli_pipeline.downloader,
+        "download",
+        lambda conn, raw_dir, fecha: DownloadResult(
+            raw_file_id=raw_file_id,
+            filename="shared-lock.zip",
+            path=tmp_path / "not-read-before-lock.zip",
+            sha256="shared-lock",
+            size_bytes=1,
+            fecha_datos=_RUN_DATE,
+            is_new=True,
+        ),
+    )
+
+    with pytest.raises(IngestionLockBusyError, match="already locked by airflow:manual__active"):
+        cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM ingestion_runs WHERE raw_file_id = %s", (raw_file_id,))
+        assert cur.fetchone()[0] == 0
+
+    dag_module._release_ingestion_lock_on_failure({"ti": airflow_ti})
+    retry_ti = _TaskInstance(airflow_ti.values)
+    assert dag_module.check_file_changed(ti=retry_ti, run_id="manual__retry") is True
+    dag_module._release_ingestion_lock_on_failure({"ti": retry_ti})
 
 
 def test_airflow_marks_the_run_failed_when_dimension_loading_fails(
