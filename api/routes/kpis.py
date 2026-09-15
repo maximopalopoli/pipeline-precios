@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from api.db import fetch, fetchrow
+from api.kpi_metrics import WEEKLY_VARIATION_SQL
 
 router = APIRouter()
 
@@ -12,13 +13,8 @@ async def get_kpis():
     # All queries run concurrently via gather would be ideal,
     # but sequential is fine for now given they're all fast aggregations.
 
-    # 1. Weekly average inflation
-    inflation = await fetchrow("""
-        SELECT ROUND(AVG(variacion_pct)::numeric, 2) AS inflacion_semanal
-        FROM v_variacion_precios
-        WHERE fecha >= (SELECT MAX(fecha) FROM v_variacion_precios) - INTERVAL '7 days'
-          AND variacion_pct IS NOT NULL
-    """)
+    # 1. Average change between the exact weekly endpoints.
+    weekly_variation = await fetchrow(WEEKLY_VARIATION_SQL)
 
     # 2. Total products
     products = await fetchrow("SELECT COUNT(*) AS n FROM dim_producto")
@@ -81,7 +77,11 @@ async def get_kpis():
     """)
 
     return {
-        "inflacion_semanal": float(inflation["inflacion_semanal"]) if inflation and inflation["inflacion_semanal"] else None,
+        "inflacion_semanal": (
+            float(weekly_variation["variacion_semanal"])
+            if weekly_variation and weekly_variation["variacion_semanal"] is not None
+            else None
+        ),
         "total_productos": products["n"] if products else 0,
         "total_sucursales": stores["n"] if stores else 0,
         "pct_promo": float(promo["pct_promo"]) if promo and promo["pct_promo"] else None,
