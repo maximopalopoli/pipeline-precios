@@ -37,7 +37,10 @@ def _db_connect() -> psycopg2.extensions.connection:
 
 
 def _run_date(ds: str) -> date:
-    return date.fromisoformat(ds)
+    """Use Airflow's logical date, which is explicit and not worker-local."""
+    from etl.ingestion_date import resolve_ingestion_date
+
+    return resolve_ingestion_date(date.fromisoformat(ds))
 
 
 def _mark_task_failure(conn, run_id: int, exc: Exception) -> None:

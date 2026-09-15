@@ -43,6 +43,7 @@ import structlog.dev
 from etl import alerting
 from etl.extract import downloader
 from etl.fact_retention import apply_fact_retention
+from etl.ingestion_date import resolve_ingestion_date
 from etl.ingestion_lock import (
     IngestionLock,
     acquire_ingestion_lock,
@@ -131,7 +132,7 @@ def run(
     raw_dir: Path | None = None,
 ) -> IngestionResult:
     """
-    Execute the full pipeline for *fecha* (defaults to today).
+    Execute the full pipeline for *fecha* (defaults to today in Argentina).
 
     Returns an explicit completed or skipped result. Raises on unexpected
     errors after marking the run as failed.
@@ -139,6 +140,7 @@ def run(
     raw_dir = raw_dir or Path("data")
     raw_dir.mkdir(parents=True, exist_ok=True)
     retention_policy = from_environment()
+    fecha = resolve_ingestion_date(fecha)
 
     conn = _db_connect()
     t0 = time.perf_counter()
@@ -424,7 +426,7 @@ def main() -> None:
         type=date.fromisoformat,
         default=None,
         metavar="YYYY-MM-DD",
-        help="Date to process (defaults to today).",
+        help="Date to process (defaults to today in America/Argentina/Buenos_Aires).",
     )
     parser.add_argument(
         "--raw-dir",
