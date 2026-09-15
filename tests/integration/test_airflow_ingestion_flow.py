@@ -11,6 +11,7 @@ import pytest
 
 import etl.ingestion_processing as ingestion_processing
 import etl.run_pipeline as cli_pipeline
+import etl.source_archive as source_archive
 from etl.extract.downloader import DownloadResult
 from etl.ingestion_lock import IngestionLockBusyError, acquire_ingestion_lock
 from etl.load.publisher import PublicationResult
@@ -20,7 +21,7 @@ from etl.staging import loader as staging_loader
 
 _DAG_PATH = Path(__file__).parent.parent.parent / "dags" / "dag_sepa_ingest.py"
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds"
-_RUN_DATE = date(2026, 3, 15)
+_RUN_DATE = date(2026, 3, 17)
 
 
 class _Task:
@@ -516,6 +517,9 @@ def test_airflow_marks_a_new_run_failed_when_staging_fails(
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)
     monkeypatch.setattr(staging_loader, "load", fail_staging_load)
+    monkeypatch.setattr(
+        source_archive, "inspect_source_archive_date", lambda path: _RUN_DATE
+    )
     ti = _TaskInstance({"download_zip": {"raw_file_id": raw_file_id, "path": "/tmp/data.zip"}})
 
     with pytest.raises(RuntimeError, match="staging load failed"):

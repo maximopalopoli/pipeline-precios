@@ -50,7 +50,12 @@ from etl.ingestion_lock import (
     release_ingestion_lock,
     renew_ingestion_lock,
 )
-from etl.ingestion_run import IngestionResult, open_ingestion_run, should_process_raw_file
+from etl.ingestion_run import (
+    IngestionResult,
+    open_ingestion_run,
+    record_source_date,
+    should_process_raw_file,
+)
 from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
@@ -59,6 +64,7 @@ from etl.raw_retention import apply_raw_retention
 from etl.retention_policy import from_environment
 from etl.staging_retention import apply_staging_retention
 from etl.staging import loader as staging_loader
+from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
 
 # ---------------------------------------------------------------------------
 # Logging setup
@@ -209,6 +215,13 @@ def run(
         )
         logger = log.bind(run_id=run_id)
         logger.info("pipeline.run.opened", fecha=str(dl.fecha_datos))
+
+        fecha_fuente = inspect_source_archive_date(str(dl.path))
+        record_source_date(conn, run_id, fecha_fuente)
+        validate_source_archive_date(
+            fecha_logica=fecha,
+            fecha_fuente=fecha_fuente,
+        )
 
         # ── 3. Staging ───────────────────────────────────────────────────────
         logger.info("pipeline.stage.start", stage="staging")

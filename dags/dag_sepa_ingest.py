@@ -203,8 +203,9 @@ def check_file_changed(**kwargs):
 
 def load_staging(**kwargs):
     """Open ingestion run + load staging tables from ZIP."""
-    from etl.ingestion_run import open_ingestion_run
+    from etl.ingestion_run import open_ingestion_run, record_source_date
     from etl.staging import loader as staging_loader
+    from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
 
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
@@ -227,6 +228,14 @@ def load_staging(**kwargs):
                 date.fromisoformat(fecha_logica) if fecha_logica is not None else None
             ),
         )
+        fecha_fuente = inspect_source_archive_date(dl_info["path"])
+        record_source_date(conn, run_id, fecha_fuente)
+        fecha_esperada = fecha_logica or dl_info.get("fecha_datos")
+        if fecha_esperada is not None:
+            validate_source_archive_date(
+                fecha_logica=date.fromisoformat(fecha_esperada),
+                fecha_fuente=fecha_fuente,
+            )
 
         # Load staging
         stg = staging_loader.load(

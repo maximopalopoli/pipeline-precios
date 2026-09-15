@@ -12,7 +12,7 @@ from etl.ingestion_lock import acquire_ingestion_lock
 from etl.quality import checks as quality_checks
 
 
-_RUN_DATE = date(2026, 3, 15)
+_RUN_DATE = date(2026, 3, 17)
 
 
 def _connect_to_fixture(pg_conn):
