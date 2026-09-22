@@ -18,7 +18,9 @@ def test_offers_group_prices_by_their_promotion_conditions(monkeypatch):
     monkeypatch.setattr(ofertas, "fetchrow", fake_fetchrow)
     monkeypatch.setattr(ofertas, "fetch", fake_fetch)
 
-    response = asyncio.run(ofertas.get_ofertas())
+    response = asyncio.run(
+        ofertas.get_ofertas(provincia=None, localidad=None, cadenas=None)
+    )
 
     assert response == {"fecha": "2026-03-17", "items": []}
     assert captured["params"] == (date(2026, 3, 17),)
