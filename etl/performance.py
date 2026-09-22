@@ -74,7 +74,9 @@ def process_max_rss_bytes(
             import resource
         except ImportError:
             return None
-        getrusage = lambda: resource.getrusage(resource.RUSAGE_SELF)
+
+        def getrusage() -> object:
+            return resource.getrusage(resource.RUSAGE_SELF)
 
     ru_maxrss = int(getrusage().ru_maxrss)
     if (platform or sys.platform) == "darwin":
