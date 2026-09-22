@@ -4,12 +4,12 @@
 
 UPDATE fact_precios
 SET tiene_promo = (
-    (precio_promo1 > 0 AND precio_promo1 < precio_lista)
-    OR (precio_promo2 > 0 AND precio_promo2 < precio_lista)
+    COALESCE(precio_promo1 > 0 AND precio_promo1 < precio_lista, FALSE)
+    OR COALESCE(precio_promo2 > 0 AND precio_promo2 < precio_lista, FALSE)
 )
 WHERE tiene_promo IS DISTINCT FROM (
-    (precio_promo1 > 0 AND precio_promo1 < precio_lista)
-    OR (precio_promo2 > 0 AND precio_promo2 < precio_lista)
+    COALESCE(precio_promo1 > 0 AND precio_promo1 < precio_lista, FALSE)
+    OR COALESCE(precio_promo2 > 0 AND precio_promo2 < precio_lista, FALSE)
 );
 
 WITH promotion_counts AS (
