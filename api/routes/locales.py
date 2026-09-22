@@ -7,11 +7,17 @@ from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from geopy.geocoders import Nominatim
 
 from api.db import fetch, fetchrow
-from api.pricing import effective_price_sql
+from api.pricing import (
+    discount_promo_label_sql,
+    discount_promo_price_sql,
+    effective_price_sql,
+)
 
 router = APIRouter()
 
 BEST_PRICE = effective_price_sql()
+DISCOUNT_PROMO_PRICE = discount_promo_price_sql()
+DISCOUNT_PROMO_LABEL = discount_promo_label_sql()
 
 
 @lru_cache(maxsize=256)
@@ -118,9 +124,10 @@ async def get_store_promos(sucursal_sk: int):
             p.productos_descripcion AS producto,
             p.productos_marca       AS marca,
             f.precio_lista,
-            {BEST_PRICE}            AS precio_promo,
+            {DISCOUNT_PROMO_PRICE}  AS precio_promo,
+            {DISCOUNT_PROMO_LABEL}  AS leyenda_promo,
             ROUND(
-                (f.precio_lista - {BEST_PRICE})
+                (f.precio_lista - {DISCOUNT_PROMO_PRICE})
                 / NULLIF(f.precio_lista, 0) * 100, 1
             ) AS descuento_pct
         FROM fact_precios f
@@ -128,7 +135,7 @@ async def get_store_promos(sucursal_sk: int):
         WHERE f.sucursal_sk = $1
           AND f.fecha_id = $2
           AND f.tiene_promo = TRUE
-          AND {BEST_PRICE} < f.precio_lista
+          AND {DISCOUNT_PROMO_PRICE} IS NOT NULL
         ORDER BY descuento_pct DESC
         LIMIT 10
         """,
