@@ -202,6 +202,31 @@ The API exposes these fields as `reconciliacion` in `GET /api/health`; the home
 page displays the latest available summary. Older runs predate these counters,
 so their reconciliation is `null` rather than a failed or incomplete status.
 
+### Performance telemetry
+
+The CLI and Airflow emit structured events for `download`, `staging`, `quality`,
+`dimensions`, `fact_load`, and `publication`. Each completed or failed stage
+includes `elapsed_seconds` and `peak_rss_bytes`; stage-specific events also
+include their relevant row counts. Product fact processing adds one pair of
+events per chunk: `fact_chunk_preparation` measures cleaning and key resolution,
+while `pending_fact_write` measures the provisional PostgreSQL write.
+
+The CLI's `pipeline.completed` event summarizes the end-to-end `elapsed_total`,
+`peak_rss_bytes`, reconciliation counts, and `fact_rows_per_second`. Airflow
+tasks may run in separate processes, so their per-stage `peak_rss_bytes` values
+are intentionally not combined into a single run-level number.
+
+To establish a comparable baseline, capture one bounded ingestion's output:
+
+```bash
+make ingest-date DATE=2026-03-17 2>&1 | tee ingestion-2026-03-17.log
+```
+
+Compare the same source size and row counts before using the timings to choose
+an optimization. `peak_rss_bytes` is the peak resident memory of the ETL process,
+not PostgreSQL's memory or the full container/host usage; collect those separately
+when diagnosing database or infrastructure capacity.
+
 ### Run with Docker Compose (all services)
 
 ```bash
