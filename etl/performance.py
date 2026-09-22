@@ -31,12 +31,19 @@ class StageTimer:
 
     def finish(self, **fields: object) -> float:
         """Log completion and return elapsed monotonic seconds."""
+        return self._stop("pipeline.stage.done", **fields)
+
+    def fail(self, **fields: object) -> float:
+        """Log a failed stage and return its elapsed monotonic seconds."""
+        return self._stop("pipeline.stage.failed", **fields)
+
+    def _stop(self, event: str, **fields: object) -> float:
         if self._started_at is None:
             raise RuntimeError(f"Stage {self.stage!r} has not started.")
         elapsed_seconds = self.clock() - self._started_at
         self._started_at = None
         self.logger.info(
-            "pipeline.stage.done",
+            event,
             stage=self.stage,
             elapsed_seconds=round(elapsed_seconds, 3),
             **fields,

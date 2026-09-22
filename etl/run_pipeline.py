@@ -62,6 +62,7 @@ from etl.ingestion_processing import (
     stream_pending_product_facts,
 )
 from etl.load.publisher import publish_pending_facts
+from etl.performance import StageTimer
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
 from etl.raw_retention import apply_raw_retention
@@ -162,8 +163,8 @@ def run(
         _ensure_seeds(conn)
 
         # ── 1. Download ──────────────────────────────────────────────────────
-        log.info("pipeline.stage.start", stage="download")
-        t1 = time.perf_counter()
+        download_timer = StageTimer(log, "download")
+        download_timer.start()
 
         dl = downloader.download(conn, raw_dir, fecha)
 
@@ -202,12 +203,9 @@ def run(
             )
             return IngestionResult.skipped()
 
-        log.info(
-            "pipeline.stage.done",
-            stage="download",
+        download_timer.finish(
             filename=dl.filename,
             size_bytes=dl.size_bytes,
-            elapsed=round(time.perf_counter() - t1, 2),
         )
 
         # ── 2. Open ingestion run ────────────────────────────────────────────
@@ -228,8 +226,8 @@ def run(
         )
 
         # ── 3. Staging ───────────────────────────────────────────────────────
-        logger.info("pipeline.stage.start", stage="staging")
-        t2 = time.perf_counter()
+        staging_timer = StageTimer(logger, "staging")
+        staging_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         stg = staging_loader.load(
@@ -241,19 +239,16 @@ def run(
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
 
-        logger.info(
-            "pipeline.stage.done",
-            stage="staging",
+        staging_timer.finish(
             inner_zips=stg.inner_zips_count,
             rows_comercios=stg.rows_comercios,
             rows_sucursales=stg.rows_sucursales,
             rows_productos=stg.rows_productos,
-            elapsed=round(time.perf_counter() - t2, 2),
         )
 
         # ── 4. Quality checks ────────────────────────────────────────────────
-        logger.info("pipeline.stage.start", stage="quality")
-        t3 = time.perf_counter()
+        quality_timer = StageTimer(logger, "quality")
+        quality_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         check_results: list[quality_checks.CheckResult] = []
@@ -266,28 +261,24 @@ def run(
                 message=f"Critical quality checks failed: {[r.name for r in exc.failures]}",
                 fecha=dl.fecha_datos,
             )
-            logger.error(
-                "pipeline.aborted",
+            quality_timer.fail(
                 reason="critical_quality_failure",
                 failures=[r.name for r in exc.failures],
-                elapsed=round(time.perf_counter() - t3, 2),
             )
+            logger.error("pipeline.aborted", reason="critical_quality_failure")
             raise
 
         qr = reporters.report(results=check_results, run_id=run_id, conn=conn)
         conn.commit()
 
-        logger.info(
-            "pipeline.stage.done",
-            stage="quality",
+        quality_timer.finish(
             passed=qr.passed,
             warnings_failed=qr.warnings_failed,
-            elapsed=round(time.perf_counter() - t3, 2),
         )
 
         # ── 5. Clean + load dimensions ───────────────────────────────────────
-        logger.info("pipeline.stage.start", stage="dimensions")
-        t5 = time.perf_counter()
+        dimensions_timer = StageTimer(logger, "dimensions")
+        dimensions_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         dimensions = load_staged_dimensions(conn, run_id)
@@ -295,19 +286,16 @@ def run(
 
         fecha_id_int = int(dl.fecha_datos.strftime("%Y%m%d"))
 
-        logger.info(
-            "pipeline.stage.done",
-            stage="dimensions",
+        dimensions_timer.finish(
             rows_comercios=dimensions.rows_comercios,
             rows_sucursales=dimensions.rows_sucursales,
             rows_productos=dimensions.rows_productos,
             rows_rejected=dimensions.rows_rejected,
-            elapsed=round(time.perf_counter() - t5, 2),
         )
 
         # ── 7. Build + load fact_precios in chunks ───────────────────────────
-        logger.info("pipeline.stage.start", stage="fact_load")
-        t6 = time.perf_counter()
+        fact_load_timer = StageTimer(logger, "fact_load")
+        fact_load_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         product_load = stream_pending_product_facts(
@@ -319,21 +307,18 @@ def run(
         )
         conn.commit()
 
-        logger.info(
-            "pipeline.stage.done",
-            stage="fact_load",
+        fact_load_timer.finish(
             chunks=product_load.chunks,
             rows_fact=product_load.rows_fact,
             rows_valid=product_load.rows_valid,
             rows_rejected=product_load.rows_rejected,
             rows_without_keys=product_load.rows_without_keys,
             rows_deduplicated=product_load.rows_deduplicated,
-            elapsed=round(time.perf_counter() - t6, 2),
         )
 
         # ── 8. Publish facts + aggregations atomically ───────────────────────
-        logger.info("pipeline.stage.start", stage="publication")
-        t7 = time.perf_counter()
+        publication_timer = StageTimer(logger, "publication")
+        publication_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         reconciliation = reconciliation_for_publication(product_load)
@@ -345,16 +330,13 @@ def run(
         )
         conn.commit()
 
-        logger.info(
-            "pipeline.stage.done",
-            stage="publication",
+        publication_timer.finish(
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
             rows_valid=reconciliation.rows_valid,
             rows_rejected=reconciliation.rows_rejected,
             rows_without_keys=reconciliation.rows_without_keys,
             rows_deduplicated=reconciliation.rows_deduplicated,
-            elapsed=round(time.perf_counter() - t7, 2),
         )
 
         elapsed_total = round(time.perf_counter() - t0, 2)

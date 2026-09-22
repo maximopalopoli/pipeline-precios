@@ -45,3 +45,21 @@ def test_stage_timer_rejects_invalid_lifecycle_calls():
     timer.start()
     with pytest.raises(RuntimeError, match="already running"):
         timer.start()
+
+
+def test_stage_timer_logs_a_failed_stage_with_its_elapsed_time():
+    logger = CapturingLogger()
+    values = iter([3.0, 3.5])
+    timer = StageTimer(logger, "quality", clock=lambda: next(values))
+
+    timer.start()
+    timer.fail(reason="critical_quality_failure")
+
+    assert logger.events[-1] == (
+        "pipeline.stage.failed",
+        {
+            "stage": "quality",
+            "elapsed_seconds": 0.5,
+            "reason": "critical_quality_failure",
+        },
+    )
