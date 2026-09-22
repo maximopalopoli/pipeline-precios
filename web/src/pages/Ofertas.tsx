@@ -6,6 +6,7 @@ import { FilterPanel } from '../components/filters/FilterPanel';
 import { DataTable } from '../components/tables/DataTable';
 import { VariationBarChart } from '../components/charts/VariationBarChart';
 import { KpiCard } from '../components/layout/KpiCard';
+import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { formatCurrency, formatPercent } from '../lib/constants';
 
 const col = createColumnHelper<OfertaItem>();
@@ -15,6 +16,10 @@ const columns = [
   col.accessor('cadena', { header: 'Cadena' }),
   col.accessor('precio_lista', { header: 'Precio lista', cell: (info) => formatCurrency(info.getValue()) }),
   col.accessor('precio_promo', { header: 'Precio promo', cell: (info) => formatCurrency(info.getValue()) }),
+  col.accessor('leyenda_promo', {
+    header: 'Condiciones',
+    cell: (info) => <PromotionDetails tieneDescuento leyendaPromo={info.getValue()} compact />,
+  }),
   col.accessor('descuento_pct', { header: 'Descuento %', cell: (info) => formatPercent(info.getValue()) }),
 ];
 
@@ -47,7 +52,7 @@ export function Ofertas() {
         <div className="space-y-4">
           {data?.fecha && (
             <p className="text-sm text-slate-500">
-              Promociones vigentes al {new Date(data.fecha).toLocaleDateString('es-AR')}
+              Promociones observadas el {new Date(data.fecha).toLocaleDateString('es-AR')}
             </p>
           )}
 

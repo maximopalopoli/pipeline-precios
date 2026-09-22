@@ -3,11 +3,12 @@
 from fastapi import APIRouter, Query
 
 from api.db import fetch, fetchrow
-from api.pricing import effective_price_sql
+from api.pricing import discount_promo_label_sql, discount_promo_price_sql
 
 router = APIRouter()
 
-BEST_PRICE = effective_price_sql()
+DISCOUNT_PROMO_PRICE = discount_promo_price_sql()
+DISCOUNT_PROMO_LABEL = discount_promo_label_sql()
 
 
 @router.get("/ofertas")
@@ -26,7 +27,7 @@ async def get_ofertas(
         return {"fecha": None, "items": []}
 
     fecha = latest["max_fecha"]
-    conditions = ["fe.fecha = $1", "f.tiene_promo = TRUE"]
+    conditions = ["fe.fecha = $1", f"{DISCOUNT_PROMO_PRICE} IS NOT NULL"]
     params: list = [fecha]
     idx = 2
 
@@ -54,10 +55,11 @@ async def get_ofertas(
             p.productos_descripcion AS producto,
             p.productos_marca       AS marca,
             c.comercio_bandera_nombre AS cadena,
+            {DISCOUNT_PROMO_LABEL}  AS leyenda_promo,
             ROUND(AVG(f.precio_lista)::numeric, 2) AS precio_lista,
-            ROUND(AVG({BEST_PRICE})::numeric, 2) AS precio_promo,
+            ROUND(AVG({DISCOUNT_PROMO_PRICE})::numeric, 2) AS precio_promo,
             ROUND(AVG(
-                (f.precio_lista - {BEST_PRICE})
+                (f.precio_lista - {DISCOUNT_PROMO_PRICE})
                 / NULLIF(f.precio_lista, 0) * 100
             )::numeric, 1) AS descuento_pct
         FROM fact_precios f
@@ -68,8 +70,7 @@ async def get_ofertas(
         JOIN dim_provincia pr ON s.provincia_sk  = pr.provincia_sk
         WHERE {where}
         GROUP BY p.productos_descripcion, p.productos_marca,
-                 c.comercio_bandera_nombre
-        HAVING AVG(f.precio_lista - {BEST_PRICE}) > 0
+                 c.comercio_bandera_nombre, {DISCOUNT_PROMO_LABEL}
         ORDER BY descuento_pct DESC
         LIMIT 50
         """,

@@ -190,6 +190,8 @@ export interface OfertaItem {
   producto: string;
   marca: string | null;
   cadena: string;
+  /** Source-provided promotion conditions; null means they were not supplied. */
+  leyenda_promo: string | null;
   precio_lista: number;
   precio_promo: number;
   descuento_pct: number;
