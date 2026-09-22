@@ -47,6 +47,7 @@ class StageTimer:
             event,
             stage=self.stage,
             elapsed_seconds=round(elapsed_seconds, 3),
+            peak_rss_bytes=process_max_rss_bytes(),
             **fields,
         )
         return elapsed_seconds

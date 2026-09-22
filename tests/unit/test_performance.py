@@ -1,5 +1,6 @@
 """Unit tests for shared ingestion performance instrumentation."""
 
+import etl.performance as performance
 import pytest
 
 from etl.performance import StageTimer, process_max_rss_bytes
@@ -13,7 +14,8 @@ class CapturingLogger:
         self.events.append((event, fields))
 
 
-def test_stage_timer_logs_a_consistent_start_and_completion_event():
+def test_stage_timer_logs_a_consistent_start_and_completion_event(monkeypatch):
+    monkeypatch.setattr(performance, "process_max_rss_bytes", lambda: 45_056)
     logger = CapturingLogger()
     values = iter([10.0, 11.2349])
     timer = StageTimer(logger, "staging", clock=lambda: next(values))
@@ -29,6 +31,7 @@ def test_stage_timer_logs_a_consistent_start_and_completion_event():
             {
                 "stage": "staging",
                 "elapsed_seconds": 1.235,
+                "peak_rss_bytes": 45_056,
                 "rows_productos": 120,
             },
         ),
@@ -47,7 +50,8 @@ def test_stage_timer_rejects_invalid_lifecycle_calls():
         timer.start()
 
 
-def test_stage_timer_logs_a_failed_stage_with_its_elapsed_time():
+def test_stage_timer_logs_a_failed_stage_with_its_elapsed_time(monkeypatch):
+    monkeypatch.setattr(performance, "process_max_rss_bytes", lambda: 65_536)
     logger = CapturingLogger()
     values = iter([3.0, 3.5])
     timer = StageTimer(logger, "quality", clock=lambda: next(values))
@@ -60,6 +64,7 @@ def test_stage_timer_logs_a_failed_stage_with_its_elapsed_time():
         {
             "stage": "quality",
             "elapsed_seconds": 0.5,
+            "peak_rss_bytes": 65_536,
             "reason": "critical_quality_failure",
         },
     )
