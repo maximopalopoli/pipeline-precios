@@ -18,6 +18,7 @@ import structlog
 from airflow import DAG
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
+from etl.performance import StageTimer
 
 log = structlog.get_logger(__name__)
 
@@ -103,6 +104,12 @@ def _renew_ingestion_lock(conn, ti) -> None:
     renew_ingestion_lock(conn, lock)
 
 
+def _fail_active_timer(timer: StageTimer | None, exc: Exception) -> None:
+    """Emit a terminal measurement when a task fails after a stage starts."""
+    if timer is not None and timer.is_running:
+        timer.fail(error_type=type(exc).__name__)
+
+
 # ---------------------------------------------------------------------------
 # Task callables
 # ---------------------------------------------------------------------------
@@ -113,12 +120,16 @@ def download_zip(ds: str, **kwargs):
     from etl.extract import downloader
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
+        timer = StageTimer(log, "download")
+        timer.start()
         raw_dir = Path(Variable.get("sepa_raw_dir", default_var="/opt/airflow/data"))
         raw_dir.mkdir(parents=True, exist_ok=True)
 
         fecha_logica = _run_date(ds)
         dl = downloader.download(conn, raw_dir, fecha_logica)
+        timer.finish(filename=dl.filename, size_bytes=dl.size_bytes)
 
         return {
             "raw_file_id": dl.raw_file_id,
@@ -131,6 +142,9 @@ def download_zip(ds: str, **kwargs):
             "fecha_logica": str(fecha_logica),
             "is_new": dl.is_new,
         }
+    except Exception as exc:
+        _fail_active_timer(timer, exc)
+        raise
     finally:
         conn.close()
 
@@ -212,6 +226,7 @@ def load_staging(**kwargs):
 
     conn = _db_connect()
     run_id: int | None = None
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
         fecha_solicitada = dl_info.get("fecha_solicitada")
@@ -237,7 +252,8 @@ def load_staging(**kwargs):
                 fecha_fuente=fecha_fuente,
             )
 
-        # Load staging
+        timer = StageTimer(log.bind(run_id=run_id), "staging")
+        timer.start()
         stg = staging_loader.load(
             conn,
             Path(dl_info["path"]),
@@ -247,10 +263,10 @@ def load_staging(**kwargs):
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
 
-        log.info(
-            "staging.loaded",
-            run_id=run_id,
+        timer.finish(
             inner_zips=stg.inner_zips_count,
+            rows_comercios=stg.rows_comercios,
+            rows_sucursales=stg.rows_sucursales,
             rows_productos=stg.rows_productos,
         )
 
@@ -262,6 +278,7 @@ def load_staging(**kwargs):
             "rows_productos": stg.rows_productos,
         }
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         if run_id is not None:
             _mark_task_failure(conn, run_id, exc)
         raise
@@ -279,27 +296,33 @@ def run_quality_checks(**kwargs):
     run_id = stg_info["run_id"]
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
+        timer = StageTimer(log.bind(run_id=run_id), "quality")
+        timer.start()
         try:
             check_results = quality_checks.run_all(conn, run_id)
         except quality_checks.QualityCheckError as exc:
             reporters.report(results=exc.failures, run_id=run_id, conn=conn)
             conn.commit()
+            timer.fail(
+                reason="critical_quality_failure",
+                failures=[result.name for result in exc.failures],
+            )
             raise
 
         qr = reporters.report(results=check_results, run_id=run_id, conn=conn)
         conn.commit()
 
-        log.info(
-            "quality.done",
-            run_id=run_id,
+        timer.finish(
             passed=qr.passed,
             warnings_failed=qr.warnings_failed,
         )
     except quality_checks.QualityCheckError:
         raise
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         _mark_task_failure(conn, run_id, exc)
         raise
     finally:
@@ -315,16 +338,18 @@ def load_dimensions(**kwargs):
     run_id = stg_info["run_id"]
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
+        timer = StageTimer(log.bind(run_id=run_id), "dimensions")
+        timer.start()
         result = load_staged_dimensions(conn, run_id)
         conn.commit()
-        log.info(
-            "warehouse.dimensions_loaded",
-            run_id=run_id,
-            comercios=result.rows_comercios,
-            sucursales=result.rows_sucursales,
-            productos=result.rows_productos,
+        timer.finish(
+            rows_comercios=result.rows_comercios,
+            rows_sucursales=result.rows_sucursales,
+            rows_productos=result.rows_productos,
+            rows_rejected=result.rows_rejected,
         )
         return {
             "rows_clean_comercios": result.rows_comercios,
@@ -332,6 +357,7 @@ def load_dimensions(**kwargs):
             "rows_rejected": result.rows_rejected,
         }
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         _mark_task_failure(conn, run_id, exc)
         raise
     finally:
@@ -349,8 +375,11 @@ def load_pending_fact_precios(**kwargs):
     run_date = date.fromisoformat(dl_info["fecha_datos"])
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
+        timer = StageTimer(log.bind(run_id=run_id), "fact_load")
+        timer.start()
         result = stream_pending_product_facts(
             conn,
             _db_connect,
@@ -359,11 +388,13 @@ def load_pending_fact_precios(**kwargs):
             heartbeat=lambda: _renew_ingestion_lock(conn, ti),
         )
         conn.commit()
-        log.info(
-            "warehouse.pending_fact_loaded",
-            run_id=run_id,
+        timer.finish(
             chunks=result.chunks,
-            rows=result.rows_fact,
+            rows_fact=result.rows_fact,
+            rows_valid=result.rows_valid,
+            rows_rejected=result.rows_rejected,
+            rows_without_keys=result.rows_without_keys,
+            rows_deduplicated=result.rows_deduplicated,
         )
         return {
             "chunks": result.chunks,
@@ -374,6 +405,7 @@ def load_pending_fact_precios(**kwargs):
             "rows_deduplicated": result.rows_deduplicated,
         }
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         _mark_task_failure(conn, run_id, exc)
         raise
     finally:
@@ -408,8 +440,11 @@ def publish_daily_snapshot(**kwargs):
     )
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
+        timer = StageTimer(log.bind(run_id=run_id), "publication")
+        timer.start()
         publication = publish_pending_facts(
             conn,
             run_id=run_id,
@@ -417,12 +452,13 @@ def publish_daily_snapshot(**kwargs):
             reconciliation=reconciliation,
         )
         conn.commit()
-        log.info(
-            "publication.done",
-            run_id=run_id,
-            fecha_id=fecha_id,
+        timer.finish(
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
+            rows_valid=reconciliation.rows_valid,
+            rows_rejected=reconciliation.rows_rejected,
+            rows_without_keys=reconciliation.rows_without_keys,
+            rows_deduplicated=reconciliation.rows_deduplicated,
         )
         retention_policy = None
         try:
@@ -483,6 +519,7 @@ def publish_daily_snapshot(**kwargs):
         release_ingestion_lock(conn, _lock_from_xcom(ti))
         log.info("airflow.ingestion_lock.released", fecha=str(fecha))
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         _mark_task_failure(conn, run_id, exc)
         raise
     finally:

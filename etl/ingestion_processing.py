@@ -8,8 +8,10 @@ from datetime import date
 from typing import Callable
 
 import pandas as pd
+import structlog
 
 from etl.load import warehouse_loader
+from etl.performance import StageTimer
 from etl.reconciliation import ProductReconciliation, record_product_rejections
 from etl.transform.cleaner import clean_comercios, clean_productos, clean_sucursales
 from etl.transform.fact_builder import (
@@ -17,6 +19,8 @@ from etl.transform.fact_builder import (
     build_fact_chunk,
     build_sk_caches,
 )
+
+log = structlog.get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -140,40 +144,59 @@ def stream_pending_product_facts(
             if heartbeat is not None:
                 heartbeat()
             chunks += 1
-            clean_result = clean_productos(chunk_df)
-            rows_valid += len(clean_result.clean)
-            rows_rejected += len(clean_result.rejected)
-            record_product_rejections(
-                conn,
-                run_id=run_id,
-                source="clean_productos",
-                rejected=clean_result.rejected,
+            timer = StageTimer(
+                log.bind(run_id=run_id, chunk=chunks), "fact_chunk_preparation"
             )
-            fact_result = build_fact_chunk(
-                clean_result.clean,
-                comercio_cache,
-                sucursal_cache,
-                producto_cache,
-                fecha_id,
-                run_id,
-            )
-            rows_without_keys += len(fact_result.rejected)
-            record_product_rejections(
-                conn,
-                run_id=run_id,
-                source="fact_key_resolution",
-                rejected=fact_result.rejected,
-            )
-            rows_deduplicated += (
-                len(clean_result.clean) - len(fact_result.rejected) - len(fact_result.df)
-            )
-            rows_fact_attempted += len(fact_result.df)
+            timer.start(rows_staged=len(chunk_df))
+            try:
+                clean_result = clean_productos(chunk_df)
+                rows_valid += len(clean_result.clean)
+                rows_rejected += len(clean_result.rejected)
+                record_product_rejections(
+                    conn,
+                    run_id=run_id,
+                    source="clean_productos",
+                    rejected=clean_result.rejected,
+                )
+                fact_result = build_fact_chunk(
+                    clean_result.clean,
+                    comercio_cache,
+                    sucursal_cache,
+                    producto_cache,
+                    fecha_id,
+                    run_id,
+                )
+                rows_without_keys += len(fact_result.rejected)
+                record_product_rejections(
+                    conn,
+                    run_id=run_id,
+                    source="fact_key_resolution",
+                    rejected=fact_result.rejected,
+                )
+                chunk_rows_deduplicated = (
+                    len(clean_result.clean)
+                    - len(fact_result.rejected)
+                    - len(fact_result.df)
+                )
+                rows_deduplicated += chunk_rows_deduplicated
+                rows_fact_attempted += len(fact_result.df)
+
+                timer.finish(
+                    rows_valid=len(clean_result.clean),
+                    rows_rejected=len(clean_result.rejected),
+                    rows_without_keys=len(fact_result.rejected),
+                    rows_deduplicated=chunk_rows_deduplicated,
+                    rows_fact_pending=len(fact_result.df),
+                )
+            except Exception:
+                timer.fail()
+                raise
 
             if pending is not None:
                 pending.result()
 
             pending = executor.submit(
-                _commit_pending_fact_chunk, conn_write, fact_result.df, run_id
+                _commit_pending_fact_chunk, conn_write, fact_result.df, run_id, chunks
             )
 
         if pending is not None:
@@ -196,9 +219,19 @@ def stream_pending_product_facts(
     )
 
 
-def _commit_pending_fact_chunk(conn, df: pd.DataFrame, run_id: int) -> int:
-    rows = warehouse_loader.load_pending_fact(conn, df, run_id)
-    conn.commit()
+def _commit_pending_fact_chunk(
+    conn, df: pd.DataFrame, run_id: int, chunk: int
+) -> int:
+    """Persist one chunk and emit its isolated database-write measurement."""
+    timer = StageTimer(log.bind(run_id=run_id, chunk=chunk), "pending_fact_write")
+    timer.start(rows_fact_pending=len(df))
+    try:
+        rows = warehouse_loader.load_pending_fact(conn, df, run_id)
+        conn.commit()
+    except Exception:
+        timer.fail()
+        raise
+    timer.finish(rows_persisted=rows)
     return rows
 
 
