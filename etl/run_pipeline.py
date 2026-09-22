@@ -157,16 +157,21 @@ def run(
     t0 = time.perf_counter()
     run_id: int | None = None
     ingestion_lock: IngestionLock | None = None
+    active_timer: StageTimer | None = None
 
     try:
         # ── 0. Ensure reference seeds ─────────────────────────────────────
         _ensure_seeds(conn)
 
         # ── 1. Download ──────────────────────────────────────────────────────
-        download_timer = StageTimer(log, "download")
-        download_timer.start()
-
-        dl = downloader.download(conn, raw_dir, fecha)
+        active_timer = StageTimer(log, "download")
+        active_timer.start()
+        try:
+            dl = downloader.download(conn, raw_dir, fecha)
+        except Exception as exc:
+            active_timer.fail(error_type=type(exc).__name__)
+            raise
+        active_timer.finish(filename=dl.filename, size_bytes=dl.size_bytes)
 
         if not dl.is_new:
             if not should_process_raw_file(conn, dl.raw_file_id):
@@ -203,11 +208,6 @@ def run(
             )
             return IngestionResult.skipped()
 
-        download_timer.finish(
-            filename=dl.filename,
-            size_bytes=dl.size_bytes,
-        )
-
         # ── 2. Open ingestion run ────────────────────────────────────────────
         run_id = open_ingestion_run(
             conn,
@@ -226,8 +226,8 @@ def run(
         )
 
         # ── 3. Staging ───────────────────────────────────────────────────────
-        staging_timer = StageTimer(logger, "staging")
-        staging_timer.start()
+        active_timer = StageTimer(logger, "staging")
+        active_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         stg = staging_loader.load(
@@ -239,7 +239,7 @@ def run(
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
 
-        staging_timer.finish(
+        active_timer.finish(
             inner_zips=stg.inner_zips_count,
             rows_comercios=stg.rows_comercios,
             rows_sucursales=stg.rows_sucursales,
@@ -247,8 +247,8 @@ def run(
         )
 
         # ── 4. Quality checks ────────────────────────────────────────────────
-        quality_timer = StageTimer(logger, "quality")
-        quality_timer.start()
+        active_timer = StageTimer(logger, "quality")
+        active_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         check_results: list[quality_checks.CheckResult] = []
@@ -261,7 +261,7 @@ def run(
                 message=f"Critical quality checks failed: {[r.name for r in exc.failures]}",
                 fecha=dl.fecha_datos,
             )
-            quality_timer.fail(
+            active_timer.fail(
                 reason="critical_quality_failure",
                 failures=[r.name for r in exc.failures],
             )
@@ -271,14 +271,14 @@ def run(
         qr = reporters.report(results=check_results, run_id=run_id, conn=conn)
         conn.commit()
 
-        quality_timer.finish(
+        active_timer.finish(
             passed=qr.passed,
             warnings_failed=qr.warnings_failed,
         )
 
         # ── 5. Clean + load dimensions ───────────────────────────────────────
-        dimensions_timer = StageTimer(logger, "dimensions")
-        dimensions_timer.start()
+        active_timer = StageTimer(logger, "dimensions")
+        active_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         dimensions = load_staged_dimensions(conn, run_id)
@@ -286,7 +286,7 @@ def run(
 
         fecha_id_int = int(dl.fecha_datos.strftime("%Y%m%d"))
 
-        dimensions_timer.finish(
+        active_timer.finish(
             rows_comercios=dimensions.rows_comercios,
             rows_sucursales=dimensions.rows_sucursales,
             rows_productos=dimensions.rows_productos,
@@ -294,8 +294,8 @@ def run(
         )
 
         # ── 7. Build + load fact_precios in chunks ───────────────────────────
-        fact_load_timer = StageTimer(logger, "fact_load")
-        fact_load_timer.start()
+        active_timer = StageTimer(logger, "fact_load")
+        active_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         product_load = stream_pending_product_facts(
@@ -307,7 +307,7 @@ def run(
         )
         conn.commit()
 
-        fact_load_timer.finish(
+        active_timer.finish(
             chunks=product_load.chunks,
             rows_fact=product_load.rows_fact,
             rows_valid=product_load.rows_valid,
@@ -317,8 +317,8 @@ def run(
         )
 
         # ── 8. Publish facts + aggregations atomically ───────────────────────
-        publication_timer = StageTimer(logger, "publication")
-        publication_timer.start()
+        active_timer = StageTimer(logger, "publication")
+        active_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         reconciliation = reconciliation_for_publication(product_load)
@@ -330,7 +330,7 @@ def run(
         )
         conn.commit()
 
-        publication_timer.finish(
+        active_timer.finish(
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
             rows_valid=reconciliation.rows_valid,
@@ -408,6 +408,8 @@ def run(
         return IngestionResult.completed(product_load.rows_fact)
 
     except Exception as exc:
+        if active_timer is not None and active_timer.is_running:
+            active_timer.fail(error_type=type(exc).__name__)
         conn.rollback()
         if run_id is not None and not isinstance(exc, quality_checks.QualityCheckError):
             reporters.mark_run_failed(conn, run_id, str(exc))

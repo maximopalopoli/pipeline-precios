@@ -104,6 +104,12 @@ def _renew_ingestion_lock(conn, ti) -> None:
     renew_ingestion_lock(conn, lock)
 
 
+def _fail_active_timer(timer: StageTimer | None, exc: Exception) -> None:
+    """Emit a terminal measurement when a task fails after a stage starts."""
+    if timer is not None and timer.is_running:
+        timer.fail(error_type=type(exc).__name__)
+
+
 # ---------------------------------------------------------------------------
 # Task callables
 # ---------------------------------------------------------------------------
@@ -114,6 +120,7 @@ def download_zip(ds: str, **kwargs):
     from etl.extract import downloader
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
         timer = StageTimer(log, "download")
         timer.start()
@@ -135,6 +142,9 @@ def download_zip(ds: str, **kwargs):
             "fecha_logica": str(fecha_logica),
             "is_new": dl.is_new,
         }
+    except Exception as exc:
+        _fail_active_timer(timer, exc)
+        raise
     finally:
         conn.close()
 
@@ -216,6 +226,7 @@ def load_staging(**kwargs):
 
     conn = _db_connect()
     run_id: int | None = None
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
         fecha_solicitada = dl_info.get("fecha_solicitada")
@@ -267,6 +278,7 @@ def load_staging(**kwargs):
             "rows_productos": stg.rows_productos,
         }
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         if run_id is not None:
             _mark_task_failure(conn, run_id, exc)
         raise
@@ -284,6 +296,7 @@ def run_quality_checks(**kwargs):
     run_id = stg_info["run_id"]
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
         timer = StageTimer(log.bind(run_id=run_id), "quality")
@@ -309,6 +322,7 @@ def run_quality_checks(**kwargs):
     except quality_checks.QualityCheckError:
         raise
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         _mark_task_failure(conn, run_id, exc)
         raise
     finally:
@@ -324,6 +338,7 @@ def load_dimensions(**kwargs):
     run_id = stg_info["run_id"]
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
         timer = StageTimer(log.bind(run_id=run_id), "dimensions")
@@ -342,6 +357,7 @@ def load_dimensions(**kwargs):
             "rows_rejected": result.rows_rejected,
         }
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         _mark_task_failure(conn, run_id, exc)
         raise
     finally:
@@ -359,6 +375,7 @@ def load_pending_fact_precios(**kwargs):
     run_date = date.fromisoformat(dl_info["fecha_datos"])
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
         timer = StageTimer(log.bind(run_id=run_id), "fact_load")
@@ -388,6 +405,7 @@ def load_pending_fact_precios(**kwargs):
             "rows_deduplicated": result.rows_deduplicated,
         }
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         _mark_task_failure(conn, run_id, exc)
         raise
     finally:
@@ -422,6 +440,7 @@ def publish_daily_snapshot(**kwargs):
     )
 
     conn = _db_connect()
+    timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
         timer = StageTimer(log.bind(run_id=run_id), "publication")
@@ -500,6 +519,7 @@ def publish_daily_snapshot(**kwargs):
         release_ingestion_lock(conn, _lock_from_xcom(ti))
         log.info("airflow.ingestion_lock.released", fecha=str(fecha))
     except Exception as exc:
+        _fail_active_timer(timer, exc)
         _mark_task_failure(conn, run_id, exc)
         raise
     finally:

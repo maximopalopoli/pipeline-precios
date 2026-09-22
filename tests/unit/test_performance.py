@@ -46,8 +46,11 @@ def test_stage_timer_rejects_invalid_lifecycle_calls():
         timer.finish()
 
     timer.start()
+    assert timer.is_running is True
     with pytest.raises(RuntimeError, match="already running"):
         timer.start()
+    timer.finish()
+    assert timer.is_running is False
 
 
 def test_stage_timer_logs_a_failed_stage_with_its_elapsed_time(monkeypatch):

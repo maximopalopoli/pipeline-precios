@@ -23,6 +23,11 @@ class StageTimer:
     clock: Callable[[], float] = perf_counter
     _started_at: float | None = field(default=None, init=False, repr=False)
 
+    @property
+    def is_running(self) -> bool:
+        """Whether this timer still needs a terminal event."""
+        return self._started_at is not None
+
     def start(self, **fields: object) -> None:
         """Start the measurement and log the beginning of its stage."""
         if self._started_at is not None:

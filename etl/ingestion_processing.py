@@ -181,9 +181,6 @@ def stream_pending_product_facts(
                 rows_deduplicated += chunk_rows_deduplicated
                 rows_fact_attempted += len(fact_result.df)
 
-                if pending is not None:
-                    pending.result()
-
                 timer.finish(
                     rows_valid=len(clean_result.clean),
                     rows_rejected=len(clean_result.rejected),
@@ -194,6 +191,9 @@ def stream_pending_product_facts(
             except Exception:
                 timer.fail()
                 raise
+
+            if pending is not None:
+                pending.result()
 
             pending = executor.submit(
                 _commit_pending_fact_chunk, conn_write, fact_result.df, run_id, chunks
