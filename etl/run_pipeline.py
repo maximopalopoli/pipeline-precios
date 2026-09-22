@@ -62,7 +62,7 @@ from etl.ingestion_processing import (
     stream_pending_product_facts,
 )
 from etl.load.publisher import publish_pending_facts
-from etl.performance import StageTimer
+from etl.performance import StageTimer, process_max_rss_bytes
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
 from etl.raw_retention import apply_raw_retention
@@ -349,6 +349,7 @@ def run(
             rows_without_keys=reconciliation.rows_without_keys,
             rows_deduplicated=reconciliation.rows_deduplicated,
             elapsed_total=elapsed_total,
+            peak_rss_bytes=process_max_rss_bytes(),
         )
         try:
             retention_result = apply_fact_retention(
