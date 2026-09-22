@@ -324,6 +324,10 @@ def run(
             stage="fact_load",
             chunks=product_load.chunks,
             rows_fact=product_load.rows_fact,
+            rows_valid=product_load.rows_valid,
+            rows_rejected=product_load.rows_rejected,
+            rows_without_keys=product_load.rows_without_keys,
+            rows_deduplicated=product_load.rows_deduplicated,
             elapsed=round(time.perf_counter() - t6, 2),
         )
 
@@ -332,11 +336,12 @@ def run(
         t7 = time.perf_counter()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
+        reconciliation = reconciliation_for_publication(product_load)
         publication = publish_pending_facts(
             conn,
             run_id=run_id,
             fecha_id=fecha_id_int,
-            reconciliation=reconciliation_for_publication(product_load),
+            reconciliation=reconciliation,
         )
         conn.commit()
 
@@ -345,6 +350,10 @@ def run(
             stage="publication",
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
+            rows_valid=reconciliation.rows_valid,
+            rows_rejected=reconciliation.rows_rejected,
+            rows_without_keys=reconciliation.rows_without_keys,
+            rows_deduplicated=reconciliation.rows_deduplicated,
             elapsed=round(time.perf_counter() - t7, 2),
         )
 
@@ -353,6 +362,10 @@ def run(
             "pipeline.completed",
             fecha=str(dl.fecha_datos),
             rows_loaded=product_load.rows_fact,
+            rows_valid=reconciliation.rows_valid,
+            rows_rejected=reconciliation.rows_rejected,
+            rows_without_keys=reconciliation.rows_without_keys,
+            rows_deduplicated=reconciliation.rows_deduplicated,
             elapsed_total=elapsed_total,
         )
         try:
