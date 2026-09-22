@@ -96,13 +96,14 @@ async def get_kpis():
     """)
 
     weekly_indicator = _weekly_variation_response(weekly_variation)
+    promo_percentage = promo["pct_promo"] if promo else None
     return {
         # Kept during the client migration; this is not official inflation.
         "inflacion_semanal": weekly_indicator["valor"],
         "variacion_semanal": weekly_indicator,
         "total_productos": products["n"] if products else 0,
         "total_sucursales": stores["n"] if stores else 0,
-        "pct_promo": float(promo["pct_promo"]) if promo and promo["pct_promo"] else None,
+        "pct_promo": float(promo_percentage) if promo_percentage is not None else None,
         "top_subas": [dict(r) for r in top_subas],
         "top_bajas": [dict(r) for r in top_bajas],
         "best_chain": dict(best_chain) if best_chain else None,
