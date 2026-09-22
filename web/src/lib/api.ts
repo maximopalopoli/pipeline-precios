@@ -25,6 +25,15 @@ export interface HealthData {
   status: string;
   started_at: string | null;
   fecha_datos: string | null;
+  reconciliacion: {
+    rows_productos_raw: number | null;
+    rows_productos_valid: number | null;
+    rows_productos_rejected: number | null;
+    rows_productos_without_keys: number | null;
+    rows_productos_deduplicated: number | null;
+    rows_fact_pending: number | null;
+    rows_fact_published: number | null;
+  } | null;
 }
 export const fetchHealth = () => api.get<HealthData>('/health').then(r => r.data);
 
