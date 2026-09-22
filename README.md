@@ -77,7 +77,7 @@ pipeline-precios/
 │   ├── sucursal.py                   # SucursalRecord
 │   └── producto.py                   # ProductoRecord
 ├── db/
-│   ├── migrations/                   # 10 numbered SQL migrations
+│   ├── migrations/                   # ordered SQL migrations, checksum-verified
 │   └── seeds/                        # Provinces (ISO 3166-2) + calendar
 ├── tests/
 │   ├── unit/                         # focused module and lifecycle tests
@@ -138,6 +138,21 @@ That's it. The dashboard will be at http://localhost:5173 and the API at http://
 The checked-in development defaults are sufficient for a local run. To use
 different database or Airflow credentials, copy `.env.example` to `.env` and
 edit it before running the commands above.
+
+### Migration integrity
+
+`make db` runs `db/run-migrations.sh`. The runner records the SHA-256 checksum
+of every applied migration in `schema_migrations` and verifies it before each
+subsequent run. This prevents a database from silently drifting after a
+historical migration has been edited.
+
+When upgrading a database created before checksum support, its currently
+applied migration files are recorded as a one-time baseline. After that first
+run, a changed applied migration stops the runner and reports its filename.
+
+If this happens, do not update the stored checksum or edit the historical SQL
+to make the error disappear. Restore the applied migration from version
+control and add a new, ordered migration for the intended schema/data change.
 
 ### Ingest a specific date
 

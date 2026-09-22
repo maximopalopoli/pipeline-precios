@@ -16,22 +16,50 @@ SELECT pg_advisory_lock(hashtext('pipeline-precios:migrations'));
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version TEXT PRIMARY KEY,
+    checksum TEXT,
     applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Existing installations predate checksums.  Their current files become the
+-- baseline on the first run; all subsequent runs verify that baseline.
+ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT;
 SQL
 
 for migration_path in "$db_dir"/migrations/*.sql; do
     migration_name="$(basename "$migration_path")"
+    migration_checksum="$(sha256sum "$migration_path" | cut -d ' ' -f1)"
 
     cat >> "$script_path" <<SQL
 \set migration_name '$migration_name'
+\set migration_checksum '$migration_checksum'
+SELECT set_config('pipeline_precios.migration_name', :'migration_name', FALSE);
+SELECT set_config('pipeline_precios.migration_checksum', :'migration_checksum', FALSE);
+DO \$\$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM schema_migrations
+        WHERE version = current_setting('pipeline_precios.migration_name')
+          AND checksum IS NOT NULL
+          AND checksum <> current_setting('pipeline_precios.migration_checksum')
+    ) THEN
+        RAISE EXCEPTION 'Checksum mismatch for applied migration %',
+            current_setting('pipeline_precios.migration_name');
+    END IF;
+END
+\$\$;
+UPDATE schema_migrations
+SET checksum = :'migration_checksum'
+WHERE version = :'migration_name'
+  AND checksum IS NULL;
 SELECT CASE WHEN NOT EXISTS (
     SELECT 1 FROM schema_migrations WHERE version = :'migration_name'
 ) THEN 'true' ELSE 'false' END AS should_apply \gset
 \if :should_apply
 BEGIN;
 \i $migration_path
-INSERT INTO schema_migrations (version) VALUES (:'migration_name');
+INSERT INTO schema_migrations (version, checksum)
+VALUES (:'migration_name', :'migration_checksum');
 COMMIT;
 \endif
 SQL
