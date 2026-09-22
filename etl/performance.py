@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import perf_counter
@@ -49,3 +50,27 @@ class StageTimer:
             **fields,
         )
         return elapsed_seconds
+
+
+def process_max_rss_bytes(
+    *,
+    getrusage: Callable[[], object] | None = None,
+    platform: str | None = None,
+) -> int | None:
+    """Return the process peak resident memory in bytes when the OS exposes it.
+
+    ``ru_maxrss`` is expressed in bytes on macOS and KiB on Linux and the BSDs.
+    The optional arguments make that platform boundary explicit and keep the
+    conversion independently testable.
+    """
+    if getrusage is None:
+        try:
+            import resource
+        except ImportError:
+            return None
+        getrusage = lambda: resource.getrusage(resource.RUSAGE_SELF)
+
+    ru_maxrss = int(getrusage().ru_maxrss)
+    if (platform or sys.platform) == "darwin":
+        return ru_maxrss
+    return ru_maxrss * 1024

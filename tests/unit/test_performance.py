@@ -2,7 +2,7 @@
 
 import pytest
 
-from etl.performance import StageTimer
+from etl.performance import StageTimer, process_max_rss_bytes
 
 
 class CapturingLogger:
@@ -63,3 +63,20 @@ def test_stage_timer_logs_a_failed_stage_with_its_elapsed_time():
             "reason": "critical_quality_failure",
         },
     )
+
+
+class ResourceUsage:
+    def __init__(self, ru_maxrss: int):
+        self.ru_maxrss = ru_maxrss
+
+
+def test_process_max_rss_converts_linux_kib_to_bytes():
+    assert process_max_rss_bytes(
+        getrusage=lambda: ResourceUsage(12_345), platform="linux"
+    ) == 12_345 * 1024
+
+
+def test_process_max_rss_keeps_macos_bytes_unchanged():
+    assert process_max_rss_bytes(
+        getrusage=lambda: ResourceUsage(12_345), platform="darwin"
+    ) == 12_345
