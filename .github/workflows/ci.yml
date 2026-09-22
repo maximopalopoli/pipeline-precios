@@ -84,6 +84,18 @@ jobs:
           expected_migrations="$(find db/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)"
           PGPASSWORD="$POSTGRES_PASSWORD" psql --host="$POSTGRES_HOST" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --command "SELECT 1 / CASE WHEN (SELECT COUNT(*) FROM schema_migrations) = $expected_migrations AND (SELECT COUNT(*) FROM dim_fecha) = 365 AND (SELECT COUNT(*) FROM dim_provincia) = 24 THEN 1 ELSE 0 END;"
 
+      - name: Baseline checksums for an existing installation
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password
+          POSTGRES_DB: ci_db
+        run: |
+          PGPASSWORD="$POSTGRES_PASSWORD" psql --host="$POSTGRES_HOST" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --command "ALTER TABLE schema_migrations DROP COLUMN checksum;"
+          sh db/run-migrations.sh
+          expected_migrations="$(find db/migrations -maxdepth 1 -type f -name '*.sql' | wc -l)"
+          PGPASSWORD="$POSTGRES_PASSWORD" psql --host="$POSTGRES_HOST" --username="$POSTGRES_USER" --dbname="$POSTGRES_DB" --command "SELECT 1 / CASE WHEN (SELECT COUNT(*) FROM schema_migrations WHERE checksum IS NOT NULL) = $expected_migrations THEN 1 ELSE 0 END;"
+
       - name: Reject a changed applied migration
         env:
           POSTGRES_HOST: localhost
