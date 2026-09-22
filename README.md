@@ -77,7 +77,7 @@ pipeline-precios/
 │   ├── sucursal.py                   # SucursalRecord
 │   └── producto.py                   # ProductoRecord
 ├── db/
-│   ├── migrations/                   # 10 numbered SQL migrations
+│   ├── migrations/                   # ordered SQL migrations, checksum-verified
 │   └── seeds/                        # Provinces (ISO 3166-2) + calendar
 ├── tests/
 │   ├── unit/                         # focused module and lifecycle tests
