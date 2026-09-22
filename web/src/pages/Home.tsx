@@ -18,6 +18,10 @@ const NAV_CARDS = [
   { to: '/locales', icon: '📍', label: 'Locales Cercanos', desc: 'Encuentra supermercados cerca tuyo y ve sus ofertas.' },
 ];
 
+function formatCount(value: number | null) {
+  return value == null ? '—' : value.toLocaleString();
+}
+
 export function Home() {
   const { data: health } = useQuery({ queryKey: ['health'], queryFn: fetchHealth });
   const { data: kpis, isLoading } = useQuery({ queryKey: ['kpis'], queryFn: fetchKpis });
@@ -28,6 +32,7 @@ export function Home() {
   const weeklyCoverage = weeklyPeriod && weeklyVariation
     ? `${weeklyPeriod} · ${weeklyVariation.series_comparadas} series comparadas`
     : 'Sin período comparable';
+  const reconciliation = health?.reconciliacion;
 
   return (
     <div className="space-y-6">
@@ -42,6 +47,23 @@ export function Home() {
           </p>
         )}
       </div>
+
+      {reconciliation && (
+        <div>
+          <h2 className="text-lg font-semibold text-slate-800 mb-3">Calidad de la última ingesta</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <KpiCard label="Filas recibidas" value={formatCount(reconciliation.rows_productos_raw)} />
+            <KpiCard label="Filas válidas" value={formatCount(reconciliation.rows_productos_valid)} />
+            <KpiCard label="Filas rechazadas" value={formatCount(reconciliation.rows_productos_rejected)} />
+            <KpiCard label="Precios publicados" value={formatCount(reconciliation.rows_fact_published)} />
+          </div>
+          <p className="mt-2 text-sm text-slate-500">
+            Sin claves: {formatCount(reconciliation.rows_productos_without_keys)} · Duplicadas:{' '}
+            {formatCount(reconciliation.rows_productos_deduplicated)} · Pendientes de publicar:{' '}
+            {formatCount(reconciliation.rows_fact_pending)}
+          </p>
+        </div>
+      )}
 
       {/* KPIs */}
       <div>
