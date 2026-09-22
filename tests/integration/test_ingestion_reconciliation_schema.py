@@ -6,6 +6,7 @@ def test_ingestion_runs_has_nonnegative_product_reconciliation_counts(pg_conn):
         "rows_productos_valid",
         "rows_productos_rejected",
         "rows_productos_without_keys",
+        "rows_productos_deduplicated",
         "rows_fact_pending",
         "rows_fact_published",
     }

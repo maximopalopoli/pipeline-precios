@@ -21,8 +21,9 @@ def test_record_product_reconciliation_persists_all_counts(pg_conn):
         rows_valid=10,
         rows_rejected=2,
         rows_without_keys=1,
-        rows_fact_pending=9,
-        rows_fact_published=9,
+        rows_deduplicated=2,
+        rows_fact_pending=7,
+        rows_fact_published=7,
     )
     record_product_reconciliation(pg_conn, run_id, counts)
     pg_conn.commit()
@@ -31,7 +32,8 @@ def test_record_product_reconciliation_persists_all_counts(pg_conn):
         cur.execute(
             """
             SELECT rows_productos_valid, rows_productos_rejected,
-                   rows_productos_without_keys, rows_fact_pending,
+                   rows_productos_without_keys, rows_productos_deduplicated,
+                   rows_fact_pending,
                    rows_fact_published
             FROM ingestion_runs
             WHERE id = %s
@@ -40,4 +42,4 @@ def test_record_product_reconciliation_persists_all_counts(pg_conn):
         )
         persisted = cur.fetchone()
 
-    assert persisted == (10, 2, 1, 9, 9)
+    assert persisted == (10, 2, 1, 2, 7, 7)
