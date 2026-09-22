@@ -10,7 +10,7 @@ from typing import Callable
 import pandas as pd
 
 from etl.load import warehouse_loader
-from etl.reconciliation import ProductReconciliation
+from etl.reconciliation import ProductReconciliation, record_product_rejections
 from etl.transform.cleaner import clean_comercios, clean_productos, clean_sucursales
 from etl.transform.fact_builder import (
     PRODUTO_CHUNK_SIZE,
@@ -143,6 +143,12 @@ def stream_pending_product_facts(
             clean_result = clean_productos(chunk_df)
             rows_valid += len(clean_result.clean)
             rows_rejected += len(clean_result.rejected)
+            record_product_rejections(
+                conn,
+                run_id=run_id,
+                source="clean_productos",
+                rejected=clean_result.rejected,
+            )
             fact_result = build_fact_chunk(
                 clean_result.clean,
                 comercio_cache,
@@ -152,6 +158,12 @@ def stream_pending_product_facts(
                 run_id,
             )
             rows_without_keys += len(fact_result.rejected)
+            record_product_rejections(
+                conn,
+                run_id=run_id,
+                source="fact_key_resolution",
+                rejected=fact_result.rejected,
+            )
             rows_deduplicated += (
                 len(clean_result.clean) - len(fact_result.rejected) - len(fact_result.df)
             )

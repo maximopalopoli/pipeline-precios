@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from typing import Iterable
 
 import structlog
 
@@ -72,3 +74,40 @@ def record_product_reconciliation(
         if cur.rowcount != 1:
             raise ValueError(f"Ingestion run {run_id} does not exist.")
     log.info("ingestion.reconciliation_recorded", run_id=run_id, **counts.__dict__)
+
+
+def record_product_rejections(
+    conn,
+    *,
+    run_id: int,
+    source: str,
+    rejected: Iterable[dict],
+) -> int:
+    """Persist product-level rejections without retaining a full-run list.
+
+    ``source`` identifies the processing step (for example ``clean_productos``
+    or ``fact_key_resolution``). Values are JSON-encoded with ``str`` fallback
+    because pandas and Decimal values may appear in the rejected row payload.
+    """
+    rows = [
+        (
+            run_id,
+            source,
+            json.dumps(item["row"], default=str, sort_keys=True),
+            item["reason"],
+        )
+        for item in rejected
+    ]
+    if not rows:
+        return 0
+
+    with conn.cursor() as cur:
+        cur.executemany(
+            """
+            INSERT INTO rejected_rows (run_id, source_file, raw_data, rejection_reason)
+            VALUES (%s, %s, %s, %s)
+            """,
+            rows,
+        )
+    log.info("ingestion.product_rejections_recorded", run_id=run_id, source=source, count=len(rows))
+    return len(rows)
