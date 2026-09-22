@@ -175,6 +175,33 @@ has `status = 'failed'`, `finished_at`, and an error message. The same raw file
 remains eligible for a later retry until a run completes successfully. Critical
 quality failures retain their structured check details in the error message.
 
+### Product-row reconciliation
+
+Completed runs created by the current pipeline account for every staged product
+row through publication. The product-specific counters on `ingestion_runs` are:
+
+| Counter | Meaning |
+|---------|---------|
+| `rows_productos_raw` | Product rows read into staging. |
+| `rows_productos_valid` | Rows accepted by product cleaning. |
+| `rows_productos_rejected` | Rows rejected by product cleaning; their reason and payload, along with missing-key rows, are kept in `rejected_rows`. |
+| `rows_productos_without_keys` | Valid rows that could not resolve the dimensions required for a fact. |
+| `rows_productos_deduplicated` | Valid rows superseded by another row at the product × store fact grain. |
+| `rows_fact_pending` | Unique facts held in the provisional set before publication. |
+| `rows_fact_published` | Facts made visible by the completed atomic publication. |
+
+For a completed run, the following invariants hold:
+
+```text
+rows_productos_raw = rows_productos_valid + rows_productos_rejected
+rows_productos_valid = rows_productos_without_keys + rows_productos_deduplicated + rows_fact_pending
+rows_fact_pending = rows_fact_published
+```
+
+The API exposes these fields as `reconciliacion` in `GET /api/health`; the home
+page displays the latest available summary. Older runs predate these counters,
+so their reconciliation is `null` rather than a failed or incomplete status.
+
 ### Run with Docker Compose (all services)
 
 ```bash

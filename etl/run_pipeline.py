@@ -56,7 +56,11 @@ from etl.ingestion_run import (
     record_source_date,
     should_process_raw_file,
 )
-from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
+from etl.ingestion_processing import (
+    load_staged_dimensions,
+    reconciliation_for_publication,
+    stream_pending_product_facts,
+)
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
@@ -320,6 +324,10 @@ def run(
             stage="fact_load",
             chunks=product_load.chunks,
             rows_fact=product_load.rows_fact,
+            rows_valid=product_load.rows_valid,
+            rows_rejected=product_load.rows_rejected,
+            rows_without_keys=product_load.rows_without_keys,
+            rows_deduplicated=product_load.rows_deduplicated,
             elapsed=round(time.perf_counter() - t6, 2),
         )
 
@@ -328,11 +336,12 @@ def run(
         t7 = time.perf_counter()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
+        reconciliation = reconciliation_for_publication(product_load)
         publication = publish_pending_facts(
             conn,
             run_id=run_id,
             fecha_id=fecha_id_int,
-            rows_valid=product_load.rows_valid,
+            reconciliation=reconciliation,
         )
         conn.commit()
 
@@ -341,6 +350,10 @@ def run(
             stage="publication",
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
+            rows_valid=reconciliation.rows_valid,
+            rows_rejected=reconciliation.rows_rejected,
+            rows_without_keys=reconciliation.rows_without_keys,
+            rows_deduplicated=reconciliation.rows_deduplicated,
             elapsed=round(time.perf_counter() - t7, 2),
         )
 
@@ -349,6 +362,10 @@ def run(
             "pipeline.completed",
             fecha=str(dl.fecha_datos),
             rows_loaded=product_load.rows_fact,
+            rows_valid=reconciliation.rows_valid,
+            rows_rejected=reconciliation.rows_rejected,
+            rows_without_keys=reconciliation.rows_without_keys,
+            rows_deduplicated=reconciliation.rows_deduplicated,
             elapsed_total=elapsed_total,
         )
         try:

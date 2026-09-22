@@ -36,6 +36,16 @@ def test_streaming_product_processing_loads_pending_facts_in_chunks(pg_conn, sam
         cur.execute((_SEEDS / "seed_fechas.sql").read_text())
     run_id = _create_run(pg_conn)
     staging_loader.load(pg_conn, sample_zip_path, run_id)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO stg_productos
+            SELECT * FROM stg_productos
+            WHERE run_id = %s
+            LIMIT 1
+            """,
+            (run_id,),
+        )
 
     dimensions = load_staged_dimensions(pg_conn, run_id)
     pg_conn.commit()
@@ -61,8 +71,11 @@ def test_streaming_product_processing_loads_pending_facts_in_chunks(pg_conn, sam
     assert dimensions.rows_productos == 5
     assert dimensions.rows_rejected == 0
     assert result.chunks == 4
-    assert result.rows_valid == 7
+    assert result.rows_valid == 8
     assert result.rows_fact == 7
+    assert result.rows_rejected == 0
+    assert result.rows_without_keys == 0
+    assert result.rows_deduplicated == 1
     assert len(heartbeats) == result.chunks
     with pg_conn.cursor() as cur:
         cur.execute("SELECT rows_loaded FROM ingestion_runs WHERE id = %s", (run_id,))

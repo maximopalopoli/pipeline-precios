@@ -369,6 +369,9 @@ def load_pending_fact_precios(**kwargs):
             "chunks": result.chunks,
             "rows_fact": result.rows_fact,
             "rows_valid": result.rows_valid,
+            "rows_rejected": result.rows_rejected,
+            "rows_without_keys": result.rows_without_keys,
+            "rows_deduplicated": result.rows_deduplicated,
         }
     except Exception as exc:
         _mark_task_failure(conn, run_id, exc)
@@ -393,7 +396,16 @@ def publish_daily_snapshot(**kwargs):
     run_id = stg_info["run_id"]
     fecha = date.fromisoformat(dl_info["fecha_datos"])
     fecha_id = int(fecha.strftime("%Y%m%d"))
-    rows_valid = pending_info["rows_valid"]
+    from etl.reconciliation import ProductReconciliation
+
+    reconciliation = ProductReconciliation(
+        rows_valid=pending_info["rows_valid"],
+        rows_rejected=pending_info["rows_rejected"],
+        rows_without_keys=pending_info["rows_without_keys"],
+        rows_deduplicated=pending_info["rows_deduplicated"],
+        rows_fact_pending=pending_info["rows_fact"],
+        rows_fact_published=pending_info["rows_fact"],
+    )
 
     conn = _db_connect()
     try:
@@ -402,7 +414,7 @@ def publish_daily_snapshot(**kwargs):
             conn,
             run_id=run_id,
             fecha_id=fecha_id,
-            rows_valid=rows_valid,
+            reconciliation=reconciliation,
         )
         conn.commit()
         log.info(

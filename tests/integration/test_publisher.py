@@ -7,6 +7,7 @@ import pytest
 
 import etl.load.publisher as publisher
 from etl.load.aggregator import aggregate
+from etl.reconciliation import ProductReconciliation
 
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds" / "seed_provincias.sql"
 FECHA_ID = 20260315
@@ -133,7 +134,7 @@ def test_publish_replaces_the_full_daily_snapshot(pg_conn, seed_data):
         pg_conn,
         run_id=pending_run_id,
         fecha_id=FECHA_ID,
-        rows_valid=1,
+        reconciliation=ProductReconciliation(1, 0, 0, 0, 1, 1),
     )
     pg_conn.commit()
 
@@ -182,7 +183,7 @@ def test_successful_retry_clears_a_previous_failure_message(pg_conn, seed_data):
         pg_conn,
         run_id=run_id,
         fecha_id=FECHA_ID,
-        rows_valid=1,
+        reconciliation=ProductReconciliation(1, 0, 0, 0, 1, 1),
     )
     pg_conn.commit()
 
@@ -216,7 +217,7 @@ def test_failed_publication_keeps_the_previous_snapshot(pg_conn, seed_data, monk
             pg_conn,
             run_id=pending_run_id,
             fecha_id=FECHA_ID,
-            rows_valid=1,
+            reconciliation=ProductReconciliation(1, 0, 0, 0, 1, 1),
         )
     pg_conn.rollback()
 
