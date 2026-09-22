@@ -10,6 +10,7 @@ from typing import Callable
 import pandas as pd
 
 from etl.load import warehouse_loader
+from etl.reconciliation import ProductReconciliation
 from etl.transform.cleaner import clean_comercios, clean_productos, clean_sucursales
 from etl.transform.fact_builder import (
     PRODUTO_CHUNK_SIZE,
@@ -38,6 +39,18 @@ class DimensionLoadResult:
     rows_sucursales: int
     rows_productos: int
     rows_rejected: int
+
+
+def reconciliation_for_publication(result: ProductLoadResult) -> ProductReconciliation:
+    """Turn a completed streaming result into its publish-time reconciliation."""
+    return ProductReconciliation(
+        rows_valid=result.rows_valid,
+        rows_rejected=result.rows_rejected,
+        rows_without_keys=result.rows_without_keys,
+        rows_deduplicated=result.rows_deduplicated,
+        rows_fact_pending=result.rows_fact,
+        rows_fact_published=result.rows_fact,
+    )
 
 
 def load_staged_dimensions(conn, run_id: int) -> DimensionLoadResult:

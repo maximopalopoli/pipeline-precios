@@ -8,6 +8,7 @@ import structlog
 
 from etl.load.aggregator import aggregate
 from etl.load.warehouse_loader import _ensure_partition
+from etl.reconciliation import ProductReconciliation, record_product_reconciliation
 
 log = structlog.get_logger(__name__)
 
@@ -25,7 +26,7 @@ def publish_pending_facts(
     *,
     run_id: int,
     fecha_id: int,
-    rows_valid: int,
+    reconciliation: ProductReconciliation,
 ) -> PublicationResult:
     """Replace one day's visible facts and aggregates from a pending run.
 
@@ -51,6 +52,11 @@ def publish_pending_facts(
     if total_rows != rows_for_fecha:
         raise ValueError(
             f"Cannot publish run {run_id}: pending facts do not match fecha_id {fecha_id}"
+        )
+    if total_rows != reconciliation.rows_fact_pending:
+        raise ValueError(
+            f"Cannot publish run {run_id}: expected {reconciliation.rows_fact_pending} "
+            f"pending facts, found {total_rows}"
         )
 
     _ensure_partition(conn, fecha_id)
@@ -78,7 +84,15 @@ def publish_pending_facts(
         )
         rows_fact = cur.rowcount
 
+    if rows_fact != reconciliation.rows_fact_published:
+        raise ValueError(
+            f"Cannot publish run {run_id}: expected {reconciliation.rows_fact_published} "
+            f"published facts, inserted {rows_fact}"
+        )
+
     agg = aggregate(conn, fecha_id)
+
+    record_product_reconciliation(conn, run_id, reconciliation)
 
     with conn.cursor() as cur:
         cur.execute(
@@ -90,7 +104,7 @@ def publish_pending_facts(
                    error_message = NULL
              WHERE id = %s
             """,
-            (rows_valid, run_id),
+            (reconciliation.rows_valid, run_id),
         )
         if cur.rowcount != 1:
             raise ValueError(f"Cannot publish unknown ingestion run {run_id}")

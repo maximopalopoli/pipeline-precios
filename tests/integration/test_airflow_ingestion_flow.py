@@ -225,10 +225,25 @@ def test_airflow_tasks_stream_and_publish_staged_products(
         "rows_clean_sucursales": 3,
         "rows_rejected": 0,
     }
-    assert pending == {"chunks": 1, "rows_fact": 7, "rows_valid": 7}
+    assert pending == {
+        "chunks": 1,
+        "rows_fact": 7,
+        "rows_valid": 7,
+        "rows_rejected": 0,
+        "rows_without_keys": 0,
+        "rows_deduplicated": 0,
+    }
     with pg_conn.cursor() as cur:
-        cur.execute("SELECT status, rows_valid, rows_loaded FROM ingestion_runs WHERE id = %s", (run_id,))
-        assert cur.fetchone() == ("completed", 7, 7)
+        cur.execute(
+            """
+            SELECT status, rows_valid, rows_loaded, rows_productos_rejected,
+                   rows_productos_without_keys, rows_productos_deduplicated,
+                   rows_fact_pending, rows_fact_published
+            FROM ingestion_runs WHERE id = %s
+            """,
+            (run_id,),
+        )
+        assert cur.fetchone() == ("completed", 7, 7, 0, 0, 0, 7, 7)
         cur.execute("SELECT COUNT(*) FROM fact_precios WHERE run_id = %s", (run_id,))
         assert cur.fetchone()[0] == 7
         cur.execute("SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s", (run_id,))
@@ -290,8 +305,16 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
         assert cur.fetchone()[0] == 0
         cur.execute("SELECT id FROM ingestion_runs WHERE raw_file_id = %s", (raw_file_id,))
         cli_run_id = cur.fetchone()[0]
-        cur.execute("SELECT status, rows_valid, rows_loaded FROM ingestion_runs WHERE id = %s", (cli_run_id,))
-        assert cur.fetchone() == ("completed", 7, 7)
+        cur.execute(
+            """
+            SELECT status, rows_valid, rows_loaded, rows_productos_rejected,
+                   rows_productos_without_keys, rows_productos_deduplicated,
+                   rows_fact_pending, rows_fact_published
+            FROM ingestion_runs WHERE id = %s
+            """,
+            (cli_run_id,),
+        )
+        assert cur.fetchone() == ("completed", 7, 7, 0, 0, 0, 7, 7)
     cli_snapshot = _published_snapshot(pg_conn, cli_run_id)
 
     dag_run_id = _create_run(pg_conn)
@@ -314,8 +337,16 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
     dag_module.publish_daily_snapshot(ti=ti)
 
     with pg_conn.cursor() as cur:
-        cur.execute("SELECT status, rows_valid, rows_loaded FROM ingestion_runs WHERE id = %s", (dag_run_id,))
-        assert cur.fetchone() == ("completed", 7, 7)
+        cur.execute(
+            """
+            SELECT status, rows_valid, rows_loaded, rows_productos_rejected,
+                   rows_productos_without_keys, rows_productos_deduplicated,
+                   rows_fact_pending, rows_fact_published
+            FROM ingestion_runs WHERE id = %s
+            """,
+            (dag_run_id,),
+        )
+        assert cur.fetchone() == ("completed", 7, 7, 0, 0, 0, 7, 7)
     assert _published_snapshot(pg_conn, dag_run_id) == cli_snapshot
 
 
@@ -440,7 +471,13 @@ def test_airflow_applies_enabled_retention_after_publication(
     ti = _TaskInstance(
         {
             "load_staging": {"run_id": run_id},
-            "load_pending_fact_precios": {"rows_valid": 0},
+                "load_pending_fact_precios": {
+                    "rows_valid": 0,
+                    "rows_rejected": 0,
+                    "rows_without_keys": 0,
+                    "rows_deduplicated": 0,
+                    "rows_fact": 0,
+                },
             "download_zip": {"fecha_datos": str(_RUN_DATE)},
             "check_file_changed": {
                 "ingestion_lock": _airflow_lock_info(pg_conn, raw_file_id)

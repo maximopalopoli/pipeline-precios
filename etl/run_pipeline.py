@@ -56,7 +56,11 @@ from etl.ingestion_run import (
     record_source_date,
     should_process_raw_file,
 )
-from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
+from etl.ingestion_processing import (
+    load_staged_dimensions,
+    reconciliation_for_publication,
+    stream_pending_product_facts,
+)
 from etl.load.publisher import publish_pending_facts
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
@@ -332,7 +336,7 @@ def run(
             conn,
             run_id=run_id,
             fecha_id=fecha_id_int,
-            rows_valid=product_load.rows_valid,
+            reconciliation=reconciliation_for_publication(product_load),
         )
         conn.commit()
 
