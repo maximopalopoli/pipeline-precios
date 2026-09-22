@@ -3,7 +3,7 @@
 import etl.performance as performance
 import pytest
 
-from etl.performance import StageTimer, process_max_rss_bytes
+from etl.performance import StageTimer, items_per_second, process_max_rss_bytes
 
 
 class CapturingLogger:
@@ -85,3 +85,14 @@ def test_process_max_rss_keeps_macos_bytes_unchanged():
     assert process_max_rss_bytes(
         getrusage=lambda: ResourceUsage(12_345), platform="darwin"
     ) == 12_345
+
+
+def test_items_per_second_rounds_the_measured_throughput():
+    assert items_per_second(10, 4.0) == 2.5
+    assert items_per_second(1, 3.0) == 0.333
+
+
+def test_items_per_second_handles_zero_duration_and_invalid_counts():
+    assert items_per_second(10, 0) is None
+    with pytest.raises(ValueError, match="must not be negative"):
+        items_per_second(-1, 1.0)

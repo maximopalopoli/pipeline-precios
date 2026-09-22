@@ -75,3 +75,12 @@ def process_max_rss_bytes(
     if (platform or sys.platform) == "darwin":
         return ru_maxrss
     return ru_maxrss * 1024
+
+
+def items_per_second(items: int, elapsed_seconds: float) -> float | None:
+    """Return a rounded throughput, or ``None`` when elapsed time is zero."""
+    if items < 0:
+        raise ValueError("items must not be negative")
+    if elapsed_seconds <= 0:
+        return None
+    return round(items / elapsed_seconds, 3)
