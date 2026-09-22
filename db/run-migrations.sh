@@ -32,13 +32,22 @@ for migration_path in "$db_dir"/migrations/*.sql; do
     cat >> "$script_path" <<SQL
 \set migration_name '$migration_name'
 \set migration_checksum '$migration_checksum'
-SELECT 1 / CASE WHEN EXISTS (
-    SELECT 1
-    FROM schema_migrations
-    WHERE version = :'migration_name'
-      AND checksum IS NOT NULL
-      AND checksum <> :'migration_checksum'
-) THEN 0 ELSE 1 END;
+SELECT set_config('pipeline_precios.migration_name', :'migration_name', FALSE);
+SELECT set_config('pipeline_precios.migration_checksum', :'migration_checksum', FALSE);
+DO \$\$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM schema_migrations
+        WHERE version = current_setting('pipeline_precios.migration_name')
+          AND checksum IS NOT NULL
+          AND checksum <> current_setting('pipeline_precios.migration_checksum')
+    ) THEN
+        RAISE EXCEPTION 'Checksum mismatch for applied migration %',
+            current_setting('pipeline_precios.migration_name');
+    END IF;
+END
+\$\$;
 UPDATE schema_migrations
 SET checksum = :'migration_checksum'
 WHERE version = :'migration_name'

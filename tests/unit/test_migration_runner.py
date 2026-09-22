@@ -12,8 +12,9 @@ def test_migration_runner_records_a_checksum_for_new_migrations():
 
 def test_migration_runner_rejects_a_changed_applied_migration():
     assert 'migration_checksum="$(sha256sum "$migration_path"' in RUNNER
-    assert "AND checksum <> :'migration_checksum'" in RUNNER
-    assert "THEN 0 ELSE 1 END" in RUNNER
+    assert "AND checksum <> current_setting('pipeline_precios.migration_checksum')" in RUNNER
+    assert "Checksum mismatch for applied migration %" in RUNNER
+    assert "current_setting('pipeline_precios.migration_name')" in RUNNER
 
 
 def test_migration_runner_baselines_existing_installations_once():
