@@ -17,6 +17,7 @@ import { ProductSearch } from '../components/filters/ProductSearch';
 import { DataTable } from '../components/tables/DataTable';
 import { PriceMap } from '../components/maps/PriceMap';
 import { KpiCard } from '../components/layout/KpiCard';
+import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { formatCurrency } from '../lib/constants';
 
 // ── Single-product table columns ──
@@ -29,6 +30,17 @@ const columns = [
   col.accessor('precio_lista', { header: 'Precio lista', cell: (info) => formatCurrency(info.getValue()) }),
   col.accessor('mejor_precio', { header: 'Mejor precio', cell: (info) => formatCurrency(info.getValue()) }),
   col.accessor('ahorro', { header: 'Ahorro', cell: (info) => formatCurrency(info.getValue()) }),
+  col.display({
+    id: 'promocion',
+    header: 'Condiciones',
+    cell: (info) => (
+      <PromotionDetails
+        tieneDescuento={info.row.original.tiene_descuento}
+        leyendaPromo={info.row.original.leyenda_promo}
+        compact
+      />
+    ),
+  }),
 ];
 
 // ── Helpers for generic mode ──
@@ -299,14 +311,18 @@ export function Buscador() {
                 <p className="text-sm text-emerald-800">
                   <strong>Mejor precio:</strong> {cheapest.cadena} — {cheapest.sucursal} ({cheapest.localidad})
                 </p>
-                <p className="text-lg font-bold text-emerald-900">
-                  {formatCurrency(cheapest.mejor_precio)}
+                  <p className="text-lg font-bold text-emerald-900">
+                    {formatCurrency(cheapest.mejor_precio)}
                   {cheapest.ahorro > 0 && (
                     <span className="ml-2 text-sm font-normal">
                       (ahorro {formatCurrency(cheapest.ahorro)} vs lista)
                     </span>
                   )}
                 </p>
+                <PromotionDetails
+                  tieneDescuento={cheapest.tiene_descuento}
+                  leyendaPromo={cheapest.leyenda_promo}
+                />
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -416,6 +432,13 @@ export function Buscador() {
                                   {formatCurrency(item.precio_lista)}
                                 </span>
                               )}
+                              <div>
+                                <PromotionDetails
+                                  tieneDescuento={item.tiene_descuento}
+                                  leyendaPromo={item.leyenda_promo}
+                                  compact
+                                />
+                              </div>
                             </div>
                           </div>
                         ))}
