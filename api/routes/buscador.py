@@ -3,11 +3,17 @@
 from fastapi import APIRouter, Query
 
 from api.db import fetch
-from api.pricing import effective_price_sql
+from api.pricing import (
+    discount_promo_label_sql,
+    discount_promo_price_sql,
+    effective_price_sql,
+)
 
 router = APIRouter()
 
 BEST_PRICE = effective_price_sql()
+DISCOUNT_PROMO_PRICE = discount_promo_price_sql()
+DISCOUNT_PROMO_LABEL = discount_promo_label_sql()
 
 
 def _distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -88,6 +94,9 @@ async def get_buscador(
             f.precio_lista,
             {BEST_PRICE}              AS mejor_precio,
             f.precio_lista - {BEST_PRICE} AS ahorro,
+            {DISCOUNT_PROMO_PRICE}    AS precio_promo,
+            {DISCOUNT_PROMO_LABEL}    AS leyenda_promo,
+            ({DISCOUNT_PROMO_PRICE} IS NOT NULL) AS tiene_descuento,
             s.sucursales_latitud      AS lat,
             s.sucursales_longitud     AS lon,
             s.sucursales_nombre       AS sucursal
@@ -192,6 +201,9 @@ async def get_buscador_generic(
             pr.nombre                 AS provincia,
             f.precio_lista,
             {BEST_PRICE}              AS mejor_precio,
+            {DISCOUNT_PROMO_PRICE}    AS precio_promo,
+            {DISCOUNT_PROMO_LABEL}    AS leyenda_promo,
+            ({DISCOUNT_PROMO_PRICE} IS NOT NULL) AS tiene_descuento,
             s.sucursales_latitud      AS lat,
             s.sucursales_longitud     AS lon
         FROM fact_precios f

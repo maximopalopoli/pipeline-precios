@@ -66,6 +66,11 @@ export interface StorePrice {
   precio_lista: number;
   mejor_precio: number;
   ahorro: number;
+  /** Promotional price only when it is lower than the list price. */
+  precio_promo: number | null;
+  /** Source-provided promotion conditions; null means they were not supplied. */
+  leyenda_promo: string | null;
+  tiene_descuento: boolean;
   lat: number | null;
   lon: number | null;
   sucursal: string;
@@ -92,6 +97,9 @@ export interface GenericStorePrice {
   provincia: string;
   precio_lista: number;
   mejor_precio: number;
+  precio_promo: number | null;
+  leyenda_promo: string | null;
+  tiene_descuento: boolean;
   lat: number | null;
   lon: number | null;
 }
@@ -127,6 +135,9 @@ export interface EanStorePrice {
   provincia: string;
   precio_lista: number;
   mejor_precio: number;
+  precio_promo: number | null;
+  leyenda_promo: string | null;
+  tiene_descuento: boolean;
   lat: number | null;
   lon: number | null;
 }
@@ -179,6 +190,8 @@ export interface OfertaItem {
   producto: string;
   marca: string | null;
   cadena: string;
+  /** Source-provided promotion conditions; null means they were not supplied. */
+  leyenda_promo: string | null;
   precio_lista: number;
   precio_promo: number;
   descuento_pct: number;
@@ -219,6 +232,7 @@ export interface StorePromo {
   marca: string | null;
   precio_lista: number;
   precio_promo: number;
+  leyenda_promo: string | null;
   descuento_pct: number;
 }
 export const fetchStorePromos = (sucursal_sk: number) =>

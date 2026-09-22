@@ -59,3 +59,28 @@ def test_kpis_keeps_legacy_value_while_exposing_the_weekly_indicator(monkeypatch
         "series_comparadas": 3,
         "metodologia": kpis.WEEKLY_VARIATION_METHODOLOGY,
     }
+
+
+def test_kpis_exposes_zero_promotion_coverage(monkeypatch):
+    rows = iter(
+        [
+            None,
+            {"n": 0},
+            {"n": 0},
+            {"pct_promo": 0},
+            None,
+        ]
+    )
+
+    async def fake_fetchrow(sql: str):
+        return next(rows)
+
+    async def fake_fetch(sql: str):
+        return []
+
+    monkeypatch.setattr(kpis, "fetchrow", fake_fetchrow)
+    monkeypatch.setattr(kpis, "fetch", fake_fetch)
+
+    response = asyncio.run(kpis.get_kpis())
+
+    assert response["pct_promo"] == 0.0

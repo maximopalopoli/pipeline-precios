@@ -191,6 +191,20 @@ class TestCleanProductos:
         )))
         assert bool(r.clean.iloc[0]["tiene_promo"])
 
+    def test_tiene_promo_false_when_promotion_is_not_a_discount(self):
+        r = clean_productos(_df(_producto(
+            productos_precio_unitario_promo1="0",
+            productos_precio_unitario_promo2="300.00",
+        )))
+        assert not bool(r.clean.iloc[0]["tiene_promo"])
+
+    def test_tiene_promo_true_when_one_of_two_promotions_is_a_discount(self):
+        r = clean_productos(_df(_producto(
+            productos_precio_unitario_promo1="300.00",
+            productos_precio_unitario_promo2="180.00",
+        )))
+        assert bool(r.clean.iloc[0]["tiene_promo"])
+
     def test_zero_precio_lista_rejected(self):
         r = clean_productos(_df(_producto(productos_precio_lista="0")))
         assert len(r.rejected) == 1

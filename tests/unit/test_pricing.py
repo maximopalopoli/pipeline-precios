@@ -1,6 +1,11 @@
 from decimal import Decimal
 
-from api.pricing import effective_price, effective_price_sql
+from api.pricing import (
+    discount_promo_label_sql,
+    discount_promo_price_sql,
+    effective_price,
+    effective_price_sql,
+)
 
 
 def test_effective_price_uses_the_list_price_without_promotions():
@@ -24,3 +29,21 @@ def test_effective_price_sql_uses_the_same_three_fact_columns():
         "pipeline_effective_price(price.precio_lista, "
         "price.precio_promo1, price.precio_promo2)"
     )
+
+
+def test_discount_promotion_sql_only_selects_prices_below_the_list_price():
+    assert discount_promo_price_sql("price") == (
+        "LEAST(CASE WHEN price.precio_promo1 > 0 "
+        "AND price.precio_promo1 < price.precio_lista "
+        "THEN price.precio_promo1 END, "
+        "CASE WHEN price.precio_promo2 > 0 "
+        "AND price.precio_promo2 < price.precio_lista "
+        "THEN price.precio_promo2 END)"
+    )
+
+
+def test_discount_promotion_label_sql_keeps_the_source_label_for_the_selected_price():
+    expression = discount_promo_label_sql("price")
+    assert "THEN price.leyenda_promo1" in expression
+    assert "THEN price.leyenda_promo2" in expression
+    assert "price.precio_promo1 <= price.precio_promo2" in expression

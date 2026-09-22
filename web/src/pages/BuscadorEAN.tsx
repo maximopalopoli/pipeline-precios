@@ -9,6 +9,7 @@ import {
 import { useFilters } from '../hooks/useFilters';
 import { FilterPanel } from '../components/filters/FilterPanel';
 import { KpiCard } from '../components/layout/KpiCard';
+import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { formatCurrency } from '../lib/constants';
 
 // ── Group results by EAN product ──
@@ -358,6 +359,13 @@ export function BuscadorEAN() {
                                     {formatCurrency(item.precio_lista)}
                                   </span>
                                 )}
+                                <div>
+                                  <PromotionDetails
+                                    tieneDescuento={item.tiene_descuento}
+                                    leyendaPromo={item.leyenda_promo}
+                                    compact
+                                  />
+                                </div>
                               </div>
                               {isCheapest && (
                                 <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">

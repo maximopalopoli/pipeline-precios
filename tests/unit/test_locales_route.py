@@ -20,6 +20,9 @@ def test_store_promos_only_requests_effective_discounts(monkeypatch):
     assert asyncio.run(locales.get_store_promos(42)) == []
     assert captured["params"] == (42, 20260317)
     assert (
-        "AND pipeline_effective_price(f.precio_lista, f.precio_promo1, "
-        "f.precio_promo2) < f.precio_lista" in captured["sql"]
+        "AS leyenda_promo" in captured["sql"]
+    )
+    assert (
+        "AND LEAST(CASE WHEN f.precio_promo1 > 0 "
+        "AND f.precio_promo1 < f.precio_lista " in captured["sql"]
     )

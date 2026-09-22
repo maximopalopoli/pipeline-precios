@@ -322,7 +322,16 @@ def clean_productos(df: pd.DataFrame) -> CleanResult:
         df[col] = s
 
     # ── 7. Derive tiene_promo ─────────────────────────────────────────────────
-    df["tiene_promo"] = df["productos_precio_unitario_promo1"].notna() | df["productos_precio_unitario_promo2"].notna()
+    # A published promotional field is not necessarily a customer discount:
+    # the source can send zero or a value higher than the list price.  Keep
+    # those source values for auditability, but do not count them as offers.
+    precio_lista = pd.to_numeric(df["productos_precio_lista"], errors="coerce")
+    promo1 = pd.to_numeric(df["productos_precio_unitario_promo1"], errors="coerce")
+    promo2 = pd.to_numeric(df["productos_precio_unitario_promo2"], errors="coerce")
+    df["tiene_promo"] = (
+        ((promo1 > 0) & (promo1 < precio_lista))
+        | ((promo2 > 0) & (promo2 < precio_lista))
+    )
 
     # ── Split clean / rejected ────────────────────────────────────────────────
     clean_mask = ~bad
