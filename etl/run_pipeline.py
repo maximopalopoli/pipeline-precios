@@ -238,6 +238,7 @@ def run(
             fecha_solicitada=fecha,
             fecha_logica=fecha,
             development_policy=development_policy,
+            fact_chunk_size=fact_chunk_size,
         )
         logger = log.bind(run_id=run_id)
         logger.info(

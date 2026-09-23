@@ -11,6 +11,7 @@ def test_ingestion_runs_has_nonnegative_product_reconciliation_counts(pg_conn):
         "rows_fact_published",
         "rows_productos_selected",
         "rows_productos_source",
+        "fact_chunk_size",
     }
 
     with pg_conn.cursor() as cur:
@@ -66,3 +67,17 @@ def test_ingestion_runs_records_partial_ingestion_metadata(pg_conn):
         "partial_max_product_rows",
     }
     assert "partial_max_product_rows > 0" in constraint
+
+
+def test_ingestion_runs_records_positive_fact_chunk_sizes(pg_conn):
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conname = 'chk_ingestion_fact_chunk_size_positive'
+            """
+        )
+        (constraint,) = cur.fetchone()
+
+    assert "fact_chunk_size > 0" in constraint

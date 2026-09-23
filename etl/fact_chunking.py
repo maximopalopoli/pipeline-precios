@@ -36,3 +36,13 @@ def with_cli_override(*, chunk_size: int | None, env: Mapping[str, str] | None =
     if chunk_size <= 0:
         raise ValueError("fact chunk size must be a positive integer")
     return chunk_size
+
+
+def from_run(conn, run_id: int) -> int:
+    """Read a run's persisted batch size, with a legacy-safe default."""
+    with conn.cursor() as cur:
+        cur.execute("SELECT fact_chunk_size FROM ingestion_runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"Ingestion run {run_id} does not exist.")
+    return int(row[0]) if row[0] is not None else PRODUTO_CHUNK_SIZE

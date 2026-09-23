@@ -81,6 +81,16 @@ def test_partial_ingestion_run_persists_its_canonical_bounds(pg_conn):
     assert is_partial_run(pg_conn, run_id) is True
 
 
+def test_ingestion_run_persists_fact_chunk_size(pg_conn):
+    raw_file_id = _raw_file_id(pg_conn, date(2026, 3, 15))
+
+    run_id = open_ingestion_run(pg_conn, raw_file_id, fact_chunk_size=50_000)
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT fact_chunk_size FROM ingestion_runs WHERE id = %s", (run_id,))
+        assert cur.fetchone()[0] == 50_000
+
+
 def test_is_partial_run_rejects_an_unknown_run(pg_conn):
     import pytest
 

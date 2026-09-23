@@ -22,6 +22,7 @@ class RunBaseline:
     finished_at: str
     elapsed_seconds: float | None
     source_size_bytes: int
+    fact_chunk_size: int | None
     rows_productos_source: int | None
     rows_productos_selected: int | None
     rows_productos_raw: int | None
@@ -38,7 +39,7 @@ class RunBaseline:
 _BASELINE_SQL = """
     SELECT
         run.id, run.is_partial, run.started_at, run.finished_at,
-        run.duration_seconds, raw.size_bytes, run.rows_productos_source,
+        run.duration_seconds, raw.size_bytes, run.fact_chunk_size, run.rows_productos_source,
         run.rows_productos_selected, run.rows_productos_raw,
         run.rows_productos_valid, run.rows_productos_rejected,
         run.rows_fact_pending, run.rows_fact_published
@@ -58,7 +59,7 @@ def load_run_baseline(conn: Any, *, run_id: int) -> RunBaseline | None:
         return None
     (
         found_run_id, is_partial, started_at, finished_at, duration_seconds,
-        source_size_bytes, rows_source, rows_selected, rows_raw, rows_valid,
+        source_size_bytes, chunk_size, rows_source, rows_selected, rows_raw, rows_valid,
         rows_rejected, rows_pending, rows_published,
     ) = row
     elapsed = _as_float(duration_seconds)
@@ -71,6 +72,7 @@ def load_run_baseline(conn: Any, *, run_id: int) -> RunBaseline | None:
         run_id=int(found_run_id), is_partial=bool(is_partial),
         started_at=started_at.isoformat(), finished_at=finished_at.isoformat(),
         elapsed_seconds=elapsed, source_size_bytes=int(source_size_bytes),
+        fact_chunk_size=_as_int(chunk_size),
         rows_productos_source=_as_int(rows_source),
         rows_productos_selected=_as_int(rows_selected),
         rows_productos_raw=_as_int(rows_raw), rows_productos_valid=_as_int(rows_valid),
