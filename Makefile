@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help setup install up down restart logs db api web dev ingest ingest-date ingest-bounded test test-unit test-integration lint clean
+.PHONY: help setup install up down restart logs db api web dev ingest ingest-date ingest-bounded etl-baseline audit-queries test test-unit test-integration lint clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -64,6 +64,12 @@ ingest-bounded: ## Run an isolated local partial ingestion (DATE=... and one DEV
 	@test -n "$(DEV_CHAIN_KEYS)$(DEV_MAX_PRODUCT_ROWS)" || (echo "Set DEV_CHAIN_KEYS and/or DEV_MAX_PRODUCT_ROWS"; exit 2)
 	SEPA_DEV_CHAIN_KEYS='$(DEV_CHAIN_KEYS)' SEPA_DEV_MAX_PRODUCT_ROWS='$(DEV_MAX_PRODUCT_ROWS)' \
 		.venv/bin/python -m etl.run_pipeline --fecha $(DATE)
+
+etl-baseline: ## Print persisted ETL metrics (optional: RUN_ID=...)
+	.venv/bin/python scripts/report_ingestion_baseline.py $(RUN_ID)
+
+audit-queries: ## Run EXPLAIN ANALYZE for representative published API reads (optional: FECHA_ID=...)
+	.venv/bin/python scripts/benchmark_queries.py $(FECHA_ID)
 
 # Testing
 

@@ -212,8 +212,12 @@ For a completed run, the following invariants hold:
 rows_productos_source >= rows_productos_selected >= rows_productos_raw
 rows_productos_raw = rows_productos_valid + rows_productos_rejected
 rows_productos_valid = rows_productos_without_keys + rows_productos_deduplicated + rows_fact_pending
-rows_fact_pending = rows_fact_published
+rows_fact_pending = rows_fact_published  # full runs only
 ```
+
+For an explicit partial development run, `rows_fact_published` is zero and its
+pending rows remain isolated for local inspection; that is the intended
+exception to the last full-run invariant.
 
 The API exposes these fields as `reconciliacion` in `GET /api/health`; the home
 page displays the latest available summary. Older runs predate these counters,
@@ -252,6 +256,24 @@ After `staging` and `publication`, they also emit a storage snapshot with the
 database total plus `fact_precios`, pending facts, and staging relation sizes.
 These PostgreSQL relation sizes include indexes; compare snapshots from the
 same source and bounds before drawing conclusions about capacity.
+
+Two read-only commands provide repeatable evidence before changing indexes or
+database infrastructure:
+
+```bash
+# Latest completed run, or a specific local run.
+make etl-baseline RUN_ID=5
+
+# Representative /api/kpis, /api/buscador and /api/ofertas plans.
+# Requires at least one full published snapshot; bounded runs publish no facts.
+make audit-queries FECHA_ID=20260922
+```
+
+`etl-baseline` reads durable run-level timing, source size and reconciliation
+counts. `audit-queries` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and
+emits planning/execution time, row counts and shared-buffer reads as JSON.
+Capture a baseline before and after a candidate index migration; do not infer
+full-scale capacity from a bounded run.
 
 ### Bounded development ingestion
 
