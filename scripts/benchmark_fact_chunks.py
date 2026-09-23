@@ -80,7 +80,7 @@ def _run_replay(
         command.extend(["--dev-chain-key", f"{comercio}:{bandera}"])
     if policy.max_product_rows is not None:
         command.extend(["--dev-max-product-rows", str(policy.max_product_rows)])
-    subprocess.run(command, check=True)
+    subprocess.run(command, check=True, stdout=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:

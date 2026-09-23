@@ -338,6 +338,9 @@ make benchmark-chunks \
 ```
 
 Use its median durations and memory range to choose a local benchmark setting.
+Stage logs go to standard error and the final report is JSON on standard output,
+so it can be saved without mixing output streams: append
+`> benchmark-chunks.json` to the command.
 It deliberately does not alter `SEPA_FACT_CHUNK_SIZE`'s production default;
 validate any production-sized change on a machine that can run a full source.
 

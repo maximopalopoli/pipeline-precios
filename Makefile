@@ -77,7 +77,7 @@ replay-bounded: ## Replay a local ZIP without downloading (ZIP=..., DATE=..., an
 benchmark-chunks: ## Repeat bounded local replays (ZIP= DATE= CHUNK_SIZES=... REPEATS=3 and one DEV_* bound required)
 	@test -n "$(ZIP)$(DATE)$(CHUNK_SIZES)" || (echo "ZIP, DATE and CHUNK_SIZES are required"; exit 2)
 	@test -n "$(DEV_CHAIN_KEYS)$(DEV_MAX_PRODUCT_ROWS)" || (echo "Set DEV_CHAIN_KEYS and/or DEV_MAX_PRODUCT_ROWS"; exit 2)
-	.venv/bin/python scripts/benchmark_fact_chunks.py --zip-path $(ZIP) --fecha $(DATE) --chain-keys '$(DEV_CHAIN_KEYS)' $(if $(DEV_MAX_PRODUCT_ROWS),--max-product-rows $(DEV_MAX_PRODUCT_ROWS)) --chunk-sizes $(CHUNK_SIZES) --repetitions $(or $(REPEATS),3)
+	@.venv/bin/python scripts/benchmark_fact_chunks.py --zip-path $(ZIP) --fecha $(DATE) --chain-keys '$(DEV_CHAIN_KEYS)' $(if $(DEV_MAX_PRODUCT_ROWS),--max-product-rows $(DEV_MAX_PRODUCT_ROWS)) --chunk-sizes $(CHUNK_SIZES) --repetitions $(or $(REPEATS),3)
 
 etl-baseline: ## Print persisted ETL metrics (optional: RUN_ID=...)
 	.venv/bin/python scripts/report_ingestion_baseline.py $(RUN_ID)
