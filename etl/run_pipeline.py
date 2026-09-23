@@ -42,7 +42,11 @@ import structlog
 import structlog.dev
 
 from etl import alerting
-from etl.development_ingestion import from_environment as development_policy_from_environment
+from etl.development_ingestion import (
+    DevelopmentIngestionPolicy,
+    from_environment as development_policy_from_environment,
+    with_cli_overrides,
+)
 from etl.extract import downloader
 from etl.fact_retention import apply_fact_retention
 from etl.ingestion_date import resolve_ingestion_date
@@ -143,6 +147,7 @@ def _db_connect() -> psycopg2.extensions.connection:
 def run(
     fecha: date | None = None,
     raw_dir: Path | None = None,
+    development_policy: DevelopmentIngestionPolicy | None = None,
 ) -> IngestionResult:
     """
     Execute the full pipeline for *fecha* (defaults to today in Argentina).
@@ -153,7 +158,7 @@ def run(
     raw_dir = raw_dir or Path("data")
     raw_dir.mkdir(parents=True, exist_ok=True)
     retention_policy = from_environment()
-    development_policy = development_policy_from_environment()
+    development_policy = development_policy or development_policy_from_environment()
     fecha = resolve_ingestion_date(fecha)
 
     conn = _db_connect()
@@ -479,10 +484,33 @@ def main() -> None:
         metavar="DIR",
         help="Directory for downloaded ZIP files (default: ./data).",
     )
+    parser.add_argument(
+        "--dev-chain-key",
+        action="append",
+        default=None,
+        metavar="ID_COMERCIO:ID_BANDERA",
+        help="Limit a local partial run to one chain; repeat for multiple chains.",
+    )
+    parser.add_argument(
+        "--dev-max-product-rows",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Limit a local partial run to N staged product rows.",
+    )
     args = parser.parse_args()
 
     try:
-        run(fecha=args.fecha, raw_dir=args.raw_dir)
+        development_policy = with_cli_overrides(
+            development_policy_from_environment(),
+            chain_keys=args.dev_chain_key,
+            max_product_rows=args.dev_max_product_rows,
+        )
+        run(
+            fecha=args.fecha,
+            raw_dir=args.raw_dir,
+            development_policy=development_policy,
+        )
     except Exception:
         sys.exit(1)
     sys.exit(0)

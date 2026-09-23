@@ -2,7 +2,11 @@
 
 import pytest
 
-from etl.development_ingestion import DevelopmentIngestionPolicy, from_environment
+from etl.development_ingestion import (
+    DevelopmentIngestionPolicy,
+    from_environment,
+    with_cli_overrides,
+)
 
 
 def test_development_ingestion_is_disabled_without_explicit_bounds():
@@ -43,3 +47,15 @@ def test_blank_development_bounds_are_disabled():
     assert from_environment(
         {"SEPA_DEV_CHAIN_KEYS": "  ", "SEPA_DEV_MAX_PRODUCT_ROWS": "  "}
     ) == DevelopmentIngestionPolicy()
+
+
+def test_cli_bounds_override_only_the_environment_bound_that_was_supplied():
+    environment_policy = from_environment(
+        {"SEPA_DEV_CHAIN_KEYS": "1:1", "SEPA_DEV_MAX_PRODUCT_ROWS": "100"}
+    )
+
+    policy = with_cli_overrides(environment_policy, chain_keys=["40:2", "10:3"])
+
+    assert policy == DevelopmentIngestionPolicy(
+        chain_keys=((10, 3), (40, 2)), max_product_rows=100
+    )

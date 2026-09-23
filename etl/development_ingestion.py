@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from collections.abc import Iterable
 from typing import Mapping
 
 
@@ -51,27 +52,61 @@ def from_environment(
     )
 
 
+def with_cli_overrides(
+    policy: DevelopmentIngestionPolicy,
+    *,
+    chain_keys: Iterable[str] | None = None,
+    max_product_rows: int | None = None,
+) -> DevelopmentIngestionPolicy:
+    """Apply explicit CLI bounds over an environment-derived policy.
+
+    Supplying a CLI flag overrides only that bound. This makes ad-hoc local
+    runs reproducible while retaining the same validation contract as the
+    environment configuration used by Airflow.
+    """
+    selected_chain_keys = (
+        policy.chain_keys
+        if chain_keys is None
+        else _parse_chain_keys(",".join(chain_keys), "--dev-chain-key")
+    )
+    if max_product_rows is not None and max_product_rows <= 0:
+        raise ValueError("--dev-max-product-rows must be a positive whole number.")
+    return DevelopmentIngestionPolicy(
+        chain_keys=selected_chain_keys,
+        max_product_rows=(
+            policy.max_product_rows if max_product_rows is None else max_product_rows
+        ),
+    )
+
+
 def _read_chain_keys(values: Mapping[str, str]) -> tuple[tuple[int, int], ...]:
     raw_value = values.get(_CHAIN_KEYS_ENV, "").strip()
     if not raw_value:
         return ()
+
+    return _parse_chain_keys(raw_value, _CHAIN_KEYS_ENV)
+
+
+def _parse_chain_keys(
+    raw_value: str, setting_name: str
+) -> tuple[tuple[int, int], ...]:
 
     chain_keys: set[tuple[int, int]] = set()
     for raw_key in raw_value.split(","):
         parts = raw_key.strip().split(":")
         if len(parts) != 2:
             raise ValueError(
-                f"{_CHAIN_KEYS_ENV} entries must use id_comercio:id_bandera."
+                f"{setting_name} entries must use id_comercio:id_bandera."
             )
         try:
             key = (int(parts[0]), int(parts[1]))
         except ValueError as exc:
             raise ValueError(
-                f"{_CHAIN_KEYS_ENV} entries must use positive integer identifiers."
+                f"{setting_name} entries must use positive integer identifiers."
             ) from exc
         if key[0] <= 0 or key[1] <= 0:
             raise ValueError(
-                f"{_CHAIN_KEYS_ENV} entries must use positive integer identifiers."
+                f"{setting_name} entries must use positive integer identifiers."
             )
         chain_keys.add(key)
     return tuple(sorted(chain_keys))

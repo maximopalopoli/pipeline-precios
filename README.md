@@ -240,6 +240,14 @@ never overwrite attributes already visible from a full run. Partial runs skip
 retention and never make the source look fully ingested, so a later full
 ingestion of the same ZIP remains eligible.
 
+For one-off CLI runs, the equivalent flags override the matching environment
+bound: `--dev-chain-key ID_COMERCIO:ID_BANDERA` (repeatable) and
+`--dev-max-product-rows N`. For example:
+
+```bash
+python -m etl.run_pipeline --fecha 2026-03-17 --dev-chain-key 1:1 --dev-max-product-rows 5000
+```
+
 ### Run with Docker Compose (all services)
 
 ```bash
