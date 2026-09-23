@@ -428,6 +428,63 @@ def test_cli_partial_run_is_isolated_and_a_later_full_run_publishes(
         assert cur.fetchone()[0] == 7
 
 
+def test_airflow_partial_run_completes_without_publishing_a_snapshot(
+    pg_conn, sample_zip_path, dag_module, monkeypatch
+):
+    with pg_conn.cursor() as cur:
+        cur.execute((_SEEDS / "seed_provincias.sql").read_text())
+        cur.execute((_SEEDS / "seed_fechas.sql").read_text())
+    raw_file_id = _create_raw_file(pg_conn, "bounded-airflow.zip", "bounded-airflow")
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    monkeypatch.setattr(dag_module, "_db_connect", connect)
+    monkeypatch.setenv("SEPA_DEV_CHAIN_KEYS", "1:1")
+    monkeypatch.setenv("SEPA_DEV_MAX_PRODUCT_ROWS", "2")
+    ti = _TaskInstance(
+        {
+            "download_zip": {
+                "raw_file_id": raw_file_id,
+                "is_new": True,
+                "path": str(sample_zip_path),
+                "fecha_datos": str(_RUN_DATE),
+                "fecha_solicitada": str(_RUN_DATE),
+                "fecha_logica": str(_RUN_DATE),
+            }
+        }
+    )
+
+    assert dag_module.check_file_changed(ti=ti, run_id="manual__partial") is True
+    staging = dag_module.load_staging(ti=ti)
+    ti.values["load_staging"] = staging
+    dag_module.load_dimensions(ti=ti)
+    ti.values["load_pending_fact_precios"] = dag_module.load_pending_fact_precios(ti=ti)
+    dag_module.publish_daily_snapshot(ti=ti)
+
+    assert staging["rows_productos"] == 2
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT is_partial, status, partial_chain_keys, partial_max_product_rows,
+                   rows_fact_pending, rows_fact_published
+            FROM ingestion_runs WHERE id = %s
+            """,
+            (staging["run_id"],),
+        )
+        assert cur.fetchone() == (True, "completed", "1:1", 2, 2, 0)
+        cur.execute("SELECT COUNT(*) FROM fact_precios WHERE fecha_id = %s", (20260317,))
+        assert cur.fetchone()[0] == 0
+        cur.execute(
+            "SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s",
+            (staging["run_id"],),
+        )
+        assert cur.fetchone()[0] == 2
+        cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
+        assert cur.fetchone()[0] == 0
+
+
 def test_airflow_reserves_the_date_before_loading_staging(pg_conn, dag_module, monkeypatch):
     raw_file_id = _create_raw_file(pg_conn, "airflow-lock.zip", "airflow-lock")
     pg_conn.commit()
