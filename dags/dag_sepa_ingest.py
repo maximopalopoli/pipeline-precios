@@ -419,6 +419,7 @@ def load_dimensions(**kwargs):
 def load_pending_fact_precios(**kwargs):
     """Stream staging products into the run-local pending table."""
     from etl.fact_chunking import from_run as fact_chunk_size_from_run
+    from etl.fact_load_metrics import record_fact_load_metrics
     from etl.ingestion_processing import stream_pending_product_facts
 
     ti = kwargs["ti"]
@@ -442,8 +443,7 @@ def load_pending_fact_precios(**kwargs):
             chunk_size=chunk_size,
             heartbeat=lambda: _renew_ingestion_lock(conn, ti),
         )
-        conn.commit()
-        timer.finish(
+        fact_load_elapsed_seconds = timer.finish(
             chunks=result.chunks,
             chunk_size=chunk_size,
             rows_fact=result.rows_fact,
@@ -452,6 +452,13 @@ def load_pending_fact_precios(**kwargs):
             rows_without_keys=result.rows_without_keys,
             rows_deduplicated=result.rows_deduplicated,
         )
+        record_fact_load_metrics(
+            conn,
+            run_id=run_id,
+            elapsed_seconds=fact_load_elapsed_seconds,
+            chunks=result.chunks,
+        )
+        conn.commit()
         return {
             "chunks": result.chunks,
             "rows_fact": result.rows_fact,

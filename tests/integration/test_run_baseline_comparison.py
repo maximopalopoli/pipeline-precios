@@ -27,6 +27,19 @@ def _complete(conn, run_id: int) -> None:
     conn.commit()
 
 
+def _record_fact_load(conn, run_id: int, *, elapsed_seconds: float, chunks: int) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO ingestion_fact_load_metrics
+                (run_id, elapsed_seconds, peak_rss_bytes, chunks)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (run_id, elapsed_seconds, 123_456, chunks),
+        )
+    conn.commit()
+
+
 def test_comparison_keeps_only_runs_with_matching_source_and_partial_bounds(pg_conn):
     raw_file_id = _raw_file_id(pg_conn)
     policy = DevelopmentIngestionPolicy(chain_keys=((12, 1),), max_product_rows=5000)
@@ -47,8 +60,13 @@ def test_comparison_keeps_only_runs_with_matching_source_and_partial_bounds(pg_c
     full_run = open_ingestion_run(pg_conn, raw_file_id, fact_chunk_size=100_000)
     for run_id in (first, second, different_bounds, full_run):
         _complete(pg_conn, run_id)
+    _record_fact_load(pg_conn, first, elapsed_seconds=1.25, chunks=5)
+    _record_fact_load(pg_conn, second, elapsed_seconds=2.5, chunks=1)
 
     baselines = load_comparable_run_baselines(pg_conn, run_id=first)
 
     assert [baseline.run_id for baseline in baselines] == [first, second]
     assert [baseline.fact_chunk_size for baseline in baselines] == [10_000, 50_000]
+    assert [baseline.fact_load_elapsed_seconds for baseline in baselines] == [1.25, 2.5]
+    assert [baseline.fact_load_peak_rss_bytes for baseline in baselines] == [123_456, 123_456]
+    assert [baseline.fact_load_chunks for baseline in baselines] == [5, 1]

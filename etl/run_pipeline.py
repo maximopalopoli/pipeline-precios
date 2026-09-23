@@ -345,9 +345,7 @@ def run(
             chunk_size=fact_chunk_size,
             heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
         )
-        conn.commit()
-
-        active_timer.finish(
+        fact_load_elapsed_seconds = active_timer.finish(
             chunks=product_load.chunks,
             chunk_size=fact_chunk_size,
             rows_fact=product_load.rows_fact,
@@ -356,6 +354,15 @@ def run(
             rows_without_keys=product_load.rows_without_keys,
             rows_deduplicated=product_load.rows_deduplicated,
         )
+        from etl.fact_load_metrics import record_fact_load_metrics
+
+        record_fact_load_metrics(
+            conn,
+            run_id=run_id,
+            elapsed_seconds=fact_load_elapsed_seconds,
+            chunks=product_load.chunks,
+        )
+        conn.commit()
 
         # ── 8. Publish facts + aggregations atomically ───────────────────────
         active_timer = StageTimer(logger, "publication")

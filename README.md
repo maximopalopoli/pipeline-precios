@@ -272,7 +272,8 @@ make compare-etl-baselines RUN_ID=5
 make audit-queries FECHA_ID=20260922
 ```
 
-`etl-baseline` reads durable run-level timing, source size, chunk size and
+`etl-baseline` reads durable run-level timing, source size, chunk size, fact-load
+duration, fact-load process-memory high-water mark and
 reconciliation counts. `compare-etl-baselines` excludes runs that do not share
 the source archive and bounds, so its JSON rows differ only in the benchmark
 configuration such as `fact_chunk_size`. `audit-queries` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and
