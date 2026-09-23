@@ -251,13 +251,13 @@ database total plus `fact_precios`, pending facts, and staging relation sizes.
 These PostgreSQL relation sizes include indexes; compare snapshots from the
 same source and bounds before drawing conclusions about capacity.
 
-### Bounded development ingestion (configuration contract)
+### Bounded development ingestion
 
-The next local-ingestion mode is opt-in and will use `SEPA_DEV_CHAIN_KEYS`
+The local bounded-ingestion mode is opt-in and uses `SEPA_DEV_CHAIN_KEYS`
 (comma-separated `id_comercio:id_bandera` values) and/or
 `SEPA_DEV_MAX_PRODUCT_ROWS` (a positive integer). Both settings are validated
-strictly and are disabled when unset. This commit defines the configuration
-contract. When either is set, CLI and Airflow mark the run as partial, retain
+strictly and are disabled when unset. When either is set, CLI and Airflow mark
+the run as partial, retain
 its staging and pending facts only for local inspection, and publish zero facts
 and aggregates. They may add dimension keys required by their pending facts but
 never overwrite attributes already visible from a full run. Partial runs skip
