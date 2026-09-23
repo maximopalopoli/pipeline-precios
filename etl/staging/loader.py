@@ -417,13 +417,17 @@ def _stream_copy_into(
 
     _CHUNK = 100_000  # rows per COPY batch
 
-    text_stream = io.TextIOWrapper(raw_file, encoding="utf-8-sig", errors="replace")
+    text_stream = io.TextIOWrapper(
+        raw_file, encoding="utf-8-sig", errors="replace", newline=""
+    )
+    reader = csv_mod.reader(text_stream, delimiter="|")
 
-    # Read header line
-    header_line = text_stream.readline().replace("\x00", "")
-    if not header_line.strip():
+    try:
+        header = [column.replace("\x00", "").strip() for column in next(reader)]
+    except StopIteration:
         return 0, 0, 0
-    header = [c.strip() for c in next(csv_mod.reader([header_line], delimiter="|"))]
+    if not any(header):
+        return 0, 0, 0
 
     col_indices: list[int | None] = []
     missing = []
@@ -460,16 +464,15 @@ def _stream_copy_into(
     comercio_idx = header.index("id_comercio") if "id_comercio" in header else None
     bandera_idx = header.index("id_bandera") if "id_bandera" in header else None
 
-    for line in text_stream:
-        stripped = line.strip()
-        if not stripped:
+    for parsed in reader:
+        parsed = [value.replace("\x00", "") for value in parsed]
+        if not any(value.strip() for value in parsed):
             continue
         # Stop at trailer line
-        lower = stripped.lower()
+        lower = parsed[0].strip().lower()
         if lower.startswith("ultima") or lower.startswith("última"):
             break
         source_row_count += 1
-        parsed = next(csv_mod.reader([stripped], delimiter="|"))
         if chain_keys and not _matches_chain_key(parsed, comercio_idx, bandera_idx, chain_keys):
             continue
         selected_row_count += 1

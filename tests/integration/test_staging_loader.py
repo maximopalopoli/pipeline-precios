@@ -8,10 +8,13 @@ sample.zip contains 2 inner ZIPs:
   Total:                     2 comercios, 3 sucursales, 7 productos
 """
 
+import csv
+import io
+import zipfile
 
 
 from etl.development_ingestion import DevelopmentIngestionPolicy
-from etl.staging.loader import LoadResult, load, register_counts
+from etl.staging.loader import _PRODUCTOS_COLS, LoadResult, load, register_counts
 
 # ── Expected counts from sample.zip ───────────────────────────────────────────
 
@@ -205,3 +208,54 @@ def test_register_counts_keeps_source_selection_outside_staged_raw_rows(
         )
 
         assert cur.fetchone() == (4, 4, 2)
+
+
+def test_load_streams_quoted_newlines_and_strips_nul_bytes(pg_conn, tmp_path):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id=raw_file_id)
+    product_csv = io.StringIO()
+    writer = csv.writer(product_csv, delimiter="|", lineterminator="\n")
+    writer.writerow(_PRODUCTOS_COLS)
+    writer.writerow(
+        [
+            "1",
+            "1",
+            "1",
+            "sku-1",
+            "7790000000001",
+            "Descripcion con\nsalto de linea",
+            "1",
+            "un",
+            "Marca\x00 limpia",
+            "10",
+            "10",
+            "1",
+            "un",
+            "",
+            "",
+            "",
+            "",
+        ]
+    )
+    writer.writerow(["Ultima actualizacion"])
+
+    archive_path = tmp_path / "quoted-values.zip"
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as inner_zip:
+        inner_zip.writestr("productos.csv", product_csv.getvalue())
+    with zipfile.ZipFile(archive_path, "w") as outer_zip:
+        outer_zip.writestr("sepa_1_comercio-sepa-1_test.zip", inner.getvalue())
+
+    result = load(pg_conn, archive_path, run_id)
+
+    assert result.rows_productos == 1
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT productos_descripcion, productos_marca
+              FROM stg_productos
+             WHERE run_id = %s
+            """,
+            (run_id,),
+        )
+        assert cur.fetchone() == ("Descripcion con\nsalto de linea", "Marca limpia")
