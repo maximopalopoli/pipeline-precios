@@ -160,7 +160,9 @@ def load_dimensions(
     return rc, rs, rp
 
 
-def _load_dim_comercio(conn, rows: list[ComercioRow]) -> int:
+def _load_dim_comercio(
+    conn, rows: list[ComercioRow], *, update_existing: bool = True
+) -> int:
     if not rows:
         return 0
 
@@ -215,12 +217,17 @@ def _load_dim_comercio(conn, rows: list[ComercioRow]) -> int:
                 comercio_bandera_nombre = EXCLUDED.comercio_bandera_nombre,
                 comercio_bandera_url    = EXCLUDED.comercio_bandera_url,
                 updated_at              = NOW()
+            WHERE %s
             """
+            ,
+            (update_existing,),
         )
         return cur.rowcount
 
 
-def _load_dim_producto(conn, rows: list[ProductoRow]) -> int:
+def _load_dim_producto(
+    conn, rows: list[ProductoRow], *, update_existing: bool = True
+) -> int:
     if not rows:
         return 0
 
@@ -291,12 +298,17 @@ def _load_dim_producto(conn, rows: list[ProductoRow]) -> int:
                 productos_cantidad_referencia        = EXCLUDED.productos_cantidad_referencia,
                 productos_unidad_medida_referencia   = EXCLUDED.productos_unidad_medida_referencia,
                 updated_at                           = NOW()
+            WHERE %s
             """
+            ,
+            (update_existing,),
         )
         return cur.rowcount
 
 
-def _load_dim_sucursal(conn, rows: list[SucursalRow]) -> int:
+def _load_dim_sucursal(
+    conn, rows: list[SucursalRow], *, update_existing: bool = True
+) -> int:
     """
     Bulk-upsert dim_sucursal.
 
@@ -392,7 +404,10 @@ def _load_dim_sucursal(conn, rows: list[SucursalRow]) -> int:
                 sucursales_latitud       = EXCLUDED.sucursales_latitud,
                 sucursales_longitud      = EXCLUDED.sucursales_longitud,
                 updated_at               = NOW()
+            WHERE %s
             """
+            ,
+            (update_existing,),
         )
         return cur.rowcount
 
@@ -585,7 +600,9 @@ def register_rows_loaded(conn, run_id: int, rows_loaded: int) -> None:
 # ---------------------------------------------------------------------------
 
 
-def load_dim_produto_from_staging(conn, run_id: int) -> int:
+def load_dim_produto_from_staging(
+    conn, run_id: int, *, update_existing: bool = True
+) -> int:
     """
     Load dim_produto directly from stg_produtos via SQL (no Python intermediary).
 
@@ -659,8 +676,9 @@ def load_dim_produto_from_staging(conn, run_id: int) -> int:
                 productos_cantidad_referencia        = EXCLUDED.productos_cantidad_referencia,
                 productos_unidad_medida_referencia   = EXCLUDED.productos_unidad_medida_referencia,
                 updated_at                           = NOW()
+            WHERE %s
             """,
-            (run_id,),
+            (run_id, update_existing),
         )
         count = cur.rowcount
     log.info("warehouse.dim_producto_loaded_from_staging", run_id=run_id, rows=count)
@@ -671,10 +689,12 @@ def load_dimensions_no_producto(
     conn,
     comercios: list[ComercioRow],
     sucursales: list[SucursalRow],
+    *,
+    update_existing: bool = True,
 ) -> tuple[int, int]:
-    """Upsert dim_comercio and dim_sucursal only (dim_produto loaded separately via SQL)."""
-    rc = _load_dim_comercio(conn, comercios)
-    rs = _load_dim_sucursal(conn, sucursales)
+    """Load comercio/sucursal dimensions, optionally preserving existing values."""
+    rc = _load_dim_comercio(conn, comercios, update_existing=update_existing)
+    rs = _load_dim_sucursal(conn, sucursales, update_existing=update_existing)
     log.info("warehouse.dimensions_loaded", rows_comercios=rc, rows_sucursales=rs)
     return rc, rs
 

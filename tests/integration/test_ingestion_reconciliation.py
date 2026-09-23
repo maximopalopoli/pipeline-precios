@@ -1,3 +1,5 @@
+import pytest
+
 from etl.reconciliation import (
     ProductReconciliation,
     record_product_reconciliation,
@@ -91,3 +93,29 @@ def test_record_product_rejections_keeps_reason_and_source(pg_conn):
         '{"id_producto": "missing", "precio": "12.50"}',
         "producto_sk not found",
     )
+
+
+def test_record_product_reconciliation_rejects_an_invalid_raw_count(pg_conn):
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
+            VALUES ('invalid-count.zip', 'https://example.test/invalid-count.zip', 'invalid-count', 1, '2026-03-15')
+            RETURNING id
+            """
+        )
+        raw_file_id = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO ingestion_runs (raw_file_id, rows_productos_raw)
+            VALUES (%s, 3)
+            RETURNING id
+            """,
+            (raw_file_id,),
+        )
+        run_id = cur.fetchone()[0]
+
+    counts = ProductReconciliation(1, 1, 0, 0, 1, 1)
+
+    with pytest.raises(ValueError, match="do not reconcile"):
+        record_product_reconciliation(pg_conn, run_id, counts)

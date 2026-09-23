@@ -130,6 +130,7 @@ See [sepa_datasets.md](sepa_datasets.md) for the full schema of each CSV.
 make setup                # create venv + install Python & Node deps
 make db                   # start PostgreSQL and apply pending migrations and seeds
 make ingest               # download today's SEPA ZIP and run the full ETL pipeline
+make ingest-bounded DATE=2026-03-17 DEV_CHAIN_KEYS=1:1 DEV_MAX_PRODUCT_ROWS=5000
 make dev                  # start DB + API + frontend for local development
 ```
 
@@ -164,6 +165,19 @@ The pipeline downloads the daily ZIP (~300 MB), processes ~12M price observation
 (staging → quality checks → dimensions → pending facts → atomic publication), and
 loads them into PostgreSQL.
 
+### Run a bounded local ingestion
+
+Use the explicit Make target for a deterministic local walk-through without
+publishing a daily snapshot:
+
+```bash
+make ingest-bounded DATE=2026-03-17 DEV_CHAIN_KEYS=1:1 DEV_MAX_PRODUCT_ROWS=5000
+```
+
+At least one bound is required. `DEV_CHAIN_KEYS` follows the same
+comma-separated `id_comercio:id_bandera` format as `SEPA_DEV_CHAIN_KEYS`; the
+row cap is optional when chains alone are enough.
+
 ### Ingestion results and failures
 
 The CLI exits with code `0` when it completes an ingestion or skips a raw file
@@ -182,7 +196,9 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 
 | Counter | Meaning |
 |---------|---------|
-| `rows_productos_raw` | Product rows read into staging. |
+| `rows_productos_source` | Product rows inspected in source archives before development chain bounds. |
+| `rows_productos_selected` | Source rows selected by development chain bounds, before an optional row cap. |
+| `rows_productos_raw` | Rows staged after all development bounds; the input to product cleaning. |
 | `rows_productos_valid` | Rows accepted by product cleaning. |
 | `rows_productos_rejected` | Rows rejected by product cleaning; their reason and payload, along with missing-key rows, are kept in `rejected_rows`. |
 | `rows_productos_without_keys` | Valid rows that could not resolve the dimensions required for a fact. |
@@ -193,6 +209,7 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 For a completed run, the following invariants hold:
 
 ```text
+rows_productos_source >= rows_productos_selected >= rows_productos_raw
 rows_productos_raw = rows_productos_valid + rows_productos_rejected
 rows_productos_valid = rows_productos_without_keys + rows_productos_deduplicated + rows_fact_pending
 rows_fact_pending = rows_fact_published
@@ -226,6 +243,38 @@ Compare the same source size and row counts before using the timings to choose
 an optimization. `peak_rss_bytes` is the peak resident memory of the ETL process,
 not PostgreSQL's memory or the full container/host usage; collect those separately
 when diagnosing database or infrastructure capacity.
+
+For a bounded run, terminal events always include `is_partial=true`, pending
+fact count, and zero published facts. Treat its throughput as a local flow
+measurement, never as a published snapshot or a full-SEPA capacity result.
+
+After `staging` and `publication`, they also emit a storage snapshot with the
+database total plus `fact_precios`, pending facts, and staging relation sizes.
+These PostgreSQL relation sizes include indexes; compare snapshots from the
+same source and bounds before drawing conclusions about capacity.
+
+### Bounded development ingestion
+
+The local bounded-ingestion mode is opt-in and uses `SEPA_DEV_CHAIN_KEYS`
+(comma-separated `id_comercio:id_bandera` values) and/or
+`SEPA_DEV_MAX_PRODUCT_ROWS` (a positive integer). Both settings are validated
+strictly and are disabled when unset. When either is set, CLI and Airflow mark
+the run as partial, retain
+its staging and pending facts only for local inspection, and publish zero facts
+and aggregates. They may add dimension keys required by their pending facts but
+never overwrite attributes already visible from a full run. Partial runs skip
+retention and never make the source look fully ingested, so a later full
+ingestion of the same ZIP remains eligible. Their audit records retain both
+source product rows and the subset selected into staging; `/health` exposes
+that distinction and whether the latest run is partial.
+
+For one-off CLI runs, the equivalent flags override the matching environment
+bound: `--dev-chain-key ID_COMERCIO:ID_BANDERA` (repeatable) and
+`--dev-max-product-rows N`. For example:
+
+```bash
+python -m etl.run_pipeline --fecha 2026-03-17 --dev-chain-key 1:1 --dev-max-product-rows 5000
+```
 
 ### Run with Docker Compose (all services)
 

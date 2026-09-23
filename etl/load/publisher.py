@@ -21,6 +21,55 @@ class PublicationResult:
     rows_aggregated: int
 
 
+def complete_partial_run(
+    conn,
+    *,
+    run_id: int,
+    reconciliation: ProductReconciliation,
+) -> PublicationResult:
+    """Complete a bounded run without exposing its pending facts.
+
+    Pending facts stay scoped to the run for local inspection. No visible facts
+    or aggregates are changed, and the reconciliation records zero published
+    facts so the audit trail cannot present this as a full snapshot.
+    """
+    if not reconciliation.is_partial:
+        raise ValueError("Partial completion requires a partial reconciliation")
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT is_partial FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"Cannot complete unknown ingestion run {run_id}")
+        if not row[0]:
+            raise ValueError(f"Cannot complete full ingestion run {run_id} as partial")
+        cur.execute(
+            "SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s",
+            (run_id,),
+        )
+        if cur.fetchone()[0] != reconciliation.rows_fact_pending:
+            raise ValueError(f"Partial run {run_id} pending facts do not reconcile")
+
+    record_product_reconciliation(conn, run_id, reconciliation)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingestion_runs
+               SET status = 'completed', finished_at = NOW(),
+                   rows_valid = %s, error_message = NULL
+             WHERE id = %s AND is_partial = TRUE
+            """,
+            (reconciliation.rows_valid, run_id),
+        )
+        if cur.rowcount != 1:
+            raise ValueError(f"Cannot complete full ingestion run {run_id} as partial")
+    result = PublicationResult(run_id=run_id, fecha_id=0, rows_fact=0, rows_aggregated=0)
+    log.info("publisher.partial_run_completed", **result.__dict__)
+    return result
+
+
 def publish_pending_facts(
     conn,
     *,
@@ -34,6 +83,14 @@ def publish_pending_facts(
     or roll it back if any statement fails.  Pending rows are only deleted once
     they have been copied into ``fact_precios`` and their aggregates rebuilt.
     """
+    with conn.cursor() as cur:
+        cur.execute("SELECT is_partial FROM ingestion_runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"Cannot publish unknown ingestion run {run_id}")
+    if row[0]:
+        raise ValueError(f"Cannot publish partial ingestion run {run_id}")
+
     with conn.cursor() as cur:
         cur.execute(
             """

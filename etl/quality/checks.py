@@ -498,6 +498,7 @@ def check_row_count_drift(
               FROM ingestion_runs ir
              WHERE ir.id < %s
                AND ir.status = 'completed'
+               AND ir.is_partial = FALSE
                AND ir.rows_productos_raw IS NOT NULL
              ORDER BY ir.id DESC
              LIMIT 1

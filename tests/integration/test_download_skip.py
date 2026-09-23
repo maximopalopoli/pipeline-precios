@@ -20,6 +20,7 @@ from unittest.mock import patch
 
 import etl.extract.downloader as downloader_mod
 from etl.extract.downloader import download
+from etl.extract.downloader import DownloadPayload
 
 # Fixed content — any bytes work; the downloader only checks SHA-256
 _ZIP_BYTES = b"PK\x03\x04fake-sepa-zip-content-v1"
@@ -45,6 +46,14 @@ def _find_raw_file(conn, sha256: str):
         return cur.fetchone()
 
 
+def _payload(tmp_path) -> DownloadPayload:
+    import hashlib
+
+    path = tmp_path / f"payload-{len(list(tmp_path.glob('payload-*.part')))}.part"
+    path.write_bytes(_ZIP_BYTES)
+    return DownloadPayload(path, hashlib.sha256(_ZIP_BYTES).hexdigest(), len(_ZIP_BYTES))
+
+
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 
@@ -52,7 +61,7 @@ class TestDownloadSkipOnDuplicate:
 
     def test_first_download_is_new(self, pg_conn, tmp_path):
         """First download of a ZIP registers it and returns is_new=True."""
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path)):
             result = download(pg_conn, tmp_path, _FECHA)
 
         assert result.is_new is True
@@ -61,7 +70,7 @@ class TestDownloadSkipOnDuplicate:
     def test_second_download_is_not_new(self, pg_conn, tmp_path):
         """Downloading the same ZIP a second time returns is_new=False.
         The downloader tracks novelty by SHA-256; retry logic lives in the pipeline."""
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path)):
             first = download(pg_conn, tmp_path, _FECHA)
             second = download(pg_conn, tmp_path, _FECHA)
 
@@ -70,7 +79,7 @@ class TestDownloadSkipOnDuplicate:
 
     def test_no_duplicate_raw_files_entry(self, pg_conn, tmp_path):
         """Two downloads of the same content must produce exactly one raw_files row."""
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path)):
             download(pg_conn, tmp_path, _FECHA)
             download(pg_conn, tmp_path, _FECHA)
 
@@ -78,18 +87,18 @@ class TestDownloadSkipOnDuplicate:
 
     def test_second_download_returns_same_raw_file_id(self, pg_conn, tmp_path):
         """Both calls must reference the same raw_files.id."""
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path)):
             first = download(pg_conn, tmp_path, _FECHA)
             second = download(pg_conn, tmp_path, _FECHA)
 
         assert first.raw_file_id == second.raw_file_id
 
     def test_duplicate_download_restores_a_missing_local_zip(self, pg_conn, tmp_path):
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path)):
             first = download(pg_conn, tmp_path, _FECHA)
         first.path.unlink()
 
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path)):
             restored = download(pg_conn, tmp_path, _FECHA)
 
         assert restored.is_new is False
@@ -100,7 +109,7 @@ class TestDownloadSkipOnDuplicate:
         """The registered SHA-256 and size_bytes must match the downloaded content."""
         import hashlib
 
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_BYTES):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path)):
             result = download(pg_conn, tmp_path, _FECHA)
 
         expected_sha = hashlib.sha256(_ZIP_BYTES).hexdigest()

@@ -7,6 +7,8 @@ that includes its SHA-256, preserving rectified versions of the same date.
 """
 
 import hashlib
+import os
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import date
@@ -70,6 +72,13 @@ class DownloadResult:
     is_new: bool
 
 
+@dataclass
+class DownloadPayload:
+    path: Path
+    sha256: str
+    size_bytes: int
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 
@@ -106,10 +115,9 @@ def download(
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     # Stream download with retries
-    zip_bytes = _download_with_retries(url, logger)
-
-    sha256 = hashlib.sha256(zip_bytes).hexdigest()
-    size_bytes = len(zip_bytes)
+    payload = _download_with_retries(url, raw_dir, logger)
+    sha256 = payload.sha256
+    size_bytes = payload.size_bytes
     filename = f"{fecha.isoformat()}_{dia}_{sha256}.zip"
     dest = raw_dir / filename
 
@@ -122,8 +130,10 @@ def download(
     if existing_id is not None:
         _update_filename(conn, existing_id, filename)
         if not dest.exists():
-            dest.write_bytes(zip_bytes)
+            os.replace(payload.path, dest)
             logger.info("download.restored_missing_file", path=str(dest))
+        else:
+            payload.path.unlink(missing_ok=True)
         logger.info("download.duplicate_skipped", raw_file_id=existing_id)
         return DownloadResult(
             raw_file_id=existing_id,
@@ -135,7 +145,7 @@ def download(
             is_new=False,
         )
 
-    dest.write_bytes(zip_bytes)
+    os.replace(payload.path, dest)
     logger.info("download.saved", path=str(dest))
 
     raw_file_id = _register(conn, filename, url, sha256, size_bytes, fecha)
@@ -155,13 +165,15 @@ def download(
 # ── Private helpers ───────────────────────────────────────────────────────────
 
 
-def _download_with_retries(url: str, logger: structlog.BoundLogger) -> bytes:
+def _download_with_retries(
+    url: str, raw_dir: Path, logger: structlog.BoundLogger
+) -> DownloadPayload:
     last_exc: Exception | None = None
 
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             logger.info("download.attempt", attempt=attempt)
-            return _stream_download(url)
+            return _stream_download(url, raw_dir)
         except requests.RequestException as exc:
             last_exc = exc
             logger.warning(
@@ -177,14 +189,28 @@ def _download_with_retries(url: str, logger: structlog.BoundLogger) -> bytes:
     ) from last_exc
 
 
-def _stream_download(url: str) -> bytes:
-    with requests.get(url, stream=True, timeout=TIMEOUT_SECONDS) as resp:
-        resp.raise_for_status()
-        chunks: list[bytes] = []
-        for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
-            if chunk:
-                chunks.append(chunk)
-    return b"".join(chunks)
+def _stream_download(url: str, raw_dir: Path) -> DownloadPayload:
+    """Stream a response directly to a temporary raw-file payload."""
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=raw_dir, suffix=".part", delete=False) as temp:
+            temp_path = Path(temp.name)
+            digest = hashlib.sha256()
+            size_bytes = 0
+            with requests.get(url, stream=True, timeout=TIMEOUT_SECONDS) as resp:
+                resp.raise_for_status()
+                for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                    if chunk:
+                        temp.write(chunk)
+                        digest.update(chunk)
+                        size_bytes += len(chunk)
+        return DownloadPayload(
+            path=temp_path, sha256=digest.hexdigest(), size_bytes=size_bytes
+        )
+    except Exception:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+        raise
 
 
 def _find_by_sha256(conn: "psycopg2.connection", sha256: str) -> int | None:

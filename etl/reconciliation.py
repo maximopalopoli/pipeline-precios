@@ -22,6 +22,7 @@ class ProductReconciliation:
     rows_deduplicated: int
     rows_fact_pending: int
     rows_fact_published: int
+    is_partial: bool = False
 
     def __post_init__(self) -> None:
         values = self.__dict__
@@ -35,7 +36,9 @@ class ProductReconciliation:
                 "Valid product rows must equal rows without keys, deduplicated rows, "
                 "and pending facts"
             )
-        if self.rows_fact_published != self.rows_fact_pending:
+        if self.is_partial and self.rows_fact_published != 0:
+            raise ValueError("Partial ingestions must not publish facts")
+        if not self.is_partial and self.rows_fact_published != self.rows_fact_pending:
             raise ValueError("Published facts must equal pending facts for one run")
 
 
@@ -50,6 +53,19 @@ def record_product_reconciliation(
     with publication or rolled back together with a failed ingestion.
     """
     with conn.cursor() as cur:
+        cur.execute(
+            "SELECT rows_productos_raw FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"Ingestion run {run_id} does not exist.")
+        rows_raw = row[0]
+        if rows_raw is not None and rows_raw != counts.rows_valid + counts.rows_rejected:
+            raise ValueError(
+                f"Run {run_id} raw product rows ({rows_raw}) do not reconcile with "
+                f"valid + rejected ({counts.rows_valid + counts.rows_rejected})."
+            )
         cur.execute(
             """
             UPDATE ingestion_runs

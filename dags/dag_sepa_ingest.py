@@ -69,6 +69,24 @@ def _lock_from_xcom(ti):
     )
 
 
+def _development_policy_from_xcom(ti):
+    """Read the bounded-run policy selected when this DAG run took its lock."""
+    from etl.development_ingestion import (
+        DevelopmentIngestionPolicy,
+        from_environment as development_policy_from_environment,
+    )
+
+    data = ti.xcom_pull(task_ids="check_file_changed", key="development_policy")
+    if data is None:
+        # Compatibility for direct task invocation in tests and operator tools.
+        # Normal DAG runs always persist the policy in check_file_changed.
+        return development_policy_from_environment()
+    return DevelopmentIngestionPolicy(
+        chain_keys=tuple(tuple(key) for key in data["chain_keys"]),
+        max_product_rows=data["max_product_rows"],
+    )
+
+
 def _release_ingestion_lock_on_failure(context) -> None:
     """Release the date after Airflow exhausts a task's configured retries."""
     from etl.ingestion_lock import IngestionLockOwnershipError, release_ingestion_lock
@@ -154,6 +172,7 @@ def check_file_changed(**kwargs):
     from etl.ingestion_lock import acquire_ingestion_lock, release_ingestion_lock
     from etl.ingestion_run import should_process_raw_file
     from etl.retention_policy import from_environment
+    from etl.development_ingestion import from_environment as development_policy_from_environment
 
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
@@ -161,11 +180,14 @@ def check_file_changed(**kwargs):
     # Fail before reserving the date if a destructive retention setting is
     # malformed. Every task later reads the same process environment.
     from_environment()
+    development_policy = development_policy_from_environment()
 
     conn = _db_connect()
     lock = None
     try:
-        should_process = should_process_raw_file(conn, dl_info["raw_file_id"])
+        should_process = should_process_raw_file(
+            conn, dl_info["raw_file_id"], partial=development_policy.enabled
+        )
         if not should_process:
             log.info(
                 "download.duplicate_decision",
@@ -183,7 +205,9 @@ def check_file_changed(**kwargs):
         )
         # A CLI execution could have published between the first check and the
         # reservation. Do not start staging when that happened.
-        should_process = should_process_raw_file(conn, dl_info["raw_file_id"])
+        should_process = should_process_raw_file(
+            conn, dl_info["raw_file_id"], partial=development_policy.enabled
+        )
         log.info(
             "download.duplicate_decision",
             raw_file_id=dl_info["raw_file_id"],
@@ -206,6 +230,13 @@ def check_file_changed(**kwargs):
                 "expires_at": lock.expires_at.isoformat(),
             },
         )
+        ti.xcom_push(
+            key="development_policy",
+            value={
+                "chain_keys": [list(key) for key in development_policy.chain_keys],
+                "max_product_rows": development_policy.max_product_rows,
+            },
+        )
         return should_process
     except Exception:
         if lock is not None:
@@ -219,10 +250,12 @@ def load_staging(**kwargs):
     """Open ingestion run + load staging tables from ZIP."""
     from etl.ingestion_run import open_ingestion_run, record_source_date
     from etl.staging import loader as staging_loader
+    from etl.storage_metrics import collect_storage_footprint
     from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
 
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
+    development_policy = _development_policy_from_xcom(ti)
 
     conn = _db_connect()
     run_id: int | None = None
@@ -242,6 +275,7 @@ def load_staging(**kwargs):
             fecha_logica=(
                 date.fromisoformat(fecha_logica) if fecha_logica is not None else None
             ),
+            development_policy=development_policy,
         )
         fecha_fuente = inspect_source_archive_date(dl_info["path"])
         record_source_date(conn, run_id, fecha_fuente)
@@ -259,6 +293,7 @@ def load_staging(**kwargs):
             Path(dl_info["path"]),
             run_id,
             heartbeat=lambda: _renew_ingestion_lock(conn, ti),
+            development_policy=development_policy,
         )
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
@@ -268,6 +303,14 @@ def load_staging(**kwargs):
             rows_comercios=stg.rows_comercios,
             rows_sucursales=stg.rows_sucursales,
             rows_productos=stg.rows_productos,
+            rows_productos_source=stg.rows_productos_source,
+            rows_productos_selected=stg.rows_productos_selected,
+        )
+        log.info(
+            "airflow.storage_footprint",
+            run_id=run_id,
+            stage="staging",
+            **collect_storage_footprint(conn, run_id=run_id).__dict__,
         )
 
         return {
@@ -276,6 +319,8 @@ def load_staging(**kwargs):
             "rows_comercios": stg.rows_comercios,
             "rows_sucursales": stg.rows_sucursales,
             "rows_productos": stg.rows_productos,
+            "rows_productos_source": stg.rows_productos_source,
+            "rows_productos_selected": stg.rows_productos_selected,
         }
     except Exception as exc:
         _fail_active_timer(timer, exc)
@@ -332,6 +377,7 @@ def run_quality_checks(**kwargs):
 def load_dimensions(**kwargs):
     """Load dimensions from staging without materializing all products."""
     from etl.ingestion_processing import load_staged_dimensions
+    from etl.ingestion_run import is_partial_run
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -341,9 +387,12 @@ def load_dimensions(**kwargs):
     timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
+        is_partial = is_partial_run(conn, run_id)
         timer = StageTimer(log.bind(run_id=run_id), "dimensions")
         timer.start()
-        result = load_staged_dimensions(conn, run_id)
+        result = load_staged_dimensions(
+            conn, run_id, is_partial=is_partial
+        )
         conn.commit()
         timer.finish(
             rows_comercios=result.rows_comercios,
@@ -416,10 +465,12 @@ def publish_daily_snapshot(**kwargs):
     """Atomically publish facts, aggregates and the completed run state."""
     from etl.fact_retention import apply_fact_retention
     from etl.ingestion_lock import release_ingestion_lock
-    from etl.load.publisher import publish_pending_facts
+    from etl.ingestion_run import is_partial_run
+    from etl.load.publisher import complete_partial_run, publish_pending_facts
     from etl.raw_retention import apply_raw_retention
     from etl.retention_policy import from_environment
     from etl.staging_retention import apply_staging_retention
+    from etl.storage_metrics import collect_storage_footprint
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -430,36 +481,61 @@ def publish_daily_snapshot(**kwargs):
     fecha_id = int(fecha.strftime("%Y%m%d"))
     from etl.reconciliation import ProductReconciliation
 
-    reconciliation = ProductReconciliation(
-        rows_valid=pending_info["rows_valid"],
-        rows_rejected=pending_info["rows_rejected"],
-        rows_without_keys=pending_info["rows_without_keys"],
-        rows_deduplicated=pending_info["rows_deduplicated"],
-        rows_fact_pending=pending_info["rows_fact"],
-        rows_fact_published=pending_info["rows_fact"],
-    )
-
     conn = _db_connect()
     timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
+        is_partial = is_partial_run(conn, run_id)
+        reconciliation = ProductReconciliation(
+            rows_valid=pending_info["rows_valid"],
+            rows_rejected=pending_info["rows_rejected"],
+            rows_without_keys=pending_info["rows_without_keys"],
+            rows_deduplicated=pending_info["rows_deduplicated"],
+            rows_fact_pending=pending_info["rows_fact"],
+            rows_fact_published=(0 if is_partial else pending_info["rows_fact"]),
+            is_partial=is_partial,
+        )
         timer = StageTimer(log.bind(run_id=run_id), "publication")
         timer.start()
-        publication = publish_pending_facts(
-            conn,
-            run_id=run_id,
-            fecha_id=fecha_id,
-            reconciliation=reconciliation,
-        )
+        if is_partial:
+            publication = complete_partial_run(
+                conn, run_id=run_id, reconciliation=reconciliation
+            )
+        else:
+            publication = publish_pending_facts(
+                conn,
+                run_id=run_id,
+                fecha_id=fecha_id,
+                reconciliation=reconciliation,
+            )
         conn.commit()
         timer.finish(
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
+            is_partial=is_partial,
+            rows_fact_pending=reconciliation.rows_fact_pending,
+            rows_fact_published=reconciliation.rows_fact_published,
             rows_valid=reconciliation.rows_valid,
             rows_rejected=reconciliation.rows_rejected,
             rows_without_keys=reconciliation.rows_without_keys,
             rows_deduplicated=reconciliation.rows_deduplicated,
         )
+        log.info(
+            "airflow.storage_footprint",
+            run_id=run_id,
+            stage="publication",
+            **collect_storage_footprint(conn, run_id=run_id).__dict__,
+        )
+        if is_partial:
+            log.info(
+                "airflow.partial_run.completed",
+                run_id=run_id,
+                rows_fact_pending=reconciliation.rows_fact_pending,
+                rows_fact_published=0,
+                retention_skipped=True,
+            )
+            release_ingestion_lock(conn, _lock_from_xcom(ti))
+            return
         retention_policy = None
         try:
             retention_policy = from_environment()

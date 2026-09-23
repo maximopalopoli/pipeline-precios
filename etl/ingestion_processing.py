@@ -45,7 +45,9 @@ class DimensionLoadResult:
     rows_rejected: int
 
 
-def reconciliation_for_publication(result: ProductLoadResult) -> ProductReconciliation:
+def reconciliation_for_publication(
+    result: ProductLoadResult, *, is_partial: bool = False
+) -> ProductReconciliation:
     """Turn a completed streaming result into its publish-time reconciliation."""
     return ProductReconciliation(
         rows_valid=result.rows_valid,
@@ -53,16 +55,21 @@ def reconciliation_for_publication(result: ProductLoadResult) -> ProductReconcil
         rows_without_keys=result.rows_without_keys,
         rows_deduplicated=result.rows_deduplicated,
         rows_fact_pending=result.rows_fact,
-        rows_fact_published=result.rows_fact,
+        rows_fact_published=0 if is_partial else result.rows_fact,
+        is_partial=is_partial,
     )
 
 
-def load_staged_dimensions(conn, run_id: int) -> DimensionLoadResult:
+def load_staged_dimensions(
+    conn, run_id: int, *, is_partial: bool = False
+) -> DimensionLoadResult:
     """Clean and load every dimension needed by a staged ingestion run.
 
     Comercio and sucursal tables are small enough to clean in memory.  Product
     dimensions stay in PostgreSQL and are deduplicated with an INSERT…SELECT,
-    avoiding a full product DataFrame in either entry point.
+    avoiding a full product DataFrame in either entry point. Partial runs may
+    insert dimension keys needed to build pending facts, but never overwrite
+    attributes already visible through a full publication.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM stg_comercios WHERE run_id = %s", (run_id,))
@@ -77,9 +84,14 @@ def load_staged_dimensions(conn, run_id: int) -> DimensionLoadResult:
     comercios = clean_comercios(comercios_df)
     sucursales = clean_sucursales(sucursales_df)
     rows_comercios, rows_sucursales = warehouse_loader.load_dimensions_no_producto(
-        conn, comercios.clean, sucursales.clean
+        conn,
+        comercios.clean,
+        sucursales.clean,
+        update_existing=not is_partial,
     )
-    rows_productos = warehouse_loader.load_dim_produto_from_staging(conn, run_id)
+    rows_productos = warehouse_loader.load_dim_produto_from_staging(
+        conn, run_id, update_existing=not is_partial
+    )
     return DimensionLoadResult(
         rows_comercios=rows_comercios,
         rows_sucursales=rows_sucursales,

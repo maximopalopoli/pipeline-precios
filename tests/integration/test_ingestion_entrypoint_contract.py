@@ -21,11 +21,14 @@ def _create_raw_file(conn, sha256: str) -> int:
         return cur.fetchone()[0]
 
 
-def _create_run(conn, raw_file_id: int, status: str) -> int:
+def _create_run(conn, raw_file_id: int, status: str, *, is_partial: bool = False) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO ingestion_runs (raw_file_id, status) VALUES (%s, %s) RETURNING id",
-            (raw_file_id, status),
+            """
+            INSERT INTO ingestion_runs (raw_file_id, status, is_partial)
+            VALUES (%s, %s, %s) RETURNING id
+            """,
+            (raw_file_id, status, is_partial),
         )
         return cur.fetchone()[0]
 
@@ -60,3 +63,19 @@ def test_completed_raw_file_is_the_only_case_both_entrypoints_skip(pg_conn):
     pg_conn.commit()
 
     assert should_process_raw_file(pg_conn, raw_file_id) is False
+
+
+def test_completed_partial_run_never_blocks_a_full_ingestion(pg_conn):
+    raw_file_id = _create_raw_file(pg_conn, "entrypoint-partial")
+    _create_run(pg_conn, raw_file_id, "completed", is_partial=True)
+    pg_conn.commit()
+
+    assert should_process_raw_file(pg_conn, raw_file_id) is True
+
+
+def test_partial_ingestion_can_inspect_a_source_already_published_fully(pg_conn):
+    raw_file_id = _create_raw_file(pg_conn, "entrypoint-full-then-partial")
+    _create_run(pg_conn, raw_file_id, "completed")
+    pg_conn.commit()
+
+    assert should_process_raw_file(pg_conn, raw_file_id, partial=True) is True
