@@ -145,10 +145,12 @@ def main(argv: list[str] | None = None) -> int:
 
     print(json.dumps({
         "environment": environment,
+        "fecha": args.fecha.isoformat(),
         "policy": {
             "chain_keys": [f"{comercio}:{bandera}" for comercio, bandera in policy.chain_keys],
             "max_product_rows": policy.max_product_rows,
         },
+        "source_archive": str(args.zip_path.resolve()),
         "samples": [sample.as_dict() for sample in samples],
         "summaries": [asdict(summary) for summary in summarize_chunk_benchmarks(samples)],
     }, indent=2, sort_keys=True))

@@ -344,6 +344,15 @@ so it can be saved without mixing output streams: append
 It deliberately does not alter `SEPA_FACT_CHUNK_SIZE`'s production default;
 validate any production-sized change on a machine that can run a full source.
 
+To use a checked-in or CI-provided reference report, compare an equivalent
+candidate with tolerant limits (15% elapsed time and 20% RSS by default). The
+command exits nonzero only for a material regression, not normal timing noise:
+
+```bash
+make check-benchmark-regression \
+  BASELINE=benchmark-baseline.json CANDIDATE=benchmark-chunks.json
+```
+
 ### Run with Docker Compose (all services)
 
 ```bash
