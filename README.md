@@ -325,6 +325,22 @@ Replay streams the local archive to calculate its SHA-256, registers or reuses
 the same `raw_files` record, and performs the normal declared-date validation.
 It does not copy the ZIP or contact the SEPA URL.
 
+For a reproducible sizing experiment, run each candidate multiple times. The
+command below performs runs sequentially, remains partial, and prints the
+individual durable samples plus per-size medians and the Python/PostgreSQL/OS
+versions used for the measurement:
+
+```bash
+make benchmark-chunks \
+  ZIP=data/2026-09-22_martes_<sha256>.zip DATE=2026-09-22 \
+  DEV_CHAIN_KEYS=12:1 DEV_MAX_PRODUCT_ROWS=50000 \
+  CHUNK_SIZES=5000,10000,25000 REPEATS=3
+```
+
+Use its median durations and memory range to choose a local benchmark setting.
+It deliberately does not alter `SEPA_FACT_CHUNK_SIZE`'s production default;
+validate any production-sized change on a machine that can run a full source.
+
 ### Run with Docker Compose (all services)
 
 ```bash

@@ -26,10 +26,15 @@ class IngestionResult:
 
     outcome: IngestionOutcome
     rows_loaded: int = 0
+    run_id: int | None = None
 
     @classmethod
-    def completed(cls, rows_loaded: int) -> IngestionResult:
-        return cls(outcome=IngestionOutcome.COMPLETED, rows_loaded=rows_loaded)
+    def completed(cls, rows_loaded: int, *, run_id: int | None = None) -> IngestionResult:
+        return cls(
+            outcome=IngestionOutcome.COMPLETED,
+            rows_loaded=rows_loaded,
+            run_id=run_id,
+        )
 
     @classmethod
     def skipped(cls) -> IngestionResult:

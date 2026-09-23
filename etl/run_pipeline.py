@@ -427,7 +427,7 @@ def run(
                 rows_fact_published=0,
                 retention_skipped=True,
             )
-            return IngestionResult.completed(product_load.rows_fact)
+            return IngestionResult.completed(product_load.rows_fact, run_id=run_id)
         try:
             retention_result = apply_fact_retention(
                 conn,
@@ -479,7 +479,7 @@ def run(
             # ZIP cleanup is last and must not affect the published snapshot.
             conn.rollback()
             logger.exception("pipeline.raw_retention.failed")
-        return IngestionResult.completed(product_load.rows_fact)
+        return IngestionResult.completed(product_load.rows_fact, run_id=run_id)
 
     except Exception as exc:
         if active_timer is not None and active_timer.is_running:
