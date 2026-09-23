@@ -457,12 +457,13 @@ def test_airflow_partial_run_completes_without_publishing_a_snapshot(
     )
 
     assert dag_module.check_file_changed(ti=ti, run_id="manual__partial") is True
-    staging = dag_module.load_staging(ti=ti)
-    ti.values["load_staging"] = staging
-    # Later tasks must use the mode recorded on the run, not a mutable worker
+    # Staging must use the policy selected with the lock, not a mutable worker
     # environment that no longer carries the development bounds.
     monkeypatch.delenv("SEPA_DEV_CHAIN_KEYS")
     monkeypatch.delenv("SEPA_DEV_MAX_PRODUCT_ROWS")
+    staging = dag_module.load_staging(ti=ti)
+    ti.values["load_staging"] = staging
+    # Later tasks use the publication mode persisted on the ingestion run.
     dag_module.load_dimensions(ti=ti)
     ti.values["load_pending_fact_precios"] = dag_module.load_pending_fact_precios(ti=ti)
     dag_module.publish_daily_snapshot(ti=ti)
