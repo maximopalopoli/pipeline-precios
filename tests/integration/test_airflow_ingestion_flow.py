@@ -809,7 +809,7 @@ def test_airflow_marks_the_run_failed_when_pending_fact_loading_fails(
     def connect():
         return _connect_to_fixture(pg_conn)
 
-    def fail_fact_load(conn, connect, *, run_id, run_date, heartbeat=None):
+    def fail_fact_load(conn, connect, *, run_id, run_date, chunk_size, heartbeat=None):
         raise RuntimeError("pending fact load failed")
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)

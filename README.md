@@ -298,6 +298,12 @@ bound: `--dev-chain-key ID_COMERCIO:ID_BANDERA` (repeatable) and
 python -m etl.run_pipeline --fecha 2026-03-17 --dev-chain-key 1:1 --dev-max-product-rows 5000
 ```
 
+`SEPA_FACT_CHUNK_SIZE` controls how many staged product rows are prepared and
+written per fact batch (default: 300000). It changes only memory/throughput
+partitioning, not the published fact grain. Use the same value when comparing
+baselines; for example, `make ingest-bounded DATE=... DEV_MAX_PRODUCT_ROWS=5000
+FACT_CHUNK_SIZE=50000`.
+
 ### Run with Docker Compose (all services)
 
 ```bash

@@ -33,6 +33,8 @@ def test_cli_passes_explicit_development_bounds_to_the_pipeline(monkeypatch):
             "10:3",
             "--dev-max-product-rows",
             "5000",
+            "--fact-chunk-size",
+            "50000",
         ],
     )
 
@@ -44,11 +46,22 @@ def test_cli_passes_explicit_development_bounds_to_the_pipeline(monkeypatch):
     assert captured["raw_dir"] == Path("local-data")
     assert captured["development_policy"].chain_keys == ((10, 3), (40, 2))
     assert captured["development_policy"].max_product_rows == 5000
+    assert captured["fact_chunk_size"] == 50000
 
 
 def test_cli_rejects_a_nonpositive_product_bound(monkeypatch):
     monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
     monkeypatch.setattr(sys, "argv", ["run_pipeline", "--dev-max-product-rows", "0"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main()
+
+    assert exc_info.value.code == 1
+
+
+def test_cli_rejects_a_nonpositive_fact_chunk_size(monkeypatch):
+    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["run_pipeline", "--fact-chunk-size", "0"])
 
     with pytest.raises(SystemExit) as exc_info:
         pipeline.main()

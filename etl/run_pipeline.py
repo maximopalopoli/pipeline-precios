@@ -49,6 +49,7 @@ from etl.development_ingestion import (
 )
 from etl.extract import downloader
 from etl.fact_retention import apply_fact_retention
+from etl.fact_chunking import with_cli_override as fact_chunk_size_with_cli_override
 from etl.ingestion_date import resolve_ingestion_date
 from etl.ingestion_lock import (
     IngestionLock,
@@ -149,6 +150,7 @@ def run(
     fecha: date | None = None,
     raw_dir: Path | None = None,
     development_policy: DevelopmentIngestionPolicy | None = None,
+    fact_chunk_size: int | None = None,
 ) -> IngestionResult:
     """
     Execute the full pipeline for *fecha* (defaults to today in Argentina).
@@ -160,6 +162,7 @@ def run(
     raw_dir.mkdir(parents=True, exist_ok=True)
     retention_policy = from_environment()
     development_policy = development_policy or development_policy_from_environment()
+    fact_chunk_size = fact_chunk_size_with_cli_override(chunk_size=fact_chunk_size)
     fecha = resolve_ingestion_date(fecha)
 
     conn = _db_connect()
@@ -174,7 +177,7 @@ def run(
 
         # ── 1. Download ──────────────────────────────────────────────────────
         active_timer = StageTimer(log, "download")
-        active_timer.start()
+        active_timer.start(chunk_size=fact_chunk_size)
         try:
             dl = downloader.download(conn, raw_dir, fecha)
         except Exception as exc:
@@ -327,12 +330,14 @@ def run(
             _db_connect,
             run_id=run_id,
             run_date=dl.fecha_datos,
+            chunk_size=fact_chunk_size,
             heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
         )
         conn.commit()
 
         active_timer.finish(
             chunks=product_load.chunks,
+            chunk_size=fact_chunk_size,
             rows_fact=product_load.rows_fact,
             rows_valid=product_load.rows_valid,
             rows_rejected=product_load.rows_rejected,
@@ -522,6 +527,13 @@ def main() -> None:
         metavar="N",
         help="Limit a local partial run to N staged product rows.",
     )
+    parser.add_argument(
+        "--fact-chunk-size",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Rows processed per product-fact batch (default: SEPA_FACT_CHUNK_SIZE or 300000).",
+    )
     args = parser.parse_args()
 
     try:
@@ -530,10 +542,14 @@ def main() -> None:
             chain_keys=args.dev_chain_key,
             max_product_rows=args.dev_max_product_rows,
         )
+        fact_chunk_size = fact_chunk_size_with_cli_override(
+            chunk_size=args.fact_chunk_size
+        )
         run(
             fecha=args.fecha,
             raw_dir=args.raw_dir,
             development_policy=development_policy,
+            fact_chunk_size=fact_chunk_size,
         )
     except Exception:
         sys.exit(1)

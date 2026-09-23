@@ -63,6 +63,7 @@ ingest-bounded: ## Run an isolated local partial ingestion (DATE=... and one DEV
 	@test -n "$(DATE)" || (echo "DATE is required, for example DATE=2026-03-17"; exit 2)
 	@test -n "$(DEV_CHAIN_KEYS)$(DEV_MAX_PRODUCT_ROWS)" || (echo "Set DEV_CHAIN_KEYS and/or DEV_MAX_PRODUCT_ROWS"; exit 2)
 	SEPA_DEV_CHAIN_KEYS='$(DEV_CHAIN_KEYS)' SEPA_DEV_MAX_PRODUCT_ROWS='$(DEV_MAX_PRODUCT_ROWS)' \
+	SEPA_FACT_CHUNK_SIZE='$(FACT_CHUNK_SIZE)' \
 		.venv/bin/python -m etl.run_pipeline --fecha $(DATE)
 
 etl-baseline: ## Print persisted ETL metrics (optional: RUN_ID=...)

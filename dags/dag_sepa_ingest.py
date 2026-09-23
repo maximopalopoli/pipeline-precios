@@ -415,6 +415,7 @@ def load_dimensions(**kwargs):
 
 def load_pending_fact_precios(**kwargs):
     """Stream staging products into the run-local pending table."""
+    from etl.fact_chunking import from_environment as fact_chunk_size_from_environment
     from etl.ingestion_processing import stream_pending_product_facts
 
     ti = kwargs["ti"]
@@ -422,23 +423,26 @@ def load_pending_fact_precios(**kwargs):
     dl_info = ti.xcom_pull(task_ids="download_zip")
     run_id = stg_info["run_id"]
     run_date = date.fromisoformat(dl_info["fecha_datos"])
+    chunk_size = fact_chunk_size_from_environment()
 
     conn = _db_connect()
     timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
         timer = StageTimer(log.bind(run_id=run_id), "fact_load")
-        timer.start()
+        timer.start(chunk_size=chunk_size)
         result = stream_pending_product_facts(
             conn,
             _db_connect,
             run_id=run_id,
             run_date=run_date,
+            chunk_size=chunk_size,
             heartbeat=lambda: _renew_ingestion_lock(conn, ti),
         )
         conn.commit()
         timer.finish(
             chunks=result.chunks,
+            chunk_size=chunk_size,
             rows_fact=result.rows_fact,
             rows_valid=result.rows_valid,
             rows_rejected=result.rows_rejected,
