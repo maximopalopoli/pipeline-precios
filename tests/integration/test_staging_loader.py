@@ -71,6 +71,7 @@ def test_load_returns_correct_counts(pg_conn, sample_zip_path):
     assert result.rows_comercios == EXPECTED_COMERCIOS
     assert result.rows_sucursales == EXPECTED_SUCURSALES
     assert result.rows_productos == EXPECTED_PRODUCTOS
+    assert result.rows_productos_source == EXPECTED_PRODUCTOS
     assert len(heartbeats) == EXPECTED_INNER_ZIPS
 
 
@@ -130,6 +131,7 @@ def test_load_applies_explicit_chain_and_product_bounds_deterministically(
         rows_comercios=1,
         rows_sucursales=2,
         rows_productos=2,
+        rows_productos_source=EXPECTED_PRODUCTOS,
     )
     with pg_conn.cursor() as cur:
         cur.execute(
@@ -154,7 +156,8 @@ def test_register_counts_updates_ingestion_run(pg_conn, sample_zip_path):
     with pg_conn.cursor() as cur:
         cur.execute(
             """
-            SELECT inner_zips_count, rows_comercios, rows_sucursales, rows_productos_raw
+            SELECT inner_zips_count, rows_comercios, rows_sucursales,
+                   rows_productos_raw, rows_productos_selected
               FROM ingestion_runs
              WHERE id = %s
             """,
@@ -166,5 +169,6 @@ def test_register_counts_updates_ingestion_run(pg_conn, sample_zip_path):
         EXPECTED_INNER_ZIPS,
         EXPECTED_COMERCIOS,
         EXPECTED_SUCURSALES,
+        EXPECTED_PRODUCTOS,
         EXPECTED_PRODUCTOS,
     )

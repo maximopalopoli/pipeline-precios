@@ -92,6 +92,7 @@ class LoadResult:
     rows_comercios: int
     rows_sucursales: int
     rows_productos: int
+    rows_productos_source: int
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -146,6 +147,7 @@ def load(
     rows_comercios = 0
     rows_sucursales = 0
     rows_productos = 0
+    rows_productos_source = 0
     remaining_product_rows = development_policy.max_product_rows
 
     with zipfile.ZipFile(zip_path) as main_zip:
@@ -176,15 +178,8 @@ def load(
                             csv=csv_name,
                         )
                         continue
-                    if counter_name == "productos" and remaining_product_rows == 0:
-                        logger.info(
-                            "staging.product_limit_reached",
-                            source=inner_name,
-                            max_product_rows=development_policy.max_product_rows,
-                        )
-                        continue
                     raw = inner_zip.read(csv_index[csv_name])
-                    n = _stream_copy_into(
+                    loaded_rows, source_rows = _stream_copy_into(
                         conn, table, cols, raw, run_id,
                         source=inner_name,
                         chain_keys=development_policy.chain_keys,
@@ -194,13 +189,14 @@ def load(
                     )
                     del raw
                     if counter_name == "comercios":
-                        rows_comercios += n
+                        rows_comercios += loaded_rows
                     elif counter_name == "sucursales":
-                        rows_sucursales += n
+                        rows_sucursales += loaded_rows
                     else:
-                        rows_productos += n
+                        rows_productos += loaded_rows
+                        rows_productos_source += source_rows
                         if remaining_product_rows is not None:
-                            remaining_product_rows -= n
+                            remaining_product_rows -= loaded_rows
             del inner_bytes  # free memory before next inner ZIP
 
     logger.info(
@@ -208,6 +204,7 @@ def load(
         rows_comercios=rows_comercios,
         rows_sucursales=rows_sucursales,
         rows_productos=rows_productos,
+        rows_productos_source=rows_productos_source,
     )
 
     conn.commit()
@@ -217,6 +214,7 @@ def load(
         rows_comercios=rows_comercios,
         rows_sucursales=rows_sucursales,
         rows_productos=rows_productos,
+        rows_productos_source=rows_productos_source,
     )
     logger.info("staging.load.done", **result.__dict__)
     return result
@@ -239,13 +237,15 @@ def register_counts(
                SET inner_zips_count   = %s,
                    rows_comercios     = %s,
                    rows_sucursales    = %s,
-                   rows_productos_raw = %s
+                   rows_productos_raw = %s,
+                   rows_productos_selected = %s
              WHERE id = %s
             """,
             (
                 result.inner_zips_count,
                 result.rows_comercios,
                 result.rows_sucursales,
+                result.rows_productos_source,
                 result.rows_productos,
                 run_id,
             ),
@@ -360,14 +360,15 @@ def _stream_copy_into(
     source: str = "",
     chain_keys: tuple[tuple[int, int], ...] = (),
     max_rows: int | None = None,
-) -> int:
+) -> tuple[int, int]:
     """
     Stream raw CSV bytes into a staging table via chunked COPY,
     bypassing pandas to keep memory usage low even for 400+ MB CSVs.
 
-    Returns the number of rows loaded after optional source-chain filtering and
-    a row cap. Input order is stable because callers process sorted inner ZIP
-    names and this function preserves each CSV's source order.
+    Returns ``(loaded_rows, source_rows)``. Source rows are counted before
+    optional filtering and caps, so a bounded run retains an honest audit of
+    the ZIP it inspected. Input order is stable because callers process sorted
+    inner ZIP names and this function preserves each CSV's source order.
     """
     import csv as csv_mod
 
@@ -380,7 +381,7 @@ def _stream_copy_into(
     # Read header line
     header_line = text_stream.readline()
     if not header_line.strip():
-        return 0
+        return 0, 0
     header = [c.strip() for c in next(csv_mod.reader([header_line], delimiter="|"))]
 
     col_indices: list[int | None] = []
@@ -399,6 +400,7 @@ def _stream_copy_into(
     sql = f"COPY {table} ({col_list}) FROM STDIN WITH (FORMAT csv)"
     run_id_str = str(run_id)
     row_count = 0
+    source_row_count = 0
 
     def _flush_chunk(buf: io.StringIO) -> None:
         buf.seek(0)
@@ -424,8 +426,11 @@ def _stream_copy_into(
         lower = stripped.lower()
         if lower.startswith("ultima") or lower.startswith("última"):
             break
+        source_row_count += 1
         parsed = next(csv_mod.reader([stripped], delimiter="|"))
         if chain_keys and not _matches_chain_key(parsed, comercio_idx, bandera_idx, chain_keys):
+            continue
+        if max_rows is not None and row_count >= max_rows:
             continue
         row = [run_id_str]
         for idx in col_indices:
@@ -433,9 +438,6 @@ def _stream_copy_into(
         writer.writerow(row)
         row_count += 1
         chunk_rows += 1
-
-        if max_rows is not None and row_count >= max_rows:
-            break
 
         if chunk_rows >= _CHUNK:
             _flush_chunk(buf)
@@ -448,7 +450,7 @@ def _stream_copy_into(
         _flush_chunk(buf)
     del buf
 
-    return row_count
+    return row_count, source_row_count
 
 
 def _matches_chain_key(

@@ -238,7 +238,9 @@ its staging and pending facts only for local inspection, and publish zero facts
 and aggregates. They may add dimension keys required by their pending facts but
 never overwrite attributes already visible from a full run. Partial runs skip
 retention and never make the source look fully ingested, so a later full
-ingestion of the same ZIP remains eligible.
+ingestion of the same ZIP remains eligible. Their audit records retain both
+source product rows and the subset selected into staging; `/health` exposes
+that distinction and whether the latest run is partial.
 
 For one-off CLI runs, the equivalent flags override the matching environment
 bound: `--dev-chain-key ID_COMERCIO:ID_BANDERA` (repeatable) and

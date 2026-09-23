@@ -10,6 +10,7 @@ router = APIRouter()
 def _reconciliation_response(row: dict) -> dict | None:
     fields = (
         "rows_productos_raw",
+        "rows_productos_selected",
         "rows_productos_valid",
         "rows_productos_rejected",
         "rows_productos_without_keys",
@@ -29,7 +30,9 @@ async def get_health():
             ir.status,
             ir.started_at,
             rf.fecha_datos,
+            ir.is_partial,
             ir.rows_productos_raw,
+            ir.rows_productos_selected,
             ir.rows_productos_valid,
             ir.rows_productos_rejected,
             ir.rows_productos_without_keys,
@@ -46,11 +49,13 @@ async def get_health():
             "status": "no_data",
             "started_at": None,
             "fecha_datos": None,
+            "is_partial": None,
             "reconciliacion": None,
         }
     return {
         "status": row["status"],
         "started_at": row["started_at"].isoformat() if row["started_at"] else None,
         "fecha_datos": row["fecha_datos"].isoformat() if row["fecha_datos"] else None,
+        "is_partial": row["is_partial"],
         "reconciliacion": _reconciliation_response(row),
     }

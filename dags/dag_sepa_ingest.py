@@ -278,6 +278,7 @@ def load_staging(**kwargs):
             rows_comercios=stg.rows_comercios,
             rows_sucursales=stg.rows_sucursales,
             rows_productos=stg.rows_productos,
+            rows_productos_source=stg.rows_productos_source,
         )
 
         return {
@@ -286,6 +287,7 @@ def load_staging(**kwargs):
             "rows_comercios": stg.rows_comercios,
             "rows_sucursales": stg.rows_sucursales,
             "rows_productos": stg.rows_productos,
+            "rows_productos_source": stg.rows_productos_source,
         }
     except Exception as exc:
         _fail_active_timer(timer, exc)
