@@ -276,7 +276,8 @@ make audit-queries FECHA_ID=20260922
 duration, fact-load process-memory high-water mark and
 reconciliation counts. `compare-etl-baselines` excludes runs that do not share
 the source archive and bounds, so its JSON rows differ only in the benchmark
-configuration such as `fact_chunk_size`. `audit-queries` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and
+configuration such as `fact_chunk_size`; it also excludes historical runs that
+predate durable fact-load telemetry. `audit-queries` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and
 emits planning/execution time, row counts and shared-buffer reads as JSON.
 Capture a baseline before and after a candidate index migration; do not infer
 full-scale capacity from a bounded run.

@@ -65,6 +65,7 @@ _COMPARABLE_BASELINES_SQL = """
     SELECT run.id
     FROM ingestion_runs AS run
     CROSS JOIN target
+    JOIN ingestion_fact_load_metrics AS metrics ON metrics.run_id = run.id
     WHERE run.raw_file_id = target.raw_file_id
       AND run.status = 'completed'
       AND run.fact_chunk_size IS NOT NULL
@@ -130,9 +131,10 @@ def latest_completed_run_id(conn: Any) -> int | None:
 def load_comparable_run_baselines(conn: Any, *, run_id: int) -> list[RunBaseline]:
     """Return completed runs with the same archive and bounded-run policy.
 
-    This deliberately excludes historic runs without a recorded batch size and
-    runs whose chain or row limits differ. The remaining list is appropriate
-    for comparing only the fact-chunk-size experiment.
+    This deliberately excludes historic runs without a recorded batch size or
+    fact-load measurement, and runs whose chain or row limits differ. The
+    remaining list is appropriate for comparing only the fact-chunk-size
+    experiment.
     """
     with conn.cursor() as cur:
         cur.execute(_COMPARABLE_BASELINES_SQL, (run_id,))
