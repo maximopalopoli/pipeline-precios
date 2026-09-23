@@ -505,6 +505,10 @@ def test_airflow_reserves_the_date_before_loading_staging(pg_conn, dag_module, m
 
     assert dag_module.check_file_changed(ti=ti, run_id="manual__lock") is True
     assert ti.pushed["ingestion_lock"]["owner"] == "airflow:manual__lock"
+    assert ti.pushed["development_policy"] == {
+        "chain_keys": [],
+        "max_product_rows": None,
+    }
     with pg_conn.cursor() as cur:
         cur.execute("SELECT owner FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
         assert cur.fetchone()[0] == "airflow:manual__lock"

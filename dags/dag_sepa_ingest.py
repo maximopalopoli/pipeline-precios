@@ -69,6 +69,24 @@ def _lock_from_xcom(ti):
     )
 
 
+def _development_policy_from_xcom(ti):
+    """Read the bounded-run policy selected when this DAG run took its lock."""
+    from etl.development_ingestion import (
+        DevelopmentIngestionPolicy,
+        from_environment as development_policy_from_environment,
+    )
+
+    data = ti.xcom_pull(task_ids="check_file_changed", key="development_policy")
+    if data is None:
+        # Compatibility for direct task invocation in tests and operator tools.
+        # Normal DAG runs always persist the policy in check_file_changed.
+        return development_policy_from_environment()
+    return DevelopmentIngestionPolicy(
+        chain_keys=tuple(tuple(key) for key in data["chain_keys"]),
+        max_product_rows=data["max_product_rows"],
+    )
+
+
 def _release_ingestion_lock_on_failure(context) -> None:
     """Release the date after Airflow exhausts a task's configured retries."""
     from etl.ingestion_lock import IngestionLockOwnershipError, release_ingestion_lock
@@ -212,6 +230,13 @@ def check_file_changed(**kwargs):
                 "expires_at": lock.expires_at.isoformat(),
             },
         )
+        ti.xcom_push(
+            key="development_policy",
+            value={
+                "chain_keys": [list(key) for key in development_policy.chain_keys],
+                "max_product_rows": development_policy.max_product_rows,
+            },
+        )
         return should_process
     except Exception:
         if lock is not None:
@@ -227,11 +252,10 @@ def load_staging(**kwargs):
     from etl.staging import loader as staging_loader
     from etl.storage_metrics import collect_storage_footprint
     from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
-    from etl.development_ingestion import from_environment as development_policy_from_environment
 
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
-    development_policy = development_policy_from_environment()
+    development_policy = _development_policy_from_xcom(ti)
 
     conn = _db_connect()
     run_id: int | None = None
