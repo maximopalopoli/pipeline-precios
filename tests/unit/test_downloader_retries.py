@@ -14,7 +14,12 @@ import pytest
 import requests
 
 import etl.extract.downloader as downloader_mod
-from etl.extract.downloader import MAX_RETRIES, RETRY_BACKOFF, _download_with_retries
+from etl.extract.downloader import (
+    MAX_RETRIES,
+    RETRY_BACKOFF,
+    DownloadPayload,
+    _download_with_retries,
+)
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -34,18 +39,18 @@ class TestDownloadWithRetries:
 
     def test_succeeds_on_first_attempt(self):
         """No retries needed — returns bytes immediately."""
-        expected = b"zip-content"
+        expected = DownloadPayload(path=MagicMock(), sha256="a" * 64, size_bytes=1)
         logger = _make_logger()
 
         with patch.object(downloader_mod, "_stream_download", return_value=expected) as mock_dl:
-            result = _download_with_retries("http://example.com/file.zip", logger)
+            result = _download_with_retries("http://example.com/file.zip", MagicMock(), logger)
 
         assert result == expected
         assert mock_dl.call_count == 1
 
     def test_retries_once_then_succeeds(self):
         """First attempt fails, second succeeds → returns bytes after 1 retry."""
-        expected = b"zip-ok"
+        expected = DownloadPayload(path=MagicMock(), sha256="a" * 64, size_bytes=1)
         logger = _make_logger()
 
         side_effects = [requests.ConnectionError("timeout"), expected]
@@ -54,7 +59,7 @@ class TestDownloadWithRetries:
             patch.object(downloader_mod, "_stream_download", side_effect=side_effects),
             patch.object(downloader_mod.time, "sleep") as mock_sleep,
         ):
-            result = _download_with_retries("http://example.com/file.zip", logger)
+            result = _download_with_retries("http://example.com/file.zip", MagicMock(), logger)
 
         assert result == expected
         # Should have slept once with the first backoff interval
@@ -62,7 +67,7 @@ class TestDownloadWithRetries:
 
     def test_retries_twice_then_succeeds(self):
         """Two failures then success → sleeps with correct backoff values."""
-        expected = b"zip-ok"
+        expected = DownloadPayload(path=MagicMock(), sha256="a" * 64, size_bytes=1)
         logger = _make_logger()
 
         side_effects = [
@@ -75,7 +80,7 @@ class TestDownloadWithRetries:
             patch.object(downloader_mod, "_stream_download", side_effect=side_effects),
             patch.object(downloader_mod.time, "sleep") as mock_sleep,
         ):
-            result = _download_with_retries("http://example.com/file.zip", logger)
+            result = _download_with_retries("http://example.com/file.zip", MagicMock(), logger)
 
         assert result == expected
         assert mock_sleep.call_count == 2
@@ -94,7 +99,7 @@ class TestDownloadWithRetries:
             patch.object(downloader_mod.time, "sleep"),
         ):
             with pytest.raises(RuntimeError, match=f"after {MAX_RETRIES} attempts"):
-                _download_with_retries("http://example.com/file.zip", logger)
+                _download_with_retries("http://example.com/file.zip", MagicMock(), logger)
 
     def test_attempt_count_equals_max_retries(self):
         """_stream_download is called exactly MAX_RETRIES times before giving up."""
@@ -109,7 +114,7 @@ class TestDownloadWithRetries:
             patch.object(downloader_mod.time, "sleep"),
         ):
             with pytest.raises(RuntimeError):
-                _download_with_retries("http://example.com/file.zip", logger)
+                _download_with_retries("http://example.com/file.zip", MagicMock(), logger)
 
         assert mock_dl.call_count == MAX_RETRIES
 
@@ -126,7 +131,7 @@ class TestDownloadWithRetries:
             patch.object(downloader_mod.time, "sleep") as mock_sleep,
         ):
             with pytest.raises(RuntimeError):
-                _download_with_retries("http://example.com/file.zip", logger)
+                _download_with_retries("http://example.com/file.zip", MagicMock(), logger)
 
         # With MAX_RETRIES=3 there are 2 intermediate sleeps (after attempt 1 and 2)
         assert mock_sleep.call_count == MAX_RETRIES - 1
@@ -136,15 +141,16 @@ class TestDownloadWithRetries:
         logger = _make_logger()
 
         http_error = requests.HTTPError(response=MagicMock(status_code=503))
-        side_effects = [http_error, b"ok"]
+        expected = DownloadPayload(path=MagicMock(), sha256="a" * 64, size_bytes=1)
+        side_effects = [http_error, expected]
 
         with (
             patch.object(downloader_mod, "_stream_download", side_effect=side_effects),
             patch.object(downloader_mod.time, "sleep"),
         ):
-            result = _download_with_retries("http://example.com/file.zip", logger)
+            result = _download_with_retries("http://example.com/file.zip", MagicMock(), logger)
 
-        assert result == b"ok"
+        assert result == expected
 
     def test_original_exception_chained_in_runtime_error(self):
         """RuntimeError.__cause__ must be the last RequestException."""
@@ -160,6 +166,6 @@ class TestDownloadWithRetries:
             patch.object(downloader_mod.time, "sleep"),
         ):
             with pytest.raises(RuntimeError) as exc_info:
-                _download_with_retries("http://example.com/file.zip", logger)
+                _download_with_retries("http://example.com/file.zip", MagicMock(), logger)
 
         assert exc_info.value.__cause__ is original

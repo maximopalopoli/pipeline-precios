@@ -21,7 +21,7 @@ from unittest.mock import patch
 
 
 import etl.extract.downloader as downloader_mod
-from etl.extract.downloader import download
+from etl.extract.downloader import DownloadPayload, download
 
 _FECHA = date(2026, 3, 17)  # Monday
 
@@ -47,6 +47,14 @@ def _all_raw_file_ids(conn):
         return [row[0] for row in cur.fetchall()]
 
 
+def _payload(tmp_path, content: bytes) -> DownloadPayload:
+    import hashlib
+
+    path = tmp_path / f"payload-{len(list(tmp_path.glob('payload-*.part')))}.part"
+    path.write_bytes(content)
+    return DownloadPayload(path, hashlib.sha256(content).hexdigest(), len(content))
+
+
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
 
@@ -57,10 +65,10 @@ class TestRectifiedFileDetected:
         A second download with different content for the same date must create
         a distinct raw_files row (not return the existing one).
         """
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V1):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V1)):
             r1 = download(pg_conn, tmp_path, _FECHA)
 
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V2):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V2)):
             r2 = download(pg_conn, tmp_path, _FECHA)
 
         assert r1.is_new is True
@@ -72,10 +80,10 @@ class TestRectifiedFileDetected:
 
     def test_two_raw_file_rows_for_same_date(self, pg_conn, tmp_path):
         """raw_files must contain two distinct rows for the same fecha_datos."""
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V1):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V1)):
             download(pg_conn, tmp_path, _FECHA)
 
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V2):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V2)):
             download(pg_conn, tmp_path, _FECHA)
 
         assert _count_raw_files(pg_conn) == 2
@@ -84,10 +92,10 @@ class TestRectifiedFileDetected:
         """The two raw_files rows must have different SHA-256 hashes."""
         import hashlib
 
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V1):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V1)):
             r1 = download(pg_conn, tmp_path, _FECHA)
 
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V2):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V2)):
             r2 = download(pg_conn, tmp_path, _FECHA)
 
         assert r1.sha256 != r2.sha256
@@ -99,14 +107,14 @@ class TestRectifiedFileDetected:
         A third call with the original content (v1) must be detected as a
         duplicate (is_new=False) — the 10:00 run's file is already registered.
         """
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V1):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V1)):
             r1 = download(pg_conn, tmp_path, _FECHA)
 
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V2):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V2)):
             download(pg_conn, tmp_path, _FECHA)
 
         # Third call — same content as v1
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V1):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V1)):
             r3 = download(pg_conn, tmp_path, _FECHA)
 
         assert r3.is_new is False
@@ -118,10 +126,10 @@ class TestRectifiedFileDetected:
 
     def test_rectified_file_has_correct_metadata(self, pg_conn, tmp_path):
         """The rectified file entry must record correct size and fecha_datos."""
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V1):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V1)):
             download(pg_conn, tmp_path, _FECHA)
 
-        with patch.object(downloader_mod, "_stream_download", return_value=_ZIP_V2):
+        with patch.object(downloader_mod, "_stream_download", side_effect=lambda *_: _payload(tmp_path, _ZIP_V2)):
             r2 = download(pg_conn, tmp_path, _FECHA)
 
         assert r2.fecha_datos == _FECHA
