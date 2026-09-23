@@ -1,5 +1,6 @@
 from datetime import date
 
+from etl.development_ingestion import DevelopmentIngestionPolicy
 from etl.ingestion_run import open_ingestion_run, record_source_date
 
 
@@ -54,3 +55,26 @@ def test_ingestion_run_defaults_dates_from_its_raw_file_for_compatibility(pg_con
             (run_id,),
         )
         assert cur.fetchone() == (date(2026, 3, 15), date(2026, 3, 15), None)
+
+
+def test_partial_ingestion_run_persists_its_canonical_bounds(pg_conn):
+    raw_file_id = _raw_file_id(pg_conn, date(2026, 3, 15))
+
+    run_id = open_ingestion_run(
+        pg_conn,
+        raw_file_id,
+        development_policy=DevelopmentIngestionPolicy(
+            chain_keys=((10, 2), (40, 1)), max_product_rows=500
+        ),
+    )
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT is_partial, partial_chain_keys, partial_max_product_rows
+            FROM ingestion_runs
+            WHERE id = %s
+            """,
+            (run_id,),
+        )
+        assert cur.fetchone() == (True, "10:2,40:1", 500)

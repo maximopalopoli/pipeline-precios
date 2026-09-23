@@ -350,6 +350,84 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
     assert _published_snapshot(pg_conn, dag_run_id) == cli_snapshot
 
 
+def test_cli_partial_run_is_isolated_and_a_later_full_run_publishes(
+    pg_conn, sample_zip_path, tmp_path, monkeypatch
+):
+    raw_file_id = _create_raw_file(pg_conn, "bounded-cli.zip", "bounded-cli")
+    pg_conn.commit()
+
+    def connect():
+        return _connect_to_fixture(pg_conn)
+
+    original_run_all = cli_pipeline.quality_checks.run_all
+    monkeypatch.setattr(cli_pipeline, "_db_connect", connect)
+    monkeypatch.setattr(
+        cli_pipeline.downloader,
+        "download",
+        lambda conn, raw_dir, fecha: DownloadResult(
+            raw_file_id=raw_file_id,
+            filename="bounded-cli.zip",
+            path=sample_zip_path,
+            sha256="bounded-cli",
+            size_bytes=sample_zip_path.stat().st_size,
+            fecha_datos=_RUN_DATE,
+            is_new=True,
+        ),
+    )
+    monkeypatch.setattr(
+        cli_pipeline.quality_checks,
+        "run_all",
+        lambda conn, run_id: original_run_all(conn, run_id, min_productos=1),
+    )
+    monkeypatch.setenv("SEPA_DEV_CHAIN_KEYS", "1:1")
+    monkeypatch.setenv("SEPA_DEV_MAX_PRODUCT_ROWS", "2")
+
+    partial_result = cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
+
+    assert partial_result.rows_loaded == 2
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT id, is_partial, status, partial_chain_keys,
+                   partial_max_product_rows, rows_fact_pending, rows_fact_published
+            FROM ingestion_runs
+            WHERE raw_file_id = %s
+            """,
+            (raw_file_id,),
+        )
+        partial_run = cur.fetchone()
+        assert partial_run[1:] == (True, "completed", "1:1", 2, 2, 0)
+        cur.execute("SELECT COUNT(*) FROM fact_precios WHERE fecha_id = %s", (20260317,))
+        assert cur.fetchone()[0] == 0
+        cur.execute(
+            "SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s",
+            (partial_run[0],),
+        )
+        assert cur.fetchone()[0] == 2
+
+    monkeypatch.delenv("SEPA_DEV_CHAIN_KEYS")
+    monkeypatch.delenv("SEPA_DEV_MAX_PRODUCT_ROWS")
+    full_result = cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
+
+    assert full_result.rows_loaded == 7
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT is_partial, status, rows_fact_pending, rows_fact_published
+            FROM ingestion_runs
+            WHERE raw_file_id = %s
+            ORDER BY id
+            """,
+            (raw_file_id,),
+        )
+        assert cur.fetchall() == [
+            (True, "completed", 2, 0),
+            (False, "completed", 7, 7),
+        ]
+        cur.execute("SELECT COUNT(*) FROM fact_precios WHERE fecha_id = %s", (20260317,))
+        assert cur.fetchone()[0] == 7
+
+
 def test_airflow_reserves_the_date_before_loading_staging(pg_conn, dag_module, monkeypatch):
     raw_file_id = _create_raw_file(pg_conn, "airflow-lock.zip", "airflow-lock")
     pg_conn.commit()
