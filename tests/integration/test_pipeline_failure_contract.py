@@ -9,6 +9,7 @@ import pytest
 import etl.run_pipeline as pipeline
 from etl.extract.downloader import DownloadResult
 from etl.ingestion_lock import acquire_ingestion_lock
+from etl.ingestion_run import should_process_raw_file
 from etl.quality import checks as quality_checks
 
 
@@ -173,6 +174,66 @@ def test_cli_marks_a_source_date_mismatch_failed_and_keeps_the_audit_dates(
         )
         cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (requested_date,))
         assert cur.fetchone()[0] == 0
+
+
+def test_partial_fact_load_failure_remains_retryable_and_releases_the_lock(
+    pg_conn, sample_zip_path, tmp_path, monkeypatch
+):
+    raw_file_id = _create_raw_file_for_date(
+        pg_conn, _RUN_DATE, "partial-fact-load-failure"
+    )
+    pg_conn.commit()
+    original_run_all = pipeline.quality_checks.run_all
+
+    monkeypatch.setattr(pipeline, "_db_connect", lambda: _connect_to_fixture(pg_conn))
+    monkeypatch.setattr(
+        pipeline.downloader,
+        "download",
+        lambda conn, raw_dir, fecha: DownloadResult(
+            raw_file_id=raw_file_id,
+            filename="partial-fact-load-failure.zip",
+            path=sample_zip_path,
+            sha256="partial-fact-load-failure",
+            size_bytes=sample_zip_path.stat().st_size,
+            fecha_datos=_RUN_DATE,
+            is_new=True,
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline.quality_checks,
+        "run_all",
+        lambda conn, run_id: original_run_all(conn, run_id, min_productos=1),
+    )
+    monkeypatch.setattr(
+        pipeline,
+        "stream_pending_product_facts",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("fact load interrupted")),
+    )
+    monkeypatch.setenv("SEPA_DEV_CHAIN_KEYS", "1:1")
+    monkeypatch.setenv("SEPA_DEV_MAX_PRODUCT_ROWS", "2")
+
+    with pytest.raises(RuntimeError, match="fact load interrupted"):
+        pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT is_partial, status, finished_at IS NOT NULL, error_message
+            FROM ingestion_runs
+            WHERE raw_file_id = %s
+            """,
+            (raw_file_id,),
+        )
+        is_partial, status, finished, message = cur.fetchone()
+        assert (is_partial, status, finished) == (True, "failed", True)
+        assert "fact load interrupted" in message
+        cur.execute("SELECT COUNT(*) FROM fact_precios WHERE fecha_id = %s", (20260317,))
+        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
+        assert cur.fetchone()[0] == 0
+
+    assert should_process_raw_file(pg_conn, raw_file_id, partial=True) is True
+    assert should_process_raw_file(pg_conn, raw_file_id) is True
 
 
 def test_main_exits_nonzero_when_the_pipeline_fails(monkeypatch):
