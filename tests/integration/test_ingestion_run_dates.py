@@ -1,7 +1,7 @@
 from datetime import date
 
 from etl.development_ingestion import DevelopmentIngestionPolicy
-from etl.ingestion_run import open_ingestion_run, record_source_date
+from etl.ingestion_run import is_partial_run, open_ingestion_run, record_source_date
 
 
 def _raw_file_id(conn, fecha_datos: date) -> int:
@@ -78,3 +78,11 @@ def test_partial_ingestion_run_persists_its_canonical_bounds(pg_conn):
             (run_id,),
         )
         assert cur.fetchone() == (True, "10:2,40:1", 500)
+    assert is_partial_run(pg_conn, run_id) is True
+
+
+def test_is_partial_run_rejects_an_unknown_run(pg_conn):
+    import pytest
+
+    with pytest.raises(ValueError, match="does not exist"):
+        is_partial_run(pg_conn, 9999)

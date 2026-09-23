@@ -351,21 +351,21 @@ def run_quality_checks(**kwargs):
 def load_dimensions(**kwargs):
     """Load dimensions from staging without materializing all products."""
     from etl.ingestion_processing import load_staged_dimensions
-    from etl.development_ingestion import from_environment as development_policy_from_environment
+    from etl.ingestion_run import is_partial_run
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
     run_id = stg_info["run_id"]
-    development_policy = development_policy_from_environment()
 
     conn = _db_connect()
     timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
+        is_partial = is_partial_run(conn, run_id)
         timer = StageTimer(log.bind(run_id=run_id), "dimensions")
         timer.start()
         result = load_staged_dimensions(
-            conn, run_id, is_partial=development_policy.enabled
+            conn, run_id, is_partial=is_partial
         )
         conn.commit()
         timer.finish(
@@ -439,7 +439,7 @@ def publish_daily_snapshot(**kwargs):
     """Atomically publish facts, aggregates and the completed run state."""
     from etl.fact_retention import apply_fact_retention
     from etl.ingestion_lock import release_ingestion_lock
-    from etl.development_ingestion import from_environment as development_policy_from_environment
+    from etl.ingestion_run import is_partial_run
     from etl.load.publisher import complete_partial_run, publish_pending_facts
     from etl.raw_retention import apply_raw_retention
     from etl.retention_policy import from_environment
@@ -453,26 +453,25 @@ def publish_daily_snapshot(**kwargs):
     run_id = stg_info["run_id"]
     fecha = date.fromisoformat(dl_info["fecha_datos"])
     fecha_id = int(fecha.strftime("%Y%m%d"))
-    development_policy = development_policy_from_environment()
     from etl.reconciliation import ProductReconciliation
-
-    reconciliation = ProductReconciliation(
-        rows_valid=pending_info["rows_valid"],
-        rows_rejected=pending_info["rows_rejected"],
-        rows_without_keys=pending_info["rows_without_keys"],
-        rows_deduplicated=pending_info["rows_deduplicated"],
-        rows_fact_pending=pending_info["rows_fact"],
-        rows_fact_published=(0 if development_policy.enabled else pending_info["rows_fact"]),
-        is_partial=development_policy.enabled,
-    )
 
     conn = _db_connect()
     timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
+        is_partial = is_partial_run(conn, run_id)
+        reconciliation = ProductReconciliation(
+            rows_valid=pending_info["rows_valid"],
+            rows_rejected=pending_info["rows_rejected"],
+            rows_without_keys=pending_info["rows_without_keys"],
+            rows_deduplicated=pending_info["rows_deduplicated"],
+            rows_fact_pending=pending_info["rows_fact"],
+            rows_fact_published=(0 if is_partial else pending_info["rows_fact"]),
+            is_partial=is_partial,
+        )
         timer = StageTimer(log.bind(run_id=run_id), "publication")
         timer.start()
-        if development_policy.enabled:
+        if is_partial:
             publication = complete_partial_run(
                 conn, run_id=run_id, reconciliation=reconciliation
             )
@@ -487,7 +486,7 @@ def publish_daily_snapshot(**kwargs):
         timer.finish(
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
-            is_partial=development_policy.enabled,
+            is_partial=is_partial,
             rows_fact_pending=reconciliation.rows_fact_pending,
             rows_fact_published=reconciliation.rows_fact_published,
             rows_valid=reconciliation.rows_valid,
@@ -501,7 +500,7 @@ def publish_daily_snapshot(**kwargs):
             stage="publication",
             **collect_storage_footprint(conn, run_id=run_id).__dict__,
         )
-        if development_policy.enabled:
+        if is_partial:
             log.info(
                 "airflow.partial_run.completed",
                 run_id=run_id,

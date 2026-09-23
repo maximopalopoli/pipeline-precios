@@ -64,6 +64,21 @@ def should_process_raw_file(conn, raw_file_id: int, *, partial: bool = False) ->
     return not has_completed_run(conn, raw_file_id, partial=partial)
 
 
+def is_partial_run(conn, run_id: int) -> bool:
+    """Return the persisted publication mode for one ingestion run.
+
+    Airflow tasks run in separate worker processes. Reading this value from the
+    run record prevents an environment change between tasks from turning a
+    bounded staging load into a full publication (or the reverse).
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT is_partial FROM ingestion_runs WHERE id = %s", (run_id,))
+        row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"Ingestion run {run_id} does not exist.")
+    return bool(row[0])
+
+
 def open_ingestion_run(
     conn,
     raw_file_id: int,
