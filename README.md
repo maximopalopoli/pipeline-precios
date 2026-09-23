@@ -304,6 +304,20 @@ partitioning, not the published fact grain. Use the same value when comparing
 baselines; for example, `make ingest-bounded DATE=... DEV_MAX_PRODUCT_ROWS=5000
 FACT_CHUNK_SIZE=50000`.
 
+To benchmark multiple chunk sizes against an already-downloaded source, replay
+the exact ZIP instead of requesting the mutable weekday URL again:
+
+```bash
+make replay-bounded \
+  ZIP=data/2026-09-22_martes_<sha256>.zip \
+  DATE=2026-09-22 DEV_CHAIN_KEYS=12:1 DEV_MAX_PRODUCT_ROWS=50000 \
+  FACT_CHUNK_SIZE=10000
+```
+
+Replay streams the local archive to calculate its SHA-256, registers or reuses
+the same `raw_files` record, and performs the normal declared-date validation.
+It does not copy the ZIP or contact the SEPA URL.
+
 ### Run with Docker Compose (all services)
 
 ```bash

@@ -67,3 +67,34 @@ def test_cli_rejects_a_nonpositive_fact_chunk_size(monkeypatch):
         pipeline.main()
 
     assert exc_info.value.code == 1
+
+
+def test_cli_passes_a_local_archive_replay_to_the_pipeline(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(
+        pipeline,
+        "run",
+        lambda **kwargs: captured.update(kwargs) or IngestionResult.completed(0),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_pipeline", "--fecha", "2026-09-22", "--zip-path", "data/source.zip"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main()
+
+    assert exc_info.value.code == 0
+    assert captured["source_archive"] == Path("data/source.zip")
+
+
+def test_cli_requires_a_date_for_local_archive_replay(monkeypatch):
+    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["run_pipeline", "--zip-path", "data/source.zip"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main()
+
+    assert exc_info.value.code == 2

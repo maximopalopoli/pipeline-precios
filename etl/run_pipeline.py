@@ -151,6 +151,7 @@ def run(
     raw_dir: Path | None = None,
     development_policy: DevelopmentIngestionPolicy | None = None,
     fact_chunk_size: int | None = None,
+    source_archive: Path | None = None,
 ) -> IngestionResult:
     """
     Execute the full pipeline for *fecha* (defaults to today in Argentina).
@@ -163,6 +164,8 @@ def run(
     retention_policy = from_environment()
     development_policy = development_policy or development_policy_from_environment()
     fact_chunk_size = fact_chunk_size_with_cli_override(chunk_size=fact_chunk_size)
+    if source_archive is not None and fecha is None:
+        raise ValueError("fecha is required when replaying a local source archive")
     fecha = resolve_ingestion_date(fecha)
 
     conn = _db_connect()
@@ -177,13 +180,21 @@ def run(
 
         # ── 1. Download ──────────────────────────────────────────────────────
         active_timer = StageTimer(log, "download")
-        active_timer.start(chunk_size=fact_chunk_size)
+        active_timer.start(source="local" if source_archive is not None else "remote")
         try:
-            dl = downloader.download(conn, raw_dir, fecha)
+            dl = (
+                downloader.register_local_archive(conn, source_archive, fecha)
+                if source_archive is not None
+                else downloader.download(conn, raw_dir, fecha)
+            )
         except Exception as exc:
             active_timer.fail(error_type=type(exc).__name__)
             raise
-        active_timer.finish(filename=dl.filename, size_bytes=dl.size_bytes)
+        active_timer.finish(
+            filename=dl.filename,
+            size_bytes=dl.size_bytes,
+            source="local" if source_archive is not None else "remote",
+        )
 
         if not dl.is_new:
             if not should_process_raw_file(conn, dl.raw_file_id, partial=development_policy.enabled):
@@ -322,7 +333,7 @@ def run(
 
         # ── 7. Build + load fact_precios in chunks ───────────────────────────
         active_timer = StageTimer(logger, "fact_load")
-        active_timer.start()
+        active_timer.start(chunk_size=fact_chunk_size)
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         product_load = stream_pending_product_facts(
@@ -514,6 +525,13 @@ def main() -> None:
         help="Directory for downloaded ZIP files (default: ./data).",
     )
     parser.add_argument(
+        "--zip-path",
+        type=Path,
+        default=None,
+        metavar="ZIP",
+        help="Replay an existing local ZIP; requires --fecha and skips network download.",
+    )
+    parser.add_argument(
         "--dev-chain-key",
         action="append",
         default=None,
@@ -536,6 +554,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.zip_path is not None and args.fecha is None:
+        parser.error("--zip-path requires --fecha so the source date can be validated")
+
     try:
         development_policy = with_cli_overrides(
             development_policy_from_environment(),
@@ -550,6 +571,7 @@ def main() -> None:
             raw_dir=args.raw_dir,
             development_policy=development_policy,
             fact_chunk_size=fact_chunk_size,
+            source_archive=args.zip_path,
         )
     except Exception:
         sys.exit(1)
