@@ -100,6 +100,7 @@ class LoadResult:
     rows_sucursales: int
     rows_productos: int
     rows_productos_source: int
+    rows_productos_selected: int
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -155,6 +156,7 @@ def load(
     rows_sucursales = 0
     rows_productos = 0
     rows_productos_source = 0
+    rows_productos_selected = 0
     remaining_product_rows = development_policy.max_product_rows
 
     with zipfile.ZipFile(zip_path) as main_zip:
@@ -199,7 +201,7 @@ def load(
                             )
                             continue
                         with inner_zip.open(csv_index[csv_name]) as raw:
-                            loaded_rows, source_rows = _stream_copy_into(
+                            loaded_rows, source_rows, selected_rows = _stream_copy_into(
                                 conn, table, cols, raw, run_id,
                                 source=inner_name,
                                 chain_keys=development_policy.chain_keys,
@@ -216,6 +218,7 @@ def load(
                         else:
                             rows_productos += loaded_rows
                             rows_productos_source += source_rows
+                            rows_productos_selected += selected_rows
                             if remaining_product_rows is not None:
                                 remaining_product_rows -= loaded_rows
 
@@ -225,6 +228,7 @@ def load(
         rows_sucursales=rows_sucursales,
         rows_productos=rows_productos,
         rows_productos_source=rows_productos_source,
+        rows_productos_selected=rows_productos_selected,
     )
 
     conn.commit()
@@ -235,6 +239,7 @@ def load(
         rows_sucursales=rows_sucursales,
         rows_productos=rows_productos,
         rows_productos_source=rows_productos_source,
+        rows_productos_selected=rows_productos_selected,
     )
     logger.info("staging.load.done", **result.__dict__)
     return result
@@ -273,15 +278,17 @@ def register_counts(
                    rows_comercios     = %s,
                    rows_sucursales    = %s,
                    rows_productos_raw = %s,
-                   rows_productos_selected = %s
+                   rows_productos_selected = %s,
+                   rows_productos_source = %s
              WHERE id = %s
             """,
             (
                 result.inner_zips_count,
                 result.rows_comercios,
                 result.rows_sucursales,
-                result.rows_productos_source,
                 result.rows_productos,
+                result.rows_productos_selected,
+                result.rows_productos_source,
                 run_id,
             ),
         )
@@ -395,15 +402,16 @@ def _stream_copy_into(
     source: str = "",
     chain_keys: tuple[tuple[int, int], ...] = (),
     max_rows: int | None = None,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """
     Stream a CSV into a staging table via chunked COPY,
     bypassing pandas to keep memory usage low even for 400+ MB CSVs.
 
-    Returns ``(loaded_rows, source_rows)``. Source rows are counted before
-    optional filtering and caps, so a bounded run retains an honest audit of
-    the ZIP it inspected. Input order is stable because callers process sorted
-    inner ZIP names and this function preserves each CSV's source order.
+    Returns ``(loaded_rows, source_rows, selected_rows)``. Source rows are
+    counted before chain bounds, selected rows after chain bounds but before a
+    row cap, and loaded rows after all bounds. Input order is stable because
+    callers process sorted inner ZIP names and this function preserves each
+    CSV's source order.
     """
     import csv as csv_mod
 
@@ -414,7 +422,7 @@ def _stream_copy_into(
     # Read header line
     header_line = text_stream.readline().replace("\x00", "")
     if not header_line.strip():
-        return 0, 0
+        return 0, 0, 0
     header = [c.strip() for c in next(csv_mod.reader([header_line], delimiter="|"))]
 
     col_indices: list[int | None] = []
@@ -434,6 +442,7 @@ def _stream_copy_into(
     run_id_str = str(run_id)
     row_count = 0
     source_row_count = 0
+    selected_row_count = 0
 
     def _flush_chunk(buf: io.StringIO) -> None:
         buf.seek(0)
@@ -463,6 +472,7 @@ def _stream_copy_into(
         parsed = next(csv_mod.reader([stripped], delimiter="|"))
         if chain_keys and not _matches_chain_key(parsed, comercio_idx, bandera_idx, chain_keys):
             continue
+        selected_row_count += 1
         if max_rows is not None and row_count >= max_rows:
             continue
         row = [run_id_str]
@@ -483,7 +493,7 @@ def _stream_copy_into(
         _flush_chunk(buf)
     del buf
 
-    return row_count, source_row_count
+    return row_count, source_row_count, selected_row_count
 
 
 def _matches_chain_key(

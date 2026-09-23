@@ -6,6 +6,7 @@ from api.routes import health
 
 def test_health_omits_reconciliation_for_legacy_runs():
     row = {
+        "rows_productos_source": None,
         "rows_productos_raw": None,
         "rows_productos_selected": None,
         "rows_productos_valid": None,
@@ -21,6 +22,7 @@ def test_health_omits_reconciliation_for_legacy_runs():
 
 def test_health_exposes_the_persisted_reconciliation_counts():
     row = {
+        "rows_productos_source": 12,
         "rows_productos_raw": 12,
         "rows_productos_selected": 12,
         "rows_productos_valid": 10,
@@ -56,6 +58,7 @@ def test_health_returns_reconciliation_for_the_latest_ingestion(monkeypatch):
         "started_at": datetime(2026, 3, 18, 12, 30),
         "fecha_datos": date(2026, 3, 17),
         "is_partial": True,
+        "rows_productos_source": 12,
         "rows_productos_raw": 12,
         "rows_productos_selected": 2,
         "rows_productos_valid": 10,
@@ -84,4 +87,5 @@ def test_health_returns_reconciliation_for_the_latest_ingestion(monkeypatch):
         },
     }
     assert "ir.rows_productos_rejected" in captured["sql"]
+    assert "ir.rows_productos_source" in captured["sql"]
     assert "ir.rows_fact_published" in captured["sql"]

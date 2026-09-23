@@ -196,8 +196,9 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 
 | Counter | Meaning |
 |---------|---------|
-| `rows_productos_raw` | Product rows received from the source ZIP before development bounds. |
-| `rows_productos_selected` | Product rows selected into staging after optional development bounds. Equal to `rows_productos_raw` for a full run. |
+| `rows_productos_source` | Product rows inspected in source archives before development chain bounds. |
+| `rows_productos_selected` | Source rows selected by development chain bounds, before an optional row cap. |
+| `rows_productos_raw` | Rows staged after all development bounds; the input to product cleaning. |
 | `rows_productos_valid` | Rows accepted by product cleaning. |
 | `rows_productos_rejected` | Rows rejected by product cleaning; their reason and payload, along with missing-key rows, are kept in `rejected_rows`. |
 | `rows_productos_without_keys` | Valid rows that could not resolve the dimensions required for a fact. |
@@ -208,6 +209,7 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 For a completed run, the following invariants hold:
 
 ```text
+rows_productos_source >= rows_productos_selected >= rows_productos_raw
 rows_productos_raw = rows_productos_valid + rows_productos_rejected
 rows_productos_valid = rows_productos_without_keys + rows_productos_deduplicated + rows_fact_pending
 rows_fact_pending = rows_fact_published

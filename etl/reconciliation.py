@@ -54,6 +54,19 @@ def record_product_reconciliation(
     """
     with conn.cursor() as cur:
         cur.execute(
+            "SELECT rows_productos_raw FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError(f"Ingestion run {run_id} does not exist.")
+        rows_raw = row[0]
+        if rows_raw is not None and rows_raw != counts.rows_valid + counts.rows_rejected:
+            raise ValueError(
+                f"Run {run_id} raw product rows ({rows_raw}) do not reconcile with "
+                f"valid + rejected ({counts.rows_valid + counts.rows_rejected})."
+            )
+        cur.execute(
             """
             UPDATE ingestion_runs
                SET rows_productos_valid = %s,

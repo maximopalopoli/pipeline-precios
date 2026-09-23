@@ -10,6 +10,7 @@ def test_ingestion_runs_has_nonnegative_product_reconciliation_counts(pg_conn):
         "rows_fact_pending",
         "rows_fact_published",
         "rows_productos_selected",
+        "rows_productos_source",
     }
 
     with pg_conn.cursor() as cur:

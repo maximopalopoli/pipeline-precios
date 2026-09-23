@@ -260,6 +260,7 @@ def run(
             rows_sucursales=stg.rows_sucursales,
             rows_productos=stg.rows_productos,
             rows_productos_source=stg.rows_productos_source,
+            rows_productos_selected=stg.rows_productos_selected,
         )
         logger.info(
             "pipeline.storage_footprint",

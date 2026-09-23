@@ -9,6 +9,7 @@ router = APIRouter()
 
 def _reconciliation_response(row: dict) -> dict | None:
     fields = (
+        "rows_productos_source",
         "rows_productos_raw",
         "rows_productos_selected",
         "rows_productos_valid",
@@ -31,6 +32,7 @@ async def get_health():
             ir.started_at,
             rf.fecha_datos,
             ir.is_partial,
+            ir.rows_productos_source,
             ir.rows_productos_raw,
             ir.rows_productos_selected,
             ir.rows_productos_valid,

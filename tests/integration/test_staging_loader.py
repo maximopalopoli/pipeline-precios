@@ -72,6 +72,7 @@ def test_load_returns_correct_counts(pg_conn, sample_zip_path):
     assert result.rows_sucursales == EXPECTED_SUCURSALES
     assert result.rows_productos == EXPECTED_PRODUCTOS
     assert result.rows_productos_source == EXPECTED_PRODUCTOS
+    assert result.rows_productos_selected == EXPECTED_PRODUCTOS
     assert len(heartbeats) == EXPECTED_INNER_ZIPS
 
 
@@ -132,6 +133,7 @@ def test_load_applies_explicit_chain_and_product_bounds_deterministically(
         rows_sucursales=2,
         rows_productos=2,
         rows_productos_source=4,
+        rows_productos_selected=4,
     )
     with pg_conn.cursor() as cur:
         cur.execute(
@@ -157,7 +159,8 @@ def test_register_counts_updates_ingestion_run(pg_conn, sample_zip_path):
         cur.execute(
             """
             SELECT inner_zips_count, rows_comercios, rows_sucursales,
-                   rows_productos_raw, rows_productos_selected
+                   rows_productos_source, rows_productos_raw,
+                   rows_productos_selected
               FROM ingestion_runs
              WHERE id = %s
             """,
@@ -171,4 +174,34 @@ def test_register_counts_updates_ingestion_run(pg_conn, sample_zip_path):
         EXPECTED_SUCURSALES,
         EXPECTED_PRODUCTOS,
         EXPECTED_PRODUCTOS,
+        EXPECTED_PRODUCTOS,
     )
+
+
+def test_register_counts_keeps_source_selection_outside_staged_raw_rows(
+    pg_conn, sample_zip_path
+):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id=raw_file_id)
+
+    result = load(
+        pg_conn,
+        sample_zip_path,
+        run_id,
+        development_policy=DevelopmentIngestionPolicy(
+            chain_keys=((1, 1),), max_product_rows=2
+        ),
+    )
+    register_counts(pg_conn, run_id, result)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT rows_productos_source, rows_productos_selected, rows_productos_raw
+              FROM ingestion_runs
+             WHERE id = %s
+            """,
+            (run_id,),
+        )
+
+        assert cur.fetchone() == (4, 4, 2)

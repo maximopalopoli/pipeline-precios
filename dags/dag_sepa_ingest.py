@@ -304,6 +304,7 @@ def load_staging(**kwargs):
             rows_sucursales=stg.rows_sucursales,
             rows_productos=stg.rows_productos,
             rows_productos_source=stg.rows_productos_source,
+            rows_productos_selected=stg.rows_productos_selected,
         )
         log.info(
             "airflow.storage_footprint",
@@ -319,6 +320,7 @@ def load_staging(**kwargs):
             "rows_sucursales": stg.rows_sucursales,
             "rows_productos": stg.rows_productos,
             "rows_productos_source": stg.rows_productos_source,
+            "rows_productos_selected": stg.rows_productos_selected,
         }
     except Exception as exc:
         _fail_active_timer(timer, exc)
