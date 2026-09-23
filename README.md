@@ -264,13 +264,18 @@ database infrastructure:
 # Latest completed run, or a specific local run.
 make etl-baseline RUN_ID=5
 
+# Compare only completed replays that share source ZIP and bounded policy.
+make compare-etl-baselines RUN_ID=5
+
 # Representative /api/kpis, /api/buscador and /api/ofertas plans.
 # Requires at least one full published snapshot; bounded runs publish no facts.
 make audit-queries FECHA_ID=20260922
 ```
 
-`etl-baseline` reads durable run-level timing, source size and reconciliation
-counts. `audit-queries` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and
+`etl-baseline` reads durable run-level timing, source size, chunk size and
+reconciliation counts. `compare-etl-baselines` excludes runs that do not share
+the source archive and bounds, so its JSON rows differ only in the benchmark
+configuration such as `fact_chunk_size`. `audit-queries` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and
 emits planning/execution time, row counts and shared-buffer reads as JSON.
 Capture a baseline before and after a candidate index migration; do not infer
 full-scale capacity from a bounded run.

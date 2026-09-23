@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help setup install up down restart logs db api web dev ingest ingest-date ingest-bounded replay-bounded etl-baseline audit-queries test test-unit test-integration lint clean
+.PHONY: help setup install up down restart logs db api web dev ingest ingest-date ingest-bounded replay-bounded etl-baseline compare-etl-baselines audit-queries test test-unit test-integration lint clean
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -76,6 +76,10 @@ replay-bounded: ## Replay a local ZIP without downloading (ZIP=..., DATE=..., an
 
 etl-baseline: ## Print persisted ETL metrics (optional: RUN_ID=...)
 	.venv/bin/python scripts/report_ingestion_baseline.py $(RUN_ID)
+
+compare-etl-baselines: ## Compare completed replays with the same source and bounds (RUN_ID=...)
+	@test -n "$(RUN_ID)" || (echo "RUN_ID is required"; exit 2)
+	.venv/bin/python scripts/compare_ingestion_baselines.py $(RUN_ID)
 
 audit-queries: ## Run EXPLAIN ANALYZE for representative published API reads (optional: FECHA_ID=...)
 	.venv/bin/python scripts/benchmark_queries.py $(FECHA_ID)

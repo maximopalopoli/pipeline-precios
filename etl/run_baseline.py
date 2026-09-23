@@ -50,6 +50,25 @@ _BASELINE_SQL = """
 """
 
 
+_COMPARABLE_BASELINES_SQL = """
+    WITH target AS (
+        SELECT raw_file_id, is_partial, partial_chain_keys, partial_max_product_rows
+        FROM ingestion_runs
+        WHERE id = %s
+    )
+    SELECT run.id
+    FROM ingestion_runs AS run
+    CROSS JOIN target
+    WHERE run.raw_file_id = target.raw_file_id
+      AND run.status = 'completed'
+      AND run.fact_chunk_size IS NOT NULL
+      AND run.is_partial = target.is_partial
+      AND run.partial_chain_keys IS NOT DISTINCT FROM target.partial_chain_keys
+      AND run.partial_max_product_rows IS NOT DISTINCT FROM target.partial_max_product_rows
+    ORDER BY run.fact_chunk_size, run.finished_at, run.id
+"""
+
+
 def load_run_baseline(conn: Any, *, run_id: int) -> RunBaseline | None:
     """Return a completed run's durable baseline, if it exists."""
     with conn.cursor() as cur:
@@ -96,6 +115,23 @@ def latest_completed_run_id(conn: Any) -> int | None:
         )
         row = cur.fetchone()
     return int(row[0]) if row is not None else None
+
+
+def load_comparable_run_baselines(conn: Any, *, run_id: int) -> list[RunBaseline]:
+    """Return completed runs with the same archive and bounded-run policy.
+
+    This deliberately excludes historic runs without a recorded batch size and
+    runs whose chain or row limits differ. The remaining list is appropriate
+    for comparing only the fact-chunk-size experiment.
+    """
+    with conn.cursor() as cur:
+        cur.execute(_COMPARABLE_BASELINES_SQL, (run_id,))
+        run_ids = [int(row[0]) for row in cur.fetchall()]
+    return [
+        baseline
+        for candidate_id in run_ids
+        if (baseline := load_run_baseline(conn, run_id=candidate_id)) is not None
+    ]
 
 
 def _as_int(value: object) -> int | None:
