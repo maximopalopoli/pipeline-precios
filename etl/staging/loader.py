@@ -11,6 +11,9 @@ processed.
 """
 
 import io
+import re
+import shutil
+import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,6 +84,10 @@ _PRODUCTOS_COLS = [
     "productos_precio_unitario_promo2",
     "productos_leyenda_promo2",
 ]
+
+_INNER_ZIP_CHAIN_KEY = re.compile(
+    r"(?:^|/)sepa_(?P<id_bandera>\d+)_comercio-sepa-(?P<id_comercio>\d+)_"
+)
 
 
 # ── Result dataclass ───────────────────────────────────────────────────────────
@@ -154,50 +161,63 @@ def load(
         inner_names = sorted(
             name for name in main_zip.namelist() if name.lower().endswith(".zip")
         )
+        if development_policy.chain_keys:
+            inner_names = [
+                name
+                for name in inner_names
+                if _inner_zip_matches_chain_key(name, development_policy.chain_keys)
+            ]
         logger.info("staging.inner_zips_found", count=len(inner_names))
 
         for inner_name in inner_names:
             if heartbeat is not None:
                 heartbeat()
-            inner_bytes = main_zip.read(inner_name)
-            with zipfile.ZipFile(io.BytesIO(inner_bytes)) as inner_zip:
+            # Inner archives can be large. Spill them to disk rather than
+            # materialising them in memory before their product CSV is read.
+            with (
+                main_zip.open(inner_name) as compressed_inner,
+                tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024) as inner_file,
+            ):
+                shutil.copyfileobj(compressed_inner, inner_file)
+                inner_file.seek(0)
+                with zipfile.ZipFile(inner_file) as inner_zip:
                 # Build a flat lookup: basename → full path inside inner ZIP
-                csv_index = {
-                    entry.split("/")[-1].lower(): entry
-                    for entry in inner_zip.namelist()
-                }
-                for csv_name, cols, table, counter_name in [
-                    ("comercio.csv", _COMERCIOS_COLS, "stg_comercios", "comercios"),
-                    ("sucursales.csv", _SUCURSALES_COLS, "stg_sucursales", "sucursales"),
-                    ("productos.csv", _PRODUCTOS_COLS, "stg_productos", "productos"),
-                ]:
-                    if csv_name not in csv_index:
-                        logger.warning(
-                            "staging.csv_missing",
-                            inner_zip=inner_name,
-                            csv=csv_name,
-                        )
-                        continue
-                    raw = inner_zip.read(csv_index[csv_name])
-                    loaded_rows, source_rows = _stream_copy_into(
-                        conn, table, cols, raw, run_id,
-                        source=inner_name,
-                        chain_keys=development_policy.chain_keys,
-                        max_rows=(
-                            remaining_product_rows if counter_name == "productos" else None
-                        ),
-                    )
-                    del raw
-                    if counter_name == "comercios":
-                        rows_comercios += loaded_rows
-                    elif counter_name == "sucursales":
-                        rows_sucursales += loaded_rows
-                    else:
-                        rows_productos += loaded_rows
-                        rows_productos_source += source_rows
-                        if remaining_product_rows is not None:
-                            remaining_product_rows -= loaded_rows
-            del inner_bytes  # free memory before next inner ZIP
+                    csv_index = {
+                        entry.split("/")[-1].lower(): entry
+                        for entry in inner_zip.namelist()
+                    }
+                    for csv_name, cols, table, counter_name in [
+                        ("comercio.csv", _COMERCIOS_COLS, "stg_comercios", "comercios"),
+                        ("sucursales.csv", _SUCURSALES_COLS, "stg_sucursales", "sucursales"),
+                        ("productos.csv", _PRODUCTOS_COLS, "stg_productos", "productos"),
+                    ]:
+                        if csv_name not in csv_index:
+                            logger.warning(
+                                "staging.csv_missing",
+                                inner_zip=inner_name,
+                                csv=csv_name,
+                            )
+                            continue
+                        with inner_zip.open(csv_index[csv_name]) as raw:
+                            loaded_rows, source_rows = _stream_copy_into(
+                                conn, table, cols, raw, run_id,
+                                source=inner_name,
+                                chain_keys=development_policy.chain_keys,
+                                max_rows=(
+                                    remaining_product_rows
+                                    if counter_name == "productos"
+                                    else None
+                                ),
+                            )
+                        if counter_name == "comercios":
+                            rows_comercios += loaded_rows
+                        elif counter_name == "sucursales":
+                            rows_sucursales += loaded_rows
+                        else:
+                            rows_productos += loaded_rows
+                            rows_productos_source += source_rows
+                            if remaining_product_rows is not None:
+                                remaining_product_rows -= loaded_rows
 
     logger.info(
         "staging.consolidated",
@@ -218,6 +238,21 @@ def load(
     )
     logger.info("staging.load.done", **result.__dict__)
     return result
+
+
+def _inner_zip_matches_chain_key(
+    inner_name: str, chain_keys: tuple[tuple[int, int], ...]
+) -> bool:
+    """Use the SEPA inner-ZIP name to exclude known unrelated chains.
+
+    An unrecognised name is retained so a source naming change cannot silently
+    drop data.  Normal (unbounded) ingestion always processes every inner ZIP.
+    """
+    match = _INNER_ZIP_CHAIN_KEY.search(inner_name)
+    if match is None:
+        return True
+    chain_key = (int(match["id_comercio"]), int(match["id_bandera"]))
+    return chain_key in chain_keys
 
 
 def register_counts(
@@ -355,14 +390,14 @@ def _stream_copy_into(
     conn: "psycopg2.connection",
     table: str,
     expected_cols: list[str],
-    raw_bytes: bytes,
+    raw_file: "zipfile.ZipExtFile",
     run_id: int,
     source: str = "",
     chain_keys: tuple[tuple[int, int], ...] = (),
     max_rows: int | None = None,
 ) -> tuple[int, int]:
     """
-    Stream raw CSV bytes into a staging table via chunked COPY,
+    Stream a CSV into a staging table via chunked COPY,
     bypassing pandas to keep memory usage low even for 400+ MB CSVs.
 
     Returns ``(loaded_rows, source_rows)``. Source rows are counted before
@@ -374,12 +409,10 @@ def _stream_copy_into(
 
     _CHUNK = 100_000  # rows per COPY batch
 
-    decoded = raw_bytes.decode("utf-8-sig", errors="replace").replace("\x00", "")
-    text_stream = io.StringIO(decoded)
-    del decoded
+    text_stream = io.TextIOWrapper(raw_file, encoding="utf-8-sig", errors="replace")
 
     # Read header line
-    header_line = text_stream.readline()
+    header_line = text_stream.readline().replace("\x00", "")
     if not header_line.strip():
         return 0, 0
     header = [c.strip() for c in next(csv_mod.reader([header_line], delimiter="|"))]

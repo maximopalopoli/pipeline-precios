@@ -127,11 +127,11 @@ def test_load_applies_explicit_chain_and_product_bounds_deterministically(
     )
 
     assert result == LoadResult(
-        inner_zips_count=EXPECTED_INNER_ZIPS,
+        inner_zips_count=1,
         rows_comercios=1,
         rows_sucursales=2,
         rows_productos=2,
-        rows_productos_source=EXPECTED_PRODUCTOS,
+        rows_productos_source=4,
     )
     with pg_conn.cursor() as cur:
         cur.execute(
