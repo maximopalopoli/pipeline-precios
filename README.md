@@ -227,6 +227,15 @@ an optimization. `peak_rss_bytes` is the peak resident memory of the ETL process
 not PostgreSQL's memory or the full container/host usage; collect those separately
 when diagnosing database or infrastructure capacity.
 
+### Bounded development ingestion (configuration contract)
+
+The next local-ingestion mode is opt-in and will use `SEPA_DEV_CHAIN_KEYS`
+(comma-separated `id_comercio:id_bandera` values) and/or
+`SEPA_DEV_MAX_PRODUCT_ROWS` (a positive integer). Both settings are validated
+strictly and are disabled when unset. This commit defines the configuration
+contract only: it does **not** apply limits yet, so setting either variable
+cannot silently make a current ingestion partial.
+
 ### Run with Docker Compose (all services)
 
 ```bash
