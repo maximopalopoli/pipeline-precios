@@ -25,6 +25,7 @@ Environment variables
     POSTGRES_DB     (required)
     POSTGRES_USER   (required)
     POSTGRES_PASSWORD (required)
+    SEPA_DEV_CHAIN_KEYS / SEPA_DEV_MAX_PRODUCT_ROWS (optional bounded local run)
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ import structlog
 import structlog.dev
 
 from etl import alerting
+from etl.development_ingestion import from_environment as development_policy_from_environment
 from etl.extract import downloader
 from etl.fact_retention import apply_fact_retention
 from etl.ingestion_date import resolve_ingestion_date
@@ -61,7 +63,7 @@ from etl.ingestion_processing import (
     reconciliation_for_publication,
     stream_pending_product_facts,
 )
-from etl.load.publisher import publish_pending_facts
+from etl.load.publisher import complete_partial_run, publish_pending_facts
 from etl.performance import StageTimer, items_per_second, process_max_rss_bytes
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
@@ -151,6 +153,7 @@ def run(
     raw_dir = raw_dir or Path("data")
     raw_dir.mkdir(parents=True, exist_ok=True)
     retention_policy = from_environment()
+    development_policy = development_policy_from_environment()
     fecha = resolve_ingestion_date(fecha)
 
     conn = _db_connect()
@@ -174,7 +177,7 @@ def run(
         active_timer.finish(filename=dl.filename, size_bytes=dl.size_bytes)
 
         if not dl.is_new:
-            if not should_process_raw_file(conn, dl.raw_file_id):
+            if not should_process_raw_file(conn, dl.raw_file_id, partial=development_policy.enabled):
                 log.info(
                     "pipeline.skipped",
                     reason="duplicate_sha256",
@@ -199,7 +202,7 @@ def run(
             raw_file_id=dl.raw_file_id,
             owner="cli",
         )
-        if not should_process_raw_file(conn, dl.raw_file_id):
+        if not should_process_raw_file(conn, dl.raw_file_id, partial=development_policy.enabled):
             log.info(
                 "pipeline.skipped",
                 reason="completed_while_waiting_for_ingestion_lock",
@@ -214,9 +217,14 @@ def run(
             dl.raw_file_id,
             fecha_solicitada=fecha,
             fecha_logica=fecha,
+            development_policy=development_policy,
         )
         logger = log.bind(run_id=run_id)
-        logger.info("pipeline.run.opened", fecha=str(dl.fecha_datos))
+        logger.info(
+            "pipeline.run.opened",
+            fecha=str(dl.fecha_datos),
+            is_partial=development_policy.enabled,
+        )
 
         fecha_fuente = inspect_source_archive_date(str(dl.path))
         record_source_date(conn, run_id, fecha_fuente)
@@ -235,6 +243,7 @@ def run(
             dl.path,
             run_id,
             heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
+            development_policy=development_policy,
         )
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
@@ -321,13 +330,20 @@ def run(
         active_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
-        reconciliation = reconciliation_for_publication(product_load)
-        publication = publish_pending_facts(
-            conn,
-            run_id=run_id,
-            fecha_id=fecha_id_int,
-            reconciliation=reconciliation,
+        reconciliation = reconciliation_for_publication(
+            product_load, is_partial=development_policy.enabled
         )
+        if development_policy.enabled:
+            publication = complete_partial_run(
+                conn, run_id=run_id, reconciliation=reconciliation
+            )
+        else:
+            publication = publish_pending_facts(
+                conn,
+                run_id=run_id,
+                fecha_id=fecha_id_int,
+                reconciliation=reconciliation,
+            )
         conn.commit()
 
         active_timer.finish(
@@ -354,6 +370,9 @@ def run(
                 product_load.rows_fact, elapsed_total_seconds
             ),
         )
+        if development_policy.enabled:
+            logger.info("pipeline.partial_run.retention_skipped")
+            return IngestionResult.completed(product_load.rows_fact)
         try:
             retention_result = apply_fact_retention(
                 conn,

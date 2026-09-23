@@ -195,6 +195,47 @@ def test_successful_retry_clears_a_previous_failure_message(pg_conn, seed_data):
         assert cur.fetchone() == ("completed", None)
 
 
+def test_partial_completion_keeps_the_visible_snapshot_unchanged(pg_conn, seed_data):
+    _seed_published_day(pg_conn, seed_data)
+    partial_run_id = _create_run(pg_conn, "partial.zip")
+    with pg_conn.cursor() as cur:
+        cur.execute("UPDATE ingestion_runs SET is_partial = TRUE WHERE id = %s", (partial_run_id,))
+    _insert_pending_fact(
+        pg_conn,
+        run_id=partial_run_id,
+        producto_sk=seed_data["productos"]["AAA"],
+        sucursal_sk=seed_data["sucursal_sk"],
+        price=Decimal("125.00"),
+    )
+    pg_conn.commit()
+
+    result = publisher.complete_partial_run(
+        pg_conn,
+        run_id=partial_run_id,
+        reconciliation=ProductReconciliation(1, 0, 0, 0, 1, 0, is_partial=True),
+    )
+    pg_conn.commit()
+
+    assert result.rows_fact == 0
+    assert result.rows_aggregated == 0
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*), MAX(precio_lista) FROM fact_precios WHERE fecha_id = %s",
+            (FECHA_ID,),
+        )
+        assert cur.fetchone() == (2, Decimal("200.00"))
+        cur.execute(
+            """
+            SELECT rows_fact_pending, rows_fact_published, is_partial
+            FROM ingestion_runs WHERE id = %s
+            """,
+            (partial_run_id,),
+        )
+        assert cur.fetchone() == (1, 0, True)
+        cur.execute("SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s", (partial_run_id,))
+        assert cur.fetchone()[0] == 1
+
+
 def test_failed_publication_keeps_the_previous_snapshot(pg_conn, seed_data, monkeypatch):
     _seed_published_day(pg_conn, seed_data)
     pending_run_id = _create_run(pg_conn, "failed-rectification.zip")

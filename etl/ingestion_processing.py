@@ -45,7 +45,9 @@ class DimensionLoadResult:
     rows_rejected: int
 
 
-def reconciliation_for_publication(result: ProductLoadResult) -> ProductReconciliation:
+def reconciliation_for_publication(
+    result: ProductLoadResult, *, is_partial: bool = False
+) -> ProductReconciliation:
     """Turn a completed streaming result into its publish-time reconciliation."""
     return ProductReconciliation(
         rows_valid=result.rows_valid,
@@ -53,7 +55,8 @@ def reconciliation_for_publication(result: ProductLoadResult) -> ProductReconcil
         rows_without_keys=result.rows_without_keys,
         rows_deduplicated=result.rows_deduplicated,
         rows_fact_pending=result.rows_fact,
-        rows_fact_published=result.rows_fact,
+        rows_fact_published=0 if is_partial else result.rows_fact,
+        is_partial=is_partial,
     )
 
 

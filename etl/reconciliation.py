@@ -22,6 +22,7 @@ class ProductReconciliation:
     rows_deduplicated: int
     rows_fact_pending: int
     rows_fact_published: int
+    is_partial: bool = False
 
     def __post_init__(self) -> None:
         values = self.__dict__
@@ -35,7 +36,9 @@ class ProductReconciliation:
                 "Valid product rows must equal rows without keys, deduplicated rows, "
                 "and pending facts"
             )
-        if self.rows_fact_published != self.rows_fact_pending:
+        if self.is_partial and self.rows_fact_published != 0:
+            raise ValueError("Partial ingestions must not publish facts")
+        if not self.is_partial and self.rows_fact_published != self.rows_fact_pending:
             raise ValueError("Published facts must equal pending facts for one run")
 
 

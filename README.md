@@ -233,9 +233,10 @@ The next local-ingestion mode is opt-in and will use `SEPA_DEV_CHAIN_KEYS`
 (comma-separated `id_comercio:id_bandera` values) and/or
 `SEPA_DEV_MAX_PRODUCT_ROWS` (a positive integer). Both settings are validated
 strictly and are disabled when unset. This commit defines the configuration
-contract and the staging loader accepts it only as an explicit argument. The
-CLI and Airflow do not activate it yet, so setting either variable cannot
-silently make a current ingestion partial.
+contract. When either is set, CLI and Airflow mark the run as partial, retain
+its staging and pending facts only for local inspection, and publish zero facts
+and aggregates. Partial runs skip retention and never make the source look
+fully ingested, so a later full ingestion of the same ZIP remains eligible.
 
 ### Run with Docker Compose (all services)
 

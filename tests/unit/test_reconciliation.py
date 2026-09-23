@@ -37,3 +37,14 @@ def test_product_reconciliation_rejects_unexplained_or_negative_counts(kwargs):
 
     with pytest.raises(ValueError):
         ProductReconciliation(**values)
+
+
+def test_partial_reconciliation_records_pending_but_not_published_facts():
+    counts = ProductReconciliation(7, 0, 0, 0, 7, 0, is_partial=True)
+
+    assert counts.rows_fact_published == 0
+
+
+def test_partial_reconciliation_rejects_visible_facts():
+    with pytest.raises(ValueError, match="Partial ingestions"):
+        ProductReconciliation(7, 0, 0, 0, 7, 7, is_partial=True)

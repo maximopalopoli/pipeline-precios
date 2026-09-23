@@ -8,6 +8,8 @@ from enum import StrEnum
 
 import structlog
 
+from etl.development_ingestion import DevelopmentIngestionPolicy
+
 log = structlog.get_logger(__name__)
 
 
@@ -34,23 +36,32 @@ class IngestionResult:
         return cls(outcome=IngestionOutcome.SKIPPED)
 
 
-def has_completed_run(conn, raw_file_id: int) -> bool:
+def has_completed_run(conn, raw_file_id: int, *, partial: bool = False) -> bool:
     """Return whether *raw_file_id* has already been published successfully."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT 1 FROM ingestion_runs WHERE raw_file_id = %s AND status = 'completed'",
-            (raw_file_id,),
+            """
+            SELECT 1
+            FROM ingestion_runs
+            WHERE raw_file_id = %s
+              AND status = 'completed'
+              AND is_partial = FALSE
+              AND NOT %s
+            """,
+            (raw_file_id, partial),
         )
         return cur.fetchone() is not None
 
 
-def should_process_raw_file(conn, raw_file_id: int) -> bool:
+def should_process_raw_file(conn, raw_file_id: int, *, partial: bool = False) -> bool:
     """Return whether a raw file is eligible for an ingestion attempt.
 
-    Failed and interrupted attempts are retried.  A completed publication is
-    the only terminal state that skips a duplicate raw file.
+    Failed and interrupted attempts are retried. A completed *full*
+    publication is the only terminal state that skips a full run. Partial
+    development runs remain eligible so they can inspect a completed source
+    without changing its publication status.
     """
-    return not has_completed_run(conn, raw_file_id)
+    return not has_completed_run(conn, raw_file_id, partial=partial)
 
 
 def open_ingestion_run(
@@ -59,6 +70,7 @@ def open_ingestion_run(
     *,
     fecha_solicitada: date | None = None,
     fecha_logica: date | None = None,
+    development_policy: DevelopmentIngestionPolicy | None = None,
 ) -> int:
     """Create a running record and persist the dates known at its opening.
 
@@ -66,22 +78,36 @@ def open_ingestion_run(
     both values.  Entrypoints should pass them explicitly so a future source
     date discrepancy remains traceable.
     """
+    development_policy = development_policy or DevelopmentIngestionPolicy()
+    partial_chain_keys = ",".join(
+        f"{id_comercio}:{id_bandera}"
+        for id_comercio, id_bandera in development_policy.chain_keys
+    )
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO ingestion_runs (
-                raw_file_id, status, fecha_solicitada, fecha_logica
+                raw_file_id, status, fecha_solicitada, fecha_logica,
+                is_partial, partial_chain_keys, partial_max_product_rows
             )
             SELECT
                 id,
                 'running',
                 COALESCE(%s, fecha_datos),
-                COALESCE(%s, fecha_datos)
+                COALESCE(%s, fecha_datos),
+                %s, %s, %s
             FROM raw_files
             WHERE id = %s
             RETURNING id
             """,
-            (fecha_solicitada, fecha_logica, raw_file_id),
+            (
+                fecha_solicitada,
+                fecha_logica,
+                development_policy.enabled,
+                partial_chain_keys,
+                development_policy.max_product_rows,
+                raw_file_id,
+            ),
         )
         row = cur.fetchone()
     if row is None:
