@@ -3,6 +3,7 @@ raw/
 .env
 *.zip
 !tests/fixtures/*.zip
+ingestion-bounded-*.log
 .venv/
 *.egg-info/
 __pycache__/
