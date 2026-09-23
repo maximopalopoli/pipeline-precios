@@ -10,6 +10,7 @@ sample.zip contains 2 inner ZIPs:
 
 
 
+from etl.development_ingestion import DevelopmentIngestionPolicy
 from etl.staging.loader import LoadResult, load, register_counts
 
 # ── Expected counts from sample.zip ───────────────────────────────────────────
@@ -107,6 +108,40 @@ def test_load_is_idempotent(pg_conn, sample_zip_path):
 
         cur.execute("SELECT COUNT(*) FROM stg_productos WHERE run_id = %s", (run_id,))
         assert cur.fetchone()[0] == EXPECTED_PRODUCTOS
+
+
+def test_load_applies_explicit_chain_and_product_bounds_deterministically(
+    pg_conn, sample_zip_path
+):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id=raw_file_id)
+
+    result = load(
+        pg_conn,
+        sample_zip_path,
+        run_id,
+        development_policy=DevelopmentIngestionPolicy(
+            chain_keys=((1, 1),), max_product_rows=2
+        ),
+    )
+
+    assert result == LoadResult(
+        inner_zips_count=EXPECTED_INNER_ZIPS,
+        rows_comercios=1,
+        rows_sucursales=2,
+        rows_productos=2,
+    )
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT id_comercio, id_bandera FROM stg_productos WHERE run_id = %s",
+            (run_id,),
+        )
+        assert cur.fetchall() == [("1", "1")]
+        cur.execute(
+            "SELECT id_producto FROM stg_productos WHERE run_id = %s ORDER BY id_producto",
+            (run_id,),
+        )
+        assert cur.fetchall() == [("7790895000107",), ("7793940001111",)]
 
 
 def test_register_counts_updates_ingestion_run(pg_conn, sample_zip_path):

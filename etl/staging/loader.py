@@ -20,6 +20,8 @@ import pandas as pd
 import psycopg2
 import structlog
 
+from etl.development_ingestion import DevelopmentIngestionPolicy
+
 log = structlog.get_logger(__name__)
 
 # Columns expected per CSV type — must match staging table column order
@@ -100,6 +102,7 @@ def load(
     zip_path: Path,
     run_id: int,
     heartbeat: Callable[[], None] | None = None,
+    development_policy: DevelopmentIngestionPolicy | None = None,
 ) -> LoadResult:
     """
     Parse *zip_path* and load all three staging tables for *run_id*.
@@ -118,12 +121,23 @@ def load(
     heartbeat:
         Optional callback invoked before each inner ZIP, for long-running
         callers that need to refresh their execution lease.
+    development_policy:
+        Optional explicit bounds used by the future local partial-ingestion
+        entrypoint. Callers must pass this value deliberately; ambient
+        environment settings never change a normal staging load.
 
     Returns
     -------
     LoadResult with per-table row counts and inner_zips_count.
     """
-    logger = log.bind(run_id=run_id, zip_path=str(zip_path))
+    development_policy = development_policy or DevelopmentIngestionPolicy()
+    logger = log.bind(
+        run_id=run_id,
+        zip_path=str(zip_path),
+        development_ingestion=development_policy.enabled,
+        development_chain_keys=development_policy.chain_keys,
+        development_max_product_rows=development_policy.max_product_rows,
+    )
     logger.info("staging.load.start")
 
     _truncate_staging(conn, run_id, logger)
@@ -132,6 +146,7 @@ def load(
     rows_comercios = 0
     rows_sucursales = 0
     rows_productos = 0
+    remaining_product_rows = development_policy.max_product_rows
 
     with zipfile.ZipFile(zip_path) as main_zip:
         inner_names = sorted(
@@ -161,10 +176,21 @@ def load(
                             csv=csv_name,
                         )
                         continue
+                    if counter_name == "productos" and remaining_product_rows == 0:
+                        logger.info(
+                            "staging.product_limit_reached",
+                            source=inner_name,
+                            max_product_rows=development_policy.max_product_rows,
+                        )
+                        continue
                     raw = inner_zip.read(csv_index[csv_name])
                     n = _stream_copy_into(
                         conn, table, cols, raw, run_id,
                         source=inner_name,
+                        chain_keys=development_policy.chain_keys,
+                        max_rows=(
+                            remaining_product_rows if counter_name == "productos" else None
+                        ),
                     )
                     del raw
                     if counter_name == "comercios":
@@ -173,6 +199,8 @@ def load(
                         rows_sucursales += n
                     else:
                         rows_productos += n
+                        if remaining_product_rows is not None:
+                            remaining_product_rows -= n
             del inner_bytes  # free memory before next inner ZIP
 
     logger.info(
@@ -330,12 +358,16 @@ def _stream_copy_into(
     raw_bytes: bytes,
     run_id: int,
     source: str = "",
+    chain_keys: tuple[tuple[int, int], ...] = (),
+    max_rows: int | None = None,
 ) -> int:
     """
     Stream raw CSV bytes into a staging table via chunked COPY,
     bypassing pandas to keep memory usage low even for 400+ MB CSVs.
 
-    Returns the number of rows loaded.
+    Returns the number of rows loaded after optional source-chain filtering and
+    a row cap. Input order is stable because callers process sorted inner ZIP
+    names and this function preserves each CSV's source order.
     """
     import csv as csv_mod
 
@@ -381,6 +413,9 @@ def _stream_copy_into(
     writer = csv_mod.writer(buf)
     chunk_rows = 0
 
+    comercio_idx = header.index("id_comercio") if "id_comercio" in header else None
+    bandera_idx = header.index("id_bandera") if "id_bandera" in header else None
+
     for line in text_stream:
         stripped = line.strip()
         if not stripped:
@@ -390,12 +425,17 @@ def _stream_copy_into(
         if lower.startswith("ultima") or lower.startswith("última"):
             break
         parsed = next(csv_mod.reader([stripped], delimiter="|"))
+        if chain_keys and not _matches_chain_key(parsed, comercio_idx, bandera_idx, chain_keys):
+            continue
         row = [run_id_str]
         for idx in col_indices:
             row.append(parsed[idx] if idx is not None and idx < len(parsed) else "")
         writer.writerow(row)
         row_count += 1
         chunk_rows += 1
+
+        if max_rows is not None and row_count >= max_rows:
+            break
 
         if chunk_rows >= _CHUNK:
             _flush_chunk(buf)
@@ -409,6 +449,22 @@ def _stream_copy_into(
     del buf
 
     return row_count
+
+
+def _matches_chain_key(
+    row: list[str],
+    comercio_idx: int | None,
+    bandera_idx: int | None,
+    chain_keys: tuple[tuple[int, int], ...],
+) -> bool:
+    """Return whether a parsed source row belongs to an allowed chain."""
+    if comercio_idx is None or bandera_idx is None:
+        return False
+    try:
+        key = (int(row[comercio_idx]), int(row[bandera_idx]))
+    except (IndexError, ValueError):
+        return False
+    return key in chain_keys
 
 
 def _copy_into(
