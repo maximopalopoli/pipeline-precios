@@ -363,6 +363,9 @@ def run(
         active_timer.finish(
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
+            is_partial=development_policy.enabled,
+            rows_fact_pending=reconciliation.rows_fact_pending,
+            rows_fact_published=reconciliation.rows_fact_published,
             rows_valid=reconciliation.rows_valid,
             rows_rejected=reconciliation.rows_rejected,
             rows_without_keys=reconciliation.rows_without_keys,
@@ -378,7 +381,10 @@ def run(
         logger.info(
             "pipeline.completed",
             fecha=str(dl.fecha_datos),
+            is_partial=development_policy.enabled,
             rows_loaded=product_load.rows_fact,
+            rows_fact_pending=reconciliation.rows_fact_pending,
+            rows_fact_published=reconciliation.rows_fact_published,
             rows_valid=reconciliation.rows_valid,
             rows_rejected=reconciliation.rows_rejected,
             rows_without_keys=reconciliation.rows_without_keys,
@@ -390,7 +396,12 @@ def run(
             ),
         )
         if development_policy.enabled:
-            logger.info("pipeline.partial_run.retention_skipped")
+            logger.info(
+                "pipeline.partial_run.completed",
+                rows_fact_pending=reconciliation.rows_fact_pending,
+                rows_fact_published=0,
+                retention_skipped=True,
+            )
             return IngestionResult.completed(product_load.rows_fact)
         try:
             retention_result = apply_fact_retention(

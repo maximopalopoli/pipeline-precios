@@ -242,6 +242,10 @@ an optimization. `peak_rss_bytes` is the peak resident memory of the ETL process
 not PostgreSQL's memory or the full container/host usage; collect those separately
 when diagnosing database or infrastructure capacity.
 
+For a bounded run, terminal events always include `is_partial=true`, pending
+fact count, and zero published facts. Treat its throughput as a local flow
+measurement, never as a published snapshot or a full-SEPA capacity result.
+
 After `staging` and `publication`, they also emit a storage snapshot with the
 database total plus `fact_precios`, pending facts, and staging relation sizes.
 These PostgreSQL relation sizes include indexes; compare snapshots from the

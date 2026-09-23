@@ -487,6 +487,9 @@ def publish_daily_snapshot(**kwargs):
         timer.finish(
             rows_fact=publication.rows_fact,
             rows_aggregated=publication.rows_aggregated,
+            is_partial=development_policy.enabled,
+            rows_fact_pending=reconciliation.rows_fact_pending,
+            rows_fact_published=reconciliation.rows_fact_published,
             rows_valid=reconciliation.rows_valid,
             rows_rejected=reconciliation.rows_rejected,
             rows_without_keys=reconciliation.rows_without_keys,
@@ -499,7 +502,13 @@ def publish_daily_snapshot(**kwargs):
             **collect_storage_footprint(conn, run_id=run_id).__dict__,
         )
         if development_policy.enabled:
-            log.info("airflow.partial_run.retention_skipped", run_id=run_id)
+            log.info(
+                "airflow.partial_run.completed",
+                run_id=run_id,
+                rows_fact_pending=reconciliation.rows_fact_pending,
+                rows_fact_published=0,
+                retention_skipped=True,
+            )
             release_ingestion_lock(conn, _lock_from_xcom(ti))
             return
         retention_policy = None
