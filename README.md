@@ -130,6 +130,7 @@ See [sepa_datasets.md](sepa_datasets.md) for the full schema of each CSV.
 make setup                # create venv + install Python & Node deps
 make db                   # start PostgreSQL and apply pending migrations and seeds
 make ingest               # download today's SEPA ZIP and run the full ETL pipeline
+make ingest-bounded DATE=2026-03-17 DEV_CHAIN_KEYS=1:1 DEV_MAX_PRODUCT_ROWS=5000
 make dev                  # start DB + API + frontend for local development
 ```
 
@@ -164,6 +165,19 @@ The pipeline downloads the daily ZIP (~300 MB), processes ~12M price observation
 (staging → quality checks → dimensions → pending facts → atomic publication), and
 loads them into PostgreSQL.
 
+### Run a bounded local ingestion
+
+Use the explicit Make target for a deterministic local walk-through without
+publishing a daily snapshot:
+
+```bash
+make ingest-bounded DATE=2026-03-17 DEV_CHAIN_KEYS=1:1 DEV_MAX_PRODUCT_ROWS=5000
+```
+
+At least one bound is required. `DEV_CHAIN_KEYS` follows the same
+comma-separated `id_comercio:id_bandera` format as `SEPA_DEV_CHAIN_KEYS`; the
+row cap is optional when chains alone are enough.
+
 ### Ingestion results and failures
 
 The CLI exits with code `0` when it completes an ingestion or skips a raw file
@@ -182,7 +196,8 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 
 | Counter | Meaning |
 |---------|---------|
-| `rows_productos_raw` | Product rows read into staging. |
+| `rows_productos_raw` | Product rows received from the source ZIP before development bounds. |
+| `rows_productos_selected` | Product rows selected into staging after optional development bounds. Equal to `rows_productos_raw` for a full run. |
 | `rows_productos_valid` | Rows accepted by product cleaning. |
 | `rows_productos_rejected` | Rows rejected by product cleaning; their reason and payload, along with missing-key rows, are kept in `rejected_rows`. |
 | `rows_productos_without_keys` | Valid rows that could not resolve the dimensions required for a fact. |

@@ -1,7 +1,7 @@
 -include .env
 export
 
-.PHONY: help setup install up down restart logs db api web dev ingest test test-unit test-integration lint clean
+.PHONY: help setup install up down restart logs db api web dev ingest ingest-date ingest-bounded test test-unit test-integration lint clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -58,6 +58,12 @@ ingest: ## Run ETL pipeline for today's data
 
 ingest-date: ## Run ETL pipeline for a specific date (usage: make ingest-date DATE=2026-03-17)
 	.venv/bin/python -m etl.run_pipeline --fecha $(DATE)
+
+ingest-bounded: ## Run an isolated local partial ingestion (DATE=... and one DEV_* bound required)
+	@test -n "$(DATE)" || (echo "DATE is required, for example DATE=2026-03-17"; exit 2)
+	@test -n "$(DEV_CHAIN_KEYS)$(DEV_MAX_PRODUCT_ROWS)" || (echo "Set DEV_CHAIN_KEYS and/or DEV_MAX_PRODUCT_ROWS"; exit 2)
+	SEPA_DEV_CHAIN_KEYS='$(DEV_CHAIN_KEYS)' SEPA_DEV_MAX_PRODUCT_ROWS='$(DEV_MAX_PRODUCT_ROWS)' \
+		.venv/bin/python -m etl.run_pipeline --fecha $(DATE)
 
 # Testing
 
