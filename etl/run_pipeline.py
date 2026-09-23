@@ -75,6 +75,7 @@ from etl.raw_retention import apply_raw_retention
 from etl.retention_policy import from_environment
 from etl.staging_retention import apply_staging_retention
 from etl.staging import loader as staging_loader
+from etl.storage_metrics import collect_storage_footprint
 from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
 
 # ---------------------------------------------------------------------------
@@ -260,6 +261,11 @@ def run(
             rows_productos=stg.rows_productos,
             rows_productos_source=stg.rows_productos_source,
         )
+        logger.info(
+            "pipeline.storage_footprint",
+            stage="staging",
+            **collect_storage_footprint(conn, run_id=run_id).__dict__,
+        )
 
         # ── 4. Quality checks ────────────────────────────────────────────────
         active_timer = StageTimer(logger, "quality")
@@ -361,6 +367,11 @@ def run(
             rows_rejected=reconciliation.rows_rejected,
             rows_without_keys=reconciliation.rows_without_keys,
             rows_deduplicated=reconciliation.rows_deduplicated,
+        )
+        logger.info(
+            "pipeline.storage_footprint",
+            stage="publication",
+            **collect_storage_footprint(conn, run_id=run_id).__dict__,
         )
 
         elapsed_total_seconds = time.perf_counter() - t0

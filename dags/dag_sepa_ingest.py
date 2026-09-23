@@ -225,6 +225,7 @@ def load_staging(**kwargs):
     """Open ingestion run + load staging tables from ZIP."""
     from etl.ingestion_run import open_ingestion_run, record_source_date
     from etl.staging import loader as staging_loader
+    from etl.storage_metrics import collect_storage_footprint
     from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
     from etl.development_ingestion import from_environment as development_policy_from_environment
 
@@ -279,6 +280,12 @@ def load_staging(**kwargs):
             rows_sucursales=stg.rows_sucursales,
             rows_productos=stg.rows_productos,
             rows_productos_source=stg.rows_productos_source,
+        )
+        log.info(
+            "airflow.storage_footprint",
+            run_id=run_id,
+            stage="staging",
+            **collect_storage_footprint(conn, run_id=run_id).__dict__,
         )
 
         return {
@@ -437,6 +444,7 @@ def publish_daily_snapshot(**kwargs):
     from etl.raw_retention import apply_raw_retention
     from etl.retention_policy import from_environment
     from etl.staging_retention import apply_staging_retention
+    from etl.storage_metrics import collect_storage_footprint
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
@@ -483,6 +491,12 @@ def publish_daily_snapshot(**kwargs):
             rows_rejected=reconciliation.rows_rejected,
             rows_without_keys=reconciliation.rows_without_keys,
             rows_deduplicated=reconciliation.rows_deduplicated,
+        )
+        log.info(
+            "airflow.storage_footprint",
+            run_id=run_id,
+            stage="publication",
+            **collect_storage_footprint(conn, run_id=run_id).__dict__,
         )
         if development_policy.enabled:
             log.info("airflow.partial_run.retention_skipped", run_id=run_id)

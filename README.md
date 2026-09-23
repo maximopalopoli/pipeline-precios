@@ -242,6 +242,11 @@ an optimization. `peak_rss_bytes` is the peak resident memory of the ETL process
 not PostgreSQL's memory or the full container/host usage; collect those separately
 when diagnosing database or infrastructure capacity.
 
+After `staging` and `publication`, they also emit a storage snapshot with the
+database total plus `fact_precios`, pending facts, and staging relation sizes.
+These PostgreSQL relation sizes include indexes; compare snapshots from the
+same source and bounds before drawing conclusions about capacity.
+
 ### Bounded development ingestion (configuration contract)
 
 The next local-ingestion mode is opt-in and will use `SEPA_DEV_CHAIN_KEYS`
