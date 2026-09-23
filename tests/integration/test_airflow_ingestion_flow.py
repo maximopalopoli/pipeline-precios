@@ -664,7 +664,7 @@ def test_airflow_marks_the_run_failed_when_dimension_loading_fails(
     def connect():
         return _connect_to_fixture(pg_conn)
 
-    def fail_dimension_load(conn, run_id):
+    def fail_dimension_load(conn, run_id, **kwargs):
         raise RuntimeError("dimension load failed")
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)
@@ -695,7 +695,7 @@ def test_airflow_marks_a_new_run_failed_when_staging_fails(
     def connect():
         return _connect_to_fixture(pg_conn)
 
-    def fail_staging_load(conn, zip_path, run_id, heartbeat=None):
+    def fail_staging_load(conn, zip_path, run_id, heartbeat=None, **kwargs):
         raise RuntimeError("staging load failed")
 
     monkeypatch.setattr(dag_module, "_db_connect", connect)

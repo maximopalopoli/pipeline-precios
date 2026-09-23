@@ -138,7 +138,7 @@ def test_partial_dimension_load_preserves_existing_visible_attributes(pg_conn, s
             """
             SELECT productos_descripcion
             FROM dim_producto
-            WHERE producto_identity = 'ean:7790895000107'
+            WHERE productos_marca = 'La Serenísima'
             """
         )
         assert cur.fetchone()[0] == "LECHE ENTERA UAT 1L"

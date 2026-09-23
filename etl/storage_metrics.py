@@ -35,7 +35,7 @@ def collect_storage_footprint(conn, *, run_id: int) -> StorageFootprint:
                 pg_total_relation_size('stg_sucursales'::regclass),
                 COALESCE(
                     pg_total_relation_size(
-                        to_regclass(format('public.stg_productos_%s', %s))
+                        to_regclass('public.stg_productos_' || %s)
                     ),
                     0
                 )
