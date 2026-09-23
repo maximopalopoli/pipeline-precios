@@ -82,3 +82,63 @@ def test_streaming_product_processing_loads_pending_facts_in_chunks(pg_conn, sam
         assert cur.fetchone()[0] == 7
         cur.execute("SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s", (run_id,))
         assert cur.fetchone()[0] == 7
+
+
+def test_partial_dimension_load_preserves_existing_visible_attributes(pg_conn, sample_zip_path):
+    with pg_conn.cursor() as cur:
+        cur.execute((_SEEDS / "seed_provincias.sql").read_text())
+        cur.execute((_SEEDS / "seed_fechas.sql").read_text())
+    run_id = _create_run(pg_conn)
+    staging_loader.load(pg_conn, sample_zip_path, run_id)
+    load_staged_dimensions(pg_conn, run_id)
+    pg_conn.commit()
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_comercios
+               SET comercio_razon_social = 'Partial retailer name'
+             WHERE run_id = %s AND id_comercio = '1'
+            """,
+            (run_id,),
+        )
+        cur.execute(
+            """
+            UPDATE stg_sucursales
+               SET sucursales_nombre = 'Partial store name'
+             WHERE run_id = %s AND id_comercio = '1' AND id_sucursal = '1'
+            """,
+            (run_id,),
+        )
+        cur.execute(
+            """
+            UPDATE stg_productos
+               SET productos_descripcion = 'Partial product name'
+             WHERE run_id = %s AND id_comercio = '1'
+            """,
+            (run_id,),
+        )
+    load_staged_dimensions(pg_conn, run_id, is_partial=True)
+    pg_conn.commit()
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT comercio_razon_social FROM dim_comercio WHERE id_comercio = 1 AND id_bandera = 1"
+        )
+        assert cur.fetchone()[0] == "Supermercados Test SA"
+        cur.execute(
+            """
+            SELECT sucursales_nombre
+            FROM dim_sucursal
+            WHERE id_comercio = 1 AND id_bandera = 1 AND id_sucursal = 1
+            """
+        )
+        assert cur.fetchone()[0] == "Sucursal Centro"
+        cur.execute(
+            """
+            SELECT productos_descripcion
+            FROM dim_producto
+            WHERE producto_identity = 'ean:7790895000107'
+            """
+        )
+        assert cur.fetchone()[0] == "LECHE ENTERA UAT 1L"

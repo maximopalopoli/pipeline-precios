@@ -342,10 +342,12 @@ def run_quality_checks(**kwargs):
 def load_dimensions(**kwargs):
     """Load dimensions from staging without materializing all products."""
     from etl.ingestion_processing import load_staged_dimensions
+    from etl.development_ingestion import from_environment as development_policy_from_environment
 
     ti = kwargs["ti"]
     stg_info = ti.xcom_pull(task_ids="load_staging")
     run_id = stg_info["run_id"]
+    development_policy = development_policy_from_environment()
 
     conn = _db_connect()
     timer: StageTimer | None = None
@@ -353,7 +355,9 @@ def load_dimensions(**kwargs):
         _renew_ingestion_lock(conn, ti)
         timer = StageTimer(log.bind(run_id=run_id), "dimensions")
         timer.start()
-        result = load_staged_dimensions(conn, run_id)
+        result = load_staged_dimensions(
+            conn, run_id, is_partial=development_policy.enabled
+        )
         conn.commit()
         timer.finish(
             rows_comercios=result.rows_comercios,

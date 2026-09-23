@@ -290,7 +290,9 @@ def run(
         active_timer.start()
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
-        dimensions = load_staged_dimensions(conn, run_id)
+        dimensions = load_staged_dimensions(
+            conn, run_id, is_partial=development_policy.enabled
+        )
         conn.commit()
 
         fecha_id_int = int(dl.fecha_datos.strftime("%Y%m%d"))

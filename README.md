@@ -235,8 +235,10 @@ The next local-ingestion mode is opt-in and will use `SEPA_DEV_CHAIN_KEYS`
 strictly and are disabled when unset. This commit defines the configuration
 contract. When either is set, CLI and Airflow mark the run as partial, retain
 its staging and pending facts only for local inspection, and publish zero facts
-and aggregates. Partial runs skip retention and never make the source look
-fully ingested, so a later full ingestion of the same ZIP remains eligible.
+and aggregates. They may add dimension keys required by their pending facts but
+never overwrite attributes already visible from a full run. Partial runs skip
+retention and never make the source look fully ingested, so a later full
+ingestion of the same ZIP remains eligible.
 
 ### Run with Docker Compose (all services)
 
