@@ -171,6 +171,15 @@ def test_publish_replaces_the_full_daily_snapshot(pg_conn, seed_data):
         assert cur.fetchone()[0] == 0
         cur.execute(
             """
+            SELECT COUNT(*)
+            FROM pg_index index_definition
+            JOIN pg_class leaf ON leaf.oid = index_definition.indrelid
+            WHERE leaf.relname LIKE 'fact_precios_20260315_run_%'
+            """
+        )
+        assert cur.fetchone()[0] >= 4
+        cur.execute(
+            """
             SELECT delete_existing_seconds, insert_facts_seconds,
                    aggregate_delete_seconds, aggregate_insert_seconds, cleanup_seconds
                    , partition_swap_seconds
