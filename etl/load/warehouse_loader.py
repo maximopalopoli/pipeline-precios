@@ -38,6 +38,8 @@ from etl.transform.product_identity import product_identity
 
 log = structlog.get_logger(__name__)
 
+_DIM_PRODUCTO_WORK_MEM = "128MB"
+
 _PENDING_FACT_COLUMNS = [
     "run_id",
     "producto_sk",
@@ -699,6 +701,10 @@ def load_dim_produto_from_staging(
     and type-casting inline.  Returns the number of rows upserted.
     """
     with conn.cursor() as cur:
+        # The DISTINCT ON sort processes the complete daily staging partition.
+        # Scope the larger workspace to this transaction only; dimensions commit
+        # before fact loading, so it never changes the global/session default.
+        cur.execute("SELECT set_config('work_mem', %s, true)", (_DIM_PRODUCTO_WORK_MEM,))
         cur.execute(
             """
             INSERT INTO dim_producto (
