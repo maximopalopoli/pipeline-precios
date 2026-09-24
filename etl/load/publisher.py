@@ -120,34 +120,9 @@ def publish_pending_facts(
             f"pending facts, found {total_rows}"
         )
 
-    _ensure_partition(conn, fecha_id)
-    with conn.cursor() as cur:
-        started_at = perf_counter()
-        cur.execute("DELETE FROM fact_precios WHERE fecha_id = %s", (fecha_id,))
-        delete_existing_seconds = perf_counter() - started_at
-        started_at = perf_counter()
-        cur.execute(
-            """
-            INSERT INTO fact_precios (
-                producto_sk, sucursal_sk, fecha_id, run_id,
-                precio_lista, precio_referencia,
-                precio_promo1, precio_promo2,
-                leyenda_promo1, leyenda_promo2,
-                tiene_promo
-            )
-            SELECT
-                producto_sk, sucursal_sk, fecha_id, run_id,
-                precio_lista, precio_referencia,
-                precio_promo1, precio_promo2,
-                leyenda_promo1, leyenda_promo2,
-                tiene_promo
-            FROM pending_fact_precios
-            WHERE run_id = %s AND fecha_id = %s
-            """,
-            (run_id, fecha_id),
-        )
-        rows_fact = cur.rowcount
-        insert_facts_seconds = perf_counter() - started_at
+    delete_existing_seconds, insert_facts_seconds, rows_fact = _swap_daily_partition(
+        conn, run_id=run_id, fecha_id=fecha_id
+    )
 
     if rows_fact != reconciliation.rows_fact_published:
         raise ValueError(
@@ -203,3 +178,45 @@ def publish_pending_facts(
         cleanup_seconds=round(cleanup_seconds, 3),
     )
     return result
+
+
+def _swap_daily_partition(conn, *, run_id: int, fecha_id: int) -> tuple[float, float, int]:
+    """Build a detached daily leaf, then replace the visible leaf atomically."""
+    daily_partition = _ensure_partition(conn, fecha_id)
+    monthly_partition = daily_partition[:19]
+    candidate = f"{daily_partition}_run_{run_id}"
+    with conn.cursor() as cur:
+        started_at = perf_counter()
+        cur.execute(f"CREATE TABLE {candidate} (LIKE {daily_partition} INCLUDING ALL)")
+        cur.execute(
+            f"ALTER TABLE {candidate} ADD CONSTRAINT {candidate}_fecha_check "
+            f"CHECK (fecha_id = {fecha_id})"
+        )
+        cur.execute(
+            f"""
+            INSERT INTO {candidate} (
+                producto_sk, sucursal_sk, fecha_id, run_id,
+                precio_lista, precio_referencia, precio_promo1, precio_promo2,
+                leyenda_promo1, leyenda_promo2, tiene_promo
+            )
+            SELECT
+                producto_sk, sucursal_sk, fecha_id, run_id,
+                precio_lista, precio_referencia, precio_promo1, precio_promo2,
+                leyenda_promo1, leyenda_promo2, tiene_promo
+            FROM pending_fact_precios
+            WHERE run_id = %s AND fecha_id = %s
+            """,
+            (run_id, fecha_id),
+        )
+        rows_fact = cur.rowcount
+        insert_facts_seconds = perf_counter() - started_at
+
+        started_at = perf_counter()
+        cur.execute(f"ALTER TABLE {monthly_partition} DETACH PARTITION {daily_partition}")
+        cur.execute(
+            f"ALTER TABLE {monthly_partition} ATTACH PARTITION {candidate} "
+            f"FOR VALUES FROM ({fecha_id}) TO ({fecha_id + 1})"
+        )
+        cur.execute(f"DROP TABLE {daily_partition}")
+        delete_existing_seconds = perf_counter() - started_at
+    return delete_existing_seconds, insert_facts_seconds, rows_fact

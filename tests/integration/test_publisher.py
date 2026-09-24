@@ -7,6 +7,7 @@ import pytest
 
 import etl.load.publisher as publisher
 from etl.load.aggregator import aggregate
+from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation
 
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds" / "seed_provincias.sql"
@@ -76,6 +77,7 @@ def _create_run(pg_conn, filename: str) -> int:
 def _insert_fact(
     pg_conn, *, run_id: int, producto_sk: int, sucursal_sk: int, price: Decimal
 ) -> None:
+    _ensure_partition(pg_conn, FECHA_ID)
     with pg_conn.cursor() as cur:
         cur.execute(
             """
