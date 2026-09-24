@@ -183,15 +183,17 @@ def publish_pending_facts(
 
 def _swap_daily_partition(conn, *, run_id: int, fecha_id: int) -> tuple[float, float, int]:
     """Build a detached daily leaf, then replace the visible leaf atomically."""
-    daily_partition = _ensure_partition(conn, fecha_id)
-    monthly_partition = daily_partition[:19]
-    candidate = f"{daily_partition}_run_{run_id}"
+    current_partition = _ensure_partition(conn, fecha_id)
+    canonical_partition = f"fact_precios_{fecha_id}"
+    monthly_partition = f"fact_precios_{fecha_id // 100:06d}"
+    candidate = f"{canonical_partition}_run_{run_id}"
+    retired_partition = f"{canonical_partition}_replaced_{run_id}"
     with conn.cursor() as cur:
         started_at = perf_counter()
         # Load without indexes: ATTACH PARTITION creates and attaches the
         # matching inherited indexes after the bulk insert, while this table
         # is still invisible to readers.
-        cur.execute(f"CREATE TABLE {candidate} (LIKE {daily_partition})")
+        cur.execute(f"CREATE TABLE {candidate} (LIKE {current_partition})")
         cur.execute(
             f"ALTER TABLE {candidate} ADD CONSTRAINT {candidate}_fecha_check "
             f"CHECK (fecha_id = {fecha_id})"
@@ -216,11 +218,13 @@ def _swap_daily_partition(conn, *, run_id: int, fecha_id: int) -> tuple[float, f
         insert_facts_seconds = perf_counter() - started_at
 
         started_at = perf_counter()
-        cur.execute(f"ALTER TABLE {monthly_partition} DETACH PARTITION {daily_partition}")
+        cur.execute(f"ALTER TABLE {monthly_partition} DETACH PARTITION {current_partition}")
+        cur.execute(f"ALTER TABLE {current_partition} RENAME TO {retired_partition}")
+        cur.execute(f"ALTER TABLE {candidate} RENAME TO {canonical_partition}")
         cur.execute(
-            f"ALTER TABLE {monthly_partition} ATTACH PARTITION {candidate} "
+            f"ALTER TABLE {monthly_partition} ATTACH PARTITION {canonical_partition} "
             f"FOR VALUES FROM ({fecha_id}) TO ({fecha_id + 1})"
         )
-        cur.execute(f"DROP TABLE {daily_partition}")
+        cur.execute(f"DROP TABLE {retired_partition}")
         partition_swap_seconds = perf_counter() - started_at
     return partition_swap_seconds, insert_facts_seconds, rows_fact

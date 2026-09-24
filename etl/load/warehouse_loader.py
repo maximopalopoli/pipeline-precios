@@ -118,11 +118,27 @@ def _ensure_partition(conn, fecha_id: int) -> str:
 
         day = date(year, month, fecha_id % 100)
         next_day = day + timedelta(days=1)
-        cur.execute(
-            "SELECT to_regclass(%s)",
-            (f"public.{daily_partition}",),
-        )
+        cur.execute("SELECT to_regclass(%s)", (f"public.{daily_partition}",))
         if cur.fetchone()[0] is None:
+            cur.execute(
+                """
+                SELECT child.relname
+                FROM pg_inherits AS inheritance
+                JOIN pg_class AS parent ON parent.oid = inheritance.inhparent
+                JOIN pg_class AS child ON child.oid = inheritance.inhrelid
+                JOIN pg_namespace AS namespace ON namespace.oid = child.relnamespace
+                WHERE parent.relname = %s
+                  AND namespace.nspname = 'public'
+                  AND pg_get_expr(child.relpartbound, child.oid) = %s
+                """,
+                (
+                    monthly_partition,
+                    f"FOR VALUES FROM ({fecha_id}) TO ({int(next_day.strftime('%Y%m%d'))})",
+                ),
+            )
+            existing_daily_partition = cur.fetchone()
+            if existing_daily_partition is not None:
+                return existing_daily_partition[0]
             cur.execute(
                 f"""
                 CREATE TABLE {daily_partition}
