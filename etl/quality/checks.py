@@ -356,46 +356,37 @@ def check_fk_integrity(
     violations: dict[str, int] = {}
 
     with conn.cursor() as cur:
-        # productos → comercio
         cur.execute(
             """
-            SELECT COUNT(*)
+            WITH comercios AS (
+                SELECT DISTINCT id_comercio, id_bandera
+                  FROM stg_comercios
+                 WHERE run_id = %s
+            ), sucursales AS (
+                SELECT DISTINCT id_comercio, id_bandera, id_sucursal
+                  FROM stg_sucursales
+                 WHERE run_id = %s
+            )
+            SELECT
+                COUNT(*) FILTER (WHERE c.id_comercio IS NULL),
+                COUNT(*) FILTER (WHERE s.id_comercio IS NULL)
               FROM stg_productos p
+              LEFT JOIN comercios c
+                ON c.id_comercio = p.id_comercio
+               AND c.id_bandera = p.id_bandera
+              LEFT JOIN sucursales s
+                ON s.id_comercio = p.id_comercio
+               AND s.id_bandera = p.id_bandera
+               AND s.id_sucursal = p.id_sucursal
              WHERE p.run_id = %s
-               AND NOT EXISTS (
-                   SELECT 1
-                     FROM stg_comercios c
-                    WHERE c.run_id = p.run_id
-                      AND c.id_comercio = p.id_comercio
-                      AND c.id_bandera  = p.id_bandera
-               )
             """,
-            (run_id,),
+            (run_id, run_id, run_id),
         )
-        count = cur.fetchone()[0]
-        if count:
-            violations["productos_sin_comercio"] = count
-
-        # productos → sucursales
-        cur.execute(
-            """
-            SELECT COUNT(*)
-              FROM stg_productos p
-             WHERE p.run_id = %s
-               AND NOT EXISTS (
-                   SELECT 1
-                     FROM stg_sucursales s
-                    WHERE s.run_id     = p.run_id
-                      AND s.id_comercio = p.id_comercio
-                      AND s.id_bandera  = p.id_bandera
-                      AND s.id_sucursal = p.id_sucursal
-               )
-            """,
-            (run_id,),
-        )
-        count = cur.fetchone()[0]
-        if count:
-            violations["productos_sin_sucursal"] = count
+        missing_comercios, missing_sucursales = cur.fetchone()
+        if missing_comercios:
+            violations["productos_sin_comercio"] = missing_comercios
+        if missing_sucursales:
+            violations["productos_sin_sucursal"] = missing_sucursales
 
     return CheckResult(
         name="fk_integrity",
