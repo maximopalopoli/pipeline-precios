@@ -209,15 +209,18 @@ def run_all(
     """
     logger = log.bind(run_id=run_id)
     logger.info("quality.checks.start")
+    product_rows = _product_row_count(conn, run_id)
 
     results: list[CheckResult] = [
         check_schema(conn, run_id),
         check_pk_uniqueness(conn, run_id),
         check_fk_integrity(conn, run_id),
         check_positive_prices(conn, run_id),
-        check_min_row_count(conn, run_id, min_productos=min_productos),
+        check_min_row_count(
+            conn, run_id, min_productos=min_productos, current_rows=product_rows
+        ),
         # Warning checks
-        check_row_count_drift(conn, run_id, max_drift=max_drift),
+        check_row_count_drift(conn, run_id, max_drift=max_drift, current_rows=product_rows),
         check_required_nulls(conn, run_id),
         check_coordinates_bbox(conn, run_id),
         check_tipo_sucursal(conn, run_id),
@@ -432,11 +435,18 @@ def check_positive_prices(
     )
 
 
+def _product_row_count(conn: "psycopg2.connection", run_id: int) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM stg_productos WHERE run_id = %s", (run_id,))
+        return cur.fetchone()[0]
+
+
 def check_min_row_count(
     conn: "psycopg2.connection",
     run_id: int,
     *,
     min_productos: int = DEFAULT_MIN_PRODUCTOS,
+    current_rows: int | None = None,
 ) -> CheckResult:
     """
     Verify that stg_productos has at least *min_productos* rows for *run_id*.
@@ -444,12 +454,7 @@ def check_min_row_count(
     A very low row count is a strong indicator that the source ZIP was
     truncated or corrupted during download.  Severity: CRITICAL.
     """
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT COUNT(*) FROM stg_productos WHERE run_id = %s",
-            (run_id,),
-        )
-        actual = cur.fetchone()[0]
+    actual = current_rows if current_rows is not None else _product_row_count(conn, run_id)
 
     return CheckResult(
         name="min_row_count",
@@ -467,6 +472,7 @@ def check_row_count_drift(
     run_id: int,
     *,
     max_drift: float = DEFAULT_MAX_DRIFT,
+    current_rows: int | None = None,
 ) -> CheckResult:
     """
     Compare productos row count vs the previous completed run.
@@ -477,11 +483,7 @@ def check_row_count_drift(
     Severity: WARNING.
     """
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT COUNT(*) FROM stg_productos WHERE run_id = %s",
-            (run_id,),
-        )
-        current = cur.fetchone()[0]
+        current = current_rows if current_rows is not None else _product_row_count(conn, run_id)
 
         cur.execute(
             """
