@@ -559,20 +559,24 @@ def check_required_nulls(
 
     with conn.cursor() as cur:
         for table, required_cols in table_checks:
-            col_nulls: dict[str, int] = {}
-            for col in required_cols:
-                cur.execute(
-                    f"""
-                    SELECT COUNT(*)
-                      FROM {table}
-                     WHERE run_id = %s
-                       AND (TRIM({col}) = '' OR {col} IS NULL)
-                    """,
-                    (run_id,),
-                )
-                count = cur.fetchone()[0]
-                if count:
-                    col_nulls[col] = count
+            counts_sql = ", ".join(
+                f"COUNT(*) FILTER (WHERE TRIM({col}) = '' OR {col} IS NULL)"
+                for col in required_cols
+            )
+            cur.execute(
+                f"""
+                SELECT {counts_sql}
+                  FROM {table}
+                 WHERE run_id = %s
+                """,
+                (run_id,),
+            )
+            counts = cur.fetchone()
+            col_nulls = {
+                column: count
+                for column, count in zip(required_cols, counts, strict=True)
+                if count
+            }
             if col_nulls:
                 nulls_by_table[table] = col_nulls
 

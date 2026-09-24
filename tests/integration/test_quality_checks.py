@@ -407,15 +407,20 @@ def test_check_required_nulls_detects_empty_required_field(pg_conn, sample_zip_p
 
     with pg_conn.cursor() as cur:
         cur.execute(
-            "UPDATE stg_comercios SET comercio_cuit = '' WHERE run_id = %s",
+            """
+            UPDATE stg_comercios
+               SET comercio_cuit = ''
+             WHERE ctid = (
+                 SELECT ctid FROM stg_comercios WHERE run_id = %s LIMIT 1
+             )
+            """,
             (run_id,),
         )
     pg_conn.commit()
 
     result = check_required_nulls(pg_conn, run_id)
     assert not result.passed
-    assert "stg_comercios" in result.details["nulls_by_table"]
-    assert "comercio_cuit" in result.details["nulls_by_table"]["stg_comercios"]
+    assert result.details["nulls_by_table"]["stg_comercios"]["comercio_cuit"] == 1
 
 
 # ── Coordinates bounding box ───────────────────────────────────────────────────
