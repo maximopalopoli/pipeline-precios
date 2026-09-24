@@ -205,6 +205,7 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 | `rows_productos_deduplicated` | Valid rows superseded by another row at the product × store fact grain. |
 | `rows_fact_pending` | Unique facts held in the provisional set before publication. |
 | `rows_fact_published` | Facts made visible by the completed atomic publication. |
+| `inner_zips_invalid_count` | Nested SEPA ZIPs that were malformed and skipped; these contain no product rows to reconcile. |
 
 For a completed run, the following invariants hold:
 

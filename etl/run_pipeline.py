@@ -271,6 +271,7 @@ def run(
 
         active_timer.finish(
             inner_zips=stg.inner_zips_count,
+            inner_zips_invalid=stg.inner_zips_invalid_count,
             rows_comercios=stg.rows_comercios,
             rows_sucursales=stg.rows_sucursales,
             rows_productos=stg.rows_productos,

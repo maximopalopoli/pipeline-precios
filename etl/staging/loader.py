@@ -6,8 +6,7 @@ comercio.csv / sucursales.csv / productos.csv → loads into stg_* tables
 via COPY.
 
 All columns are kept as strings (VARCHAR) — no type coercion at this stage.
-Returns a LoadResult with row counts per table and the number of inner ZIPs
-processed.
+Returns a LoadResult with row counts and inner-archive processing metrics.
 """
 
 import io
@@ -101,6 +100,7 @@ class LoadResult:
     rows_productos: int
     rows_productos_source: int
     rows_productos_selected: int
+    inner_zips_invalid_count: int = 0
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ def load(
 
     Returns
     -------
-    LoadResult with per-table row counts and inner_zips_count.
+    LoadResult with per-table row counts and inner-archive metrics.
     """
     development_policy = development_policy or DevelopmentIngestionPolicy()
     logger = log.bind(
@@ -157,6 +157,7 @@ def load(
     rows_productos = 0
     rows_productos_source = 0
     rows_productos_selected = 0
+    inner_zips_invalid_count = 0
     remaining_product_rows = development_policy.max_product_rows
 
     with zipfile.ZipFile(zip_path) as main_zip:
@@ -182,45 +183,75 @@ def load(
             ):
                 shutil.copyfileobj(compressed_inner, inner_file)
                 inner_file.seek(0)
-                with zipfile.ZipFile(inner_file) as inner_zip:
-                # Build a flat lookup: basename → full path inside inner ZIP
-                    csv_index = {
-                        entry.split("/")[-1].lower(): entry
-                        for entry in inner_zip.namelist()
-                    }
-                    for csv_name, cols, table, counter_name in [
-                        ("comercio.csv", _COMERCIOS_COLS, "stg_comercios", "comercios"),
-                        ("sucursales.csv", _SUCURSALES_COLS, "stg_sucursales", "sucursales"),
-                        ("productos.csv", _PRODUCTOS_COLS, "stg_productos", "productos"),
-                    ]:
-                        if csv_name not in csv_index:
-                            logger.warning(
-                                "staging.csv_missing",
-                                inner_zip=inner_name,
-                                csv=csv_name,
-                            )
-                            continue
-                        with inner_zip.open(csv_index[csv_name]) as raw:
-                            loaded_rows, source_rows, selected_rows = _stream_copy_into(
-                                conn, table, cols, raw, run_id,
-                                source=inner_name,
-                                chain_keys=development_policy.chain_keys,
-                                max_rows=(
-                                    remaining_product_rows
-                                    if counter_name == "productos"
-                                    else None
-                                ),
-                            )
-                        if counter_name == "comercios":
-                            rows_comercios += loaded_rows
-                        elif counter_name == "sucursales":
-                            rows_sucursales += loaded_rows
-                        else:
-                            rows_productos += loaded_rows
-                            rows_productos_source += source_rows
-                            rows_productos_selected += selected_rows
-                            if remaining_product_rows is not None:
-                                remaining_product_rows -= loaded_rows
+                try:
+                    with zipfile.ZipFile(inner_file) as inner_zip:
+                        # Build a flat lookup: basename → full path inside inner ZIP
+                        csv_index = {
+                            entry.split("/")[-1].lower(): entry
+                            for entry in inner_zip.namelist()
+                        }
+                        for csv_name, cols, table, counter_name in [
+                            (
+                                "comercio.csv",
+                                _COMERCIOS_COLS,
+                                "stg_comercios",
+                                "comercios",
+                            ),
+                            (
+                                "sucursales.csv",
+                                _SUCURSALES_COLS,
+                                "stg_sucursales",
+                                "sucursales",
+                            ),
+                            (
+                                "productos.csv",
+                                _PRODUCTOS_COLS,
+                                "stg_productos",
+                                "productos",
+                            ),
+                        ]:
+                            if csv_name not in csv_index:
+                                logger.warning(
+                                    "staging.csv_missing",
+                                    inner_zip=inner_name,
+                                    csv=csv_name,
+                                )
+                                continue
+                            with inner_zip.open(csv_index[csv_name]) as raw:
+                                loaded_rows, source_rows, selected_rows = (
+                                    _stream_copy_into(
+                                        conn,
+                                        table,
+                                        cols,
+                                        raw,
+                                        run_id,
+                                        source=inner_name,
+                                        chain_keys=development_policy.chain_keys,
+                                        max_rows=(
+                                            remaining_product_rows
+                                            if counter_name == "productos"
+                                            else None
+                                        ),
+                                    )
+                                )
+                            if counter_name == "comercios":
+                                rows_comercios += loaded_rows
+                            elif counter_name == "sucursales":
+                                rows_sucursales += loaded_rows
+                            else:
+                                rows_productos += loaded_rows
+                                rows_productos_source += source_rows
+                                rows_productos_selected += selected_rows
+                                if remaining_product_rows is not None:
+                                    remaining_product_rows -= loaded_rows
+                except zipfile.BadZipFile as exc:
+                    inner_zips_invalid_count += 1
+                    logger.warning(
+                        "staging.inner_zip_invalid",
+                        inner_zip=inner_name,
+                        error_type=type(exc).__name__,
+                        error=str(exc),
+                    )
 
     logger.info(
         "staging.consolidated",
@@ -229,6 +260,7 @@ def load(
         rows_productos=rows_productos,
         rows_productos_source=rows_productos_source,
         rows_productos_selected=rows_productos_selected,
+        inner_zips_invalid_count=inner_zips_invalid_count,
     )
 
     conn.commit()
@@ -240,6 +272,7 @@ def load(
         rows_productos=rows_productos,
         rows_productos_source=rows_productos_source,
         rows_productos_selected=rows_productos_selected,
+        inner_zips_invalid_count=inner_zips_invalid_count,
     )
     logger.info("staging.load.done", **result.__dict__)
     return result
@@ -275,6 +308,7 @@ def register_counts(
             """
             UPDATE ingestion_runs
                SET inner_zips_count   = %s,
+                   inner_zips_invalid_count = %s,
                    rows_comercios     = %s,
                    rows_sucursales    = %s,
                    rows_productos_raw = %s,
@@ -284,6 +318,7 @@ def register_counts(
             """,
             (
                 result.inner_zips_count,
+                result.inner_zips_invalid_count,
                 result.rows_comercios,
                 result.rows_sucursales,
                 result.rows_productos,
