@@ -187,7 +187,10 @@ def _swap_daily_partition(conn, *, run_id: int, fecha_id: int) -> tuple[float, f
     candidate = f"{daily_partition}_run_{run_id}"
     with conn.cursor() as cur:
         started_at = perf_counter()
-        cur.execute(f"CREATE TABLE {candidate} (LIKE {daily_partition} INCLUDING ALL)")
+        # Load without indexes: ATTACH PARTITION creates and attaches the
+        # matching inherited indexes after the bulk insert, while this table
+        # is still invisible to readers.
+        cur.execute(f"CREATE TABLE {candidate} (LIKE {daily_partition})")
         cur.execute(
             f"ALTER TABLE {candidate} ADD CONSTRAINT {candidate}_fecha_check "
             f"CHECK (fecha_id = {fecha_id})"
