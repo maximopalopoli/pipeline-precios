@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import io
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 import pandas as pd
 import structlog
@@ -74,16 +75,16 @@ def _copy_df(cur, df: pd.DataFrame, table: str) -> None:
 
 def _ensure_partition(conn, fecha_id: int) -> str:
     """
-    Ensure the monthly RANGE partition for *fecha_id* exists in fact_precios.
+    Ensure monthly and daily RANGE partitions for *fecha_id* exist in fact_precios.
 
-    Partition name: ``fact_precios_YYYYMM``
-    Bounds:         ``[YYYYMM01, YYYY(M+1)01)``   (integers, inclusive/exclusive)
+    Returns the daily leaf table name ``fact_precios_YYYYMMDD``.
 
     Returns the partition table name.
     """
     year = fecha_id // 10000
     month = (fecha_id // 100) % 100
-    partition = f"fact_precios_{year:04d}{month:02d}"
+    monthly_partition = f"fact_precios_{year:04d}{month:02d}"
+    daily_partition = f"fact_precios_{fecha_id}"
 
     lo = year * 10000 + month * 100 + 1
     next_year, next_month = (year + 1, 1) if month == 12 else (year, month + 1)
@@ -97,24 +98,41 @@ def _ensure_partition(conn, fecha_id: int) -> str:
             JOIN   pg_namespace n ON n.oid = c.relnamespace
             WHERE  c.relname = %s AND n.nspname = 'public'
             """,
-            (partition,),
+            (monthly_partition,),
         )
         if cur.fetchone() is None:
             cur.execute(
                 f"""
-                CREATE TABLE {partition}
+                CREATE TABLE {monthly_partition}
                     PARTITION OF fact_precios
                     FOR VALUES FROM ({lo}) TO ({hi})
+                    PARTITION BY RANGE (fecha_id)
                 """
             )
             log.info(
                 "warehouse.partition_created",
-                partition=partition,
+                partition=monthly_partition,
                 from_id=lo,
                 to_id=hi,
             )
 
-    return partition
+        day = date(year, month, fecha_id % 100)
+        next_day = day + timedelta(days=1)
+        cur.execute(
+            "SELECT to_regclass(%s)",
+            (f"public.{daily_partition}",),
+        )
+        if cur.fetchone()[0] is None:
+            cur.execute(
+                f"""
+                CREATE TABLE {daily_partition}
+                    PARTITION OF {monthly_partition}
+                    FOR VALUES FROM ({fecha_id}) TO ({int(next_day.strftime('%Y%m%d'))})
+                """
+            )
+            log.info("warehouse.daily_partition_created", partition=daily_partition)
+
+    return daily_partition
 
 
 def delete_fact_for_fecha(conn, fecha_id: int) -> int:
