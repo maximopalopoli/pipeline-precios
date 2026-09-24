@@ -419,24 +419,19 @@ def check_positive_prices(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT COUNT(*)
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE productos_precio_lista = ''
+                       OR productos_precio_lista !~ '^[0-9]+(\\.[0-9]+)?$'
+                       OR productos_precio_lista::numeric <= 0
+                ),
+                COUNT(*)
               FROM stg_productos
              WHERE run_id = %s
-               AND (
-                   productos_precio_lista = ''
-                   OR productos_precio_lista !~ '^[0-9]+(\\.[0-9]+)?$'
-                   OR productos_precio_lista::numeric <= 0
-               )
             """,
             (run_id,),
         )
-        bad_count = cur.fetchone()[0]
-
-        cur.execute(
-            "SELECT COUNT(*) FROM stg_productos WHERE run_id = %s",
-            (run_id,),
-        )
-        total = cur.fetchone()[0]
+        bad_count, total = cur.fetchone()
 
     return CheckResult(
         name="positive_prices",
