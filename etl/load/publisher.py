@@ -57,7 +57,7 @@ def complete_partial_run(
         cur.execute(
             """
             UPDATE ingestion_runs
-               SET status = 'completed', finished_at = NOW(),
+               SET status = 'completed', finished_at = clock_timestamp(),
                    rows_valid = %s, error_message = NULL
              WHERE id = %s AND is_partial = TRUE
             """,
@@ -156,7 +156,7 @@ def publish_pending_facts(
             """
             UPDATE ingestion_runs
                SET status = 'completed',
-                   finished_at = NOW(),
+                   finished_at = clock_timestamp(),
                    rows_valid = %s,
                    error_message = NULL
              WHERE id = %s

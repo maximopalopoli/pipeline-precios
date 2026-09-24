@@ -8,26 +8,22 @@ WEEKLY_VARIATION_DAYS = 7
 # excluded, rather than averaging unrelated daily changes or shorter windows.
 WEEKLY_VARIATION_SQL = """
     WITH latest AS (
-        SELECT MAX(fecha) AS fecha
-        FROM agg_precios_diarios
-        JOIN dim_fecha USING (fecha_id)
+        SELECT calendar.fecha_id, calendar.fecha
+        FROM dim_fecha AS calendar
+        WHERE calendar.fecha_id = (SELECT MAX(fecha_id) FROM agg_precios_diarios)
     ), endpoint_prices AS (
         SELECT
-            aggregate.producto_sk,
-            aggregate.provincia_sk,
-            MAX(aggregate.precio_lista_avg) FILTER (
-                WHERE calendar.fecha = latest.fecha - 7
-            ) AS precio_inicial,
-            MAX(aggregate.precio_lista_avg) FILTER (
-                WHERE calendar.fecha = latest.fecha
-            ) AS precio_final
-        FROM agg_precios_diarios AS aggregate
-        JOIN dim_fecha AS calendar USING (fecha_id)
-        CROSS JOIN latest
-        WHERE calendar.fecha IN (latest.fecha - 7, latest.fecha)
-        GROUP BY aggregate.producto_sk, aggregate.provincia_sk
-        HAVING COUNT(*) FILTER (WHERE calendar.fecha = latest.fecha - 7) = 1
-           AND COUNT(*) FILTER (WHERE calendar.fecha = latest.fecha) = 1
+            final.precio_lista_avg AS precio_final,
+            initial.precio_lista_avg AS precio_inicial
+        FROM latest
+        JOIN dim_fecha AS initial_calendar
+          ON initial_calendar.fecha = latest.fecha - 7
+        JOIN agg_precios_diarios AS final
+          ON final.fecha_id = latest.fecha_id
+        JOIN agg_precios_diarios AS initial
+          ON initial.producto_sk = final.producto_sk
+         AND initial.provincia_sk = final.provincia_sk
+         AND initial.fecha_id = initial_calendar.fecha_id
     ), weekly_variation AS (
         SELECT
             ROUND(

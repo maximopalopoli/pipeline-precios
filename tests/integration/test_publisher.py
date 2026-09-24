@@ -195,6 +195,37 @@ def test_successful_retry_clears_a_previous_failure_message(pg_conn, seed_data):
         assert cur.fetchone() == ("completed", None)
 
 
+def test_publication_finished_at_uses_wall_clock_not_transaction_start(pg_conn, seed_data):
+    run_id = _create_run(pg_conn, "finished-at.zip")
+    _insert_pending_fact(
+        pg_conn,
+        run_id=run_id,
+        producto_sk=seed_data["productos"]["AAA"],
+        sucursal_sk=seed_data["sucursal_sk"],
+        price=Decimal("125.00"),
+    )
+    pg_conn.commit()
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT transaction_timestamp()")
+        cur.execute("SELECT pg_sleep(0.02)")
+
+    publisher.publish_pending_facts(
+        pg_conn,
+        run_id=run_id,
+        fecha_id=FECHA_ID,
+        reconciliation=ProductReconciliation(1, 0, 0, 0, 1, 1),
+    )
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT finished_at > transaction_timestamp() "
+            "FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        assert cur.fetchone()[0] is True
+
+
 def test_partial_completion_keeps_the_visible_snapshot_unchanged(pg_conn, seed_data):
     _seed_published_day(pg_conn, seed_data)
     partial_run_id = _create_run(pg_conn, "partial.zip")
