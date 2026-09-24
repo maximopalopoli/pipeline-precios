@@ -7,6 +7,7 @@ import pytest
 
 import etl.load.publisher as publisher
 from etl.load.aggregator import aggregate
+from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation
 
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds" / "seed_provincias.sql"
@@ -76,6 +77,7 @@ def _create_run(pg_conn, filename: str) -> int:
 def _insert_fact(
     pg_conn, *, run_id: int, producto_sk: int, sucursal_sk: int, price: Decimal
 ) -> None:
+    _ensure_partition(pg_conn, FECHA_ID)
     with pg_conn.cursor() as cur:
         cur.execute(
             """
@@ -169,13 +171,83 @@ def test_publish_replaces_the_full_daily_snapshot(pg_conn, seed_data):
         assert cur.fetchone()[0] == 0
         cur.execute(
             """
+            SELECT COUNT(*)
+            FROM pg_index index_definition
+            JOIN pg_class leaf ON leaf.oid = index_definition.indrelid
+            WHERE leaf.relname = 'fact_precios_20260315'
+            """
+        )
+        assert cur.fetchone()[0] >= 4
+        cur.execute(
+            """
             SELECT delete_existing_seconds, insert_facts_seconds,
                    aggregate_delete_seconds, aggregate_insert_seconds, cleanup_seconds
+                   , partition_swap_seconds
             FROM ingestion_publication_metrics WHERE run_id = %s
             """,
             (pending_run_id,),
         )
         assert all(value >= 0 for value in cur.fetchone())
+
+
+def test_publish_rectifies_a_day_with_a_legacy_candidate_leaf(pg_conn, seed_data):
+    first_run_id = _create_run(pg_conn, "initial-publish.zip")
+    _insert_pending_fact(
+        pg_conn,
+        run_id=first_run_id,
+        producto_sk=seed_data["productos"]["AAA"],
+        sucursal_sk=seed_data["sucursal_sk"],
+        price=Decimal("100.00"),
+    )
+    pg_conn.commit()
+    publisher.publish_pending_facts(
+        pg_conn,
+        run_id=first_run_id,
+        fecha_id=FECHA_ID,
+        reconciliation=ProductReconciliation(1, 0, 0, 0, 1, 1),
+    )
+    pg_conn.commit()
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "ALTER TABLE fact_precios_20260315 "
+            "RENAME TO fact_precios_20260315_run_legacy"
+        )
+    pg_conn.commit()
+
+    second_run_id = _create_run(pg_conn, "second-publish.zip")
+    _insert_pending_fact(
+        pg_conn,
+        run_id=second_run_id,
+        producto_sk=seed_data["productos"]["AAA"],
+        sucursal_sk=seed_data["sucursal_sk"],
+        price=Decimal("125.00"),
+    )
+    pg_conn.commit()
+    publisher.publish_pending_facts(
+        pg_conn,
+        run_id=second_run_id,
+        fecha_id=FECHA_ID,
+        reconciliation=ProductReconciliation(1, 0, 0, 0, 1, 1),
+    )
+    pg_conn.commit()
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT precio_lista FROM fact_precios WHERE fecha_id = %s", (FECHA_ID,)
+        )
+        assert cur.fetchone()[0] == Decimal("125.00")
+        cur.execute(
+            """
+            SELECT child.relname
+            FROM pg_inherits AS inheritance
+            JOIN pg_class AS parent ON parent.oid = inheritance.inhparent
+            JOIN pg_class AS child ON child.oid = inheritance.inhrelid
+            WHERE parent.relname = 'fact_precios_202603'
+              AND child.relname = 'fact_precios_20260315'
+            """
+        )
+        assert cur.fetchone() == ("fact_precios_20260315",)
 
 
 def test_successful_retry_clears_a_previous_failure_message(pg_conn, seed_data):

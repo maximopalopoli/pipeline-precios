@@ -337,7 +337,7 @@ class TestLoadFact:
                 """
                 SELECT 1 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE c.relname = 'fact_precios_202701' AND n.nspname = 'public'
+                WHERE c.relname = 'fact_precios_20270115' AND n.nspname = 'public'
                 """
             )
             assert cur.fetchone() is not None

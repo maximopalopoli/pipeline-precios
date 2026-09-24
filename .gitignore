@@ -4,6 +4,7 @@ raw/
 *.zip
 !tests/fixtures/*.zip
 ingestion-bounded-*.log
+benchmark-artifacts/
 .venv/
 *.egg-info/
 __pycache__/

@@ -37,7 +37,7 @@ Daily ZIP (~300 MB)
                  │
           ┌──────▼───────┐
           │    Load       │  etl/load/warehouse_loader.py
-          │  (Upsert)     │  → dim_*, fact_precios (partitioned by month)
+          │  (Upsert)     │  → dim_*, fact_precios (month → day partitions)
           └──────┬───────┘
                  │
           ┌──────▼───────┐
@@ -53,7 +53,7 @@ Daily ZIP (~300 MB)
 | **Metadata** | `raw_files`, `ingestion_runs` |
 | **Staging** | `stg_comercios`, `stg_sucursales`, `stg_productos` |
 | **Dimensions** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
-| **Fact** | `fact_precios` (partitioned by month, grain: product × store × day) |
+| **Fact** | `fact_precios` (monthly parents with daily leaves; grain: product × store × day) |
 | **Aggregations** | `agg_precios_diarios`, view `v_variacion_precios` |
 | **Quality** | `rejected_rows` |
 
@@ -412,7 +412,7 @@ failure before Airflow retries or marks the task as failed.
 - **Idempotency:** SHA-256 plus a completed ingestion to skip duplicate downloads; failed runs remain retryable; `ON CONFLICT DO UPDATE` on dimensions and facts; re-runs recalculate aggregates
 - **Untyped staging:** all VARCHAR to preserve raw data and simplify quality check debugging
 - **SCD Type 1:** dimensions update with last-write-wins (no change history)
-- **Monthly partitioning:** `fact_precios` partitioned by `fecha_id` for efficient date-range queries
+- **Daily fact leaves:** `fact_precios` uses monthly parents with daily leaves, so a prepared day can be atomically replaced while monthly retention remains efficient.
 - **Two-level quality checks:** critical (abort pipeline) vs warnings (log and continue)
 - **structlog:** structured logging with context (run_id, filename, counts) for traceability
 

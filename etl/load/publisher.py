@@ -120,34 +120,9 @@ def publish_pending_facts(
             f"pending facts, found {total_rows}"
         )
 
-    _ensure_partition(conn, fecha_id)
-    with conn.cursor() as cur:
-        started_at = perf_counter()
-        cur.execute("DELETE FROM fact_precios WHERE fecha_id = %s", (fecha_id,))
-        delete_existing_seconds = perf_counter() - started_at
-        started_at = perf_counter()
-        cur.execute(
-            """
-            INSERT INTO fact_precios (
-                producto_sk, sucursal_sk, fecha_id, run_id,
-                precio_lista, precio_referencia,
-                precio_promo1, precio_promo2,
-                leyenda_promo1, leyenda_promo2,
-                tiene_promo
-            )
-            SELECT
-                producto_sk, sucursal_sk, fecha_id, run_id,
-                precio_lista, precio_referencia,
-                precio_promo1, precio_promo2,
-                leyenda_promo1, leyenda_promo2,
-                tiene_promo
-            FROM pending_fact_precios
-            WHERE run_id = %s AND fecha_id = %s
-            """,
-            (run_id, fecha_id),
-        )
-        rows_fact = cur.rowcount
-        insert_facts_seconds = perf_counter() - started_at
+    partition_swap_seconds, insert_facts_seconds, rows_fact = _swap_daily_partition(
+        conn, run_id=run_id, fecha_id=fecha_id
+    )
 
     if rows_fact != reconciliation.rows_fact_published:
         raise ValueError(
@@ -180,11 +155,12 @@ def publish_pending_facts(
     record_publication_metrics(
         conn,
         run_id=run_id,
-        delete_existing_seconds=delete_existing_seconds,
+        delete_existing_seconds=0,
         insert_facts_seconds=insert_facts_seconds,
         aggregate_delete_seconds=agg.delete_seconds,
         aggregate_insert_seconds=agg.insert_seconds,
         cleanup_seconds=cleanup_seconds,
+        partition_swap_seconds=partition_swap_seconds,
     )
 
     result = PublicationResult(
@@ -196,10 +172,59 @@ def publish_pending_facts(
     log.info(
         "publisher.pending_facts_published",
         **result.__dict__,
-        delete_existing_seconds=round(delete_existing_seconds, 3),
+        partition_swap_seconds=round(partition_swap_seconds, 3),
         insert_facts_seconds=round(insert_facts_seconds, 3),
         aggregate_delete_seconds=round(agg.delete_seconds, 3),
         aggregate_insert_seconds=round(agg.insert_seconds, 3),
         cleanup_seconds=round(cleanup_seconds, 3),
     )
     return result
+
+
+def _swap_daily_partition(conn, *, run_id: int, fecha_id: int) -> tuple[float, float, int]:
+    """Build a detached daily leaf, then replace the visible leaf atomically."""
+    current_partition = _ensure_partition(conn, fecha_id)
+    canonical_partition = f"fact_precios_{fecha_id}"
+    monthly_partition = f"fact_precios_{fecha_id // 100:06d}"
+    candidate = f"{canonical_partition}_run_{run_id}"
+    retired_partition = f"{canonical_partition}_replaced_{run_id}"
+    with conn.cursor() as cur:
+        started_at = perf_counter()
+        # Load without indexes: ATTACH PARTITION creates and attaches the
+        # matching inherited indexes after the bulk insert, while this table
+        # is still invisible to readers.
+        cur.execute(f"CREATE TABLE {candidate} (LIKE {current_partition})")
+        cur.execute(
+            f"ALTER TABLE {candidate} ADD CONSTRAINT {candidate}_fecha_check "
+            f"CHECK (fecha_id = {fecha_id})"
+        )
+        cur.execute(
+            f"""
+            INSERT INTO {candidate} (
+                producto_sk, sucursal_sk, fecha_id, run_id,
+                precio_lista, precio_referencia, precio_promo1, precio_promo2,
+                leyenda_promo1, leyenda_promo2, tiene_promo
+            )
+            SELECT
+                producto_sk, sucursal_sk, fecha_id, run_id,
+                precio_lista, precio_referencia, precio_promo1, precio_promo2,
+                leyenda_promo1, leyenda_promo2, tiene_promo
+            FROM pending_fact_precios
+            WHERE run_id = %s AND fecha_id = %s
+            """,
+            (run_id, fecha_id),
+        )
+        rows_fact = cur.rowcount
+        insert_facts_seconds = perf_counter() - started_at
+
+        started_at = perf_counter()
+        cur.execute(f"ALTER TABLE {monthly_partition} DETACH PARTITION {current_partition}")
+        cur.execute(f"ALTER TABLE {current_partition} RENAME TO {retired_partition}")
+        cur.execute(f"ALTER TABLE {candidate} RENAME TO {canonical_partition}")
+        cur.execute(
+            f"ALTER TABLE {monthly_partition} ATTACH PARTITION {canonical_partition} "
+            f"FOR VALUES FROM ({fecha_id}) TO ({fecha_id + 1})"
+        )
+        cur.execute(f"DROP TABLE {retired_partition}")
+        partition_swap_seconds = perf_counter() - started_at
+    return partition_swap_seconds, insert_facts_seconds, rows_fact
