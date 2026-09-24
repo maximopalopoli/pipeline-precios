@@ -766,6 +766,23 @@ def load_dim_produto_from_staging(
                 productos_unidad_medida_referencia   = EXCLUDED.productos_unidad_medida_referencia,
                 updated_at                           = NOW()
             WHERE %s
+              AND (
+                  dim_producto.es_ean,
+                  dim_producto.productos_descripcion,
+                  dim_producto.productos_marca,
+                  dim_producto.productos_cantidad_presentacion,
+                  dim_producto.productos_unidad_medida_presentacion,
+                  dim_producto.productos_cantidad_referencia,
+                  dim_producto.productos_unidad_medida_referencia
+              ) IS DISTINCT FROM (
+                  EXCLUDED.es_ean,
+                  EXCLUDED.productos_descripcion,
+                  EXCLUDED.productos_marca,
+                  EXCLUDED.productos_cantidad_presentacion,
+                  EXCLUDED.productos_unidad_medida_presentacion,
+                  EXCLUDED.productos_cantidad_referencia,
+                  EXCLUDED.productos_unidad_medida_referencia
+              )
             """,
             (run_id, update_existing),
         )

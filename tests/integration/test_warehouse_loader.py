@@ -272,6 +272,45 @@ class TestLoadDimensionProductoFromStaging:
                 ("ean:7791234567898", None, None),
             ]
 
+    def test_skips_unchanged_products_and_updates_changed_attributes(self, pg_conn, run_id):
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO stg_productos (
+                    run_id, id_comercio, id_bandera, id_sucursal, id_producto,
+                    productos_ean, productos_descripcion
+                ) VALUES (%s, '1', '1', '10', 'internal-milk-1l', '0', 'Leche entera')
+                """,
+                (run_id,),
+            )
+
+        assert load_dim_produto_from_staging(pg_conn, run_id) == 1
+        pg_conn.commit()
+
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT updated_at FROM dim_producto")
+            original_updated_at = cur.fetchone()[0]
+
+        assert load_dim_produto_from_staging(pg_conn, run_id) == 0
+        pg_conn.commit()
+
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT updated_at FROM dim_producto")
+            assert cur.fetchone()[0] == original_updated_at
+            cur.execute(
+                """
+                UPDATE stg_productos
+                SET productos_descripcion = 'Leche descremada'
+                WHERE run_id = %s
+                """,
+                (run_id,),
+            )
+
+        assert load_dim_produto_from_staging(pg_conn, run_id) == 1
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT productos_descripcion FROM dim_producto")
+            assert cur.fetchone()[0] == "Leche descremada"
+
 
 # ---------------------------------------------------------------------------
 # load_fact
