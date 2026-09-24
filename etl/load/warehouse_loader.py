@@ -563,7 +563,7 @@ def load_pending_fact(conn, df: pd.DataFrame, run_id: int) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
-            CREATE TEMP TABLE tmp_pending_fact_precios (
+            CREATE TEMP TABLE IF NOT EXISTS tmp_pending_fact_precios (
                 producto_sk       INT,
                 sucursal_sk       INT,
                 fecha_id          INT,
@@ -575,9 +575,13 @@ def load_pending_fact(conn, df: pd.DataFrame, run_id: int) -> int:
                 leyenda_promo1    TEXT,
                 leyenda_promo2    TEXT,
                 tiene_promo       BOOLEAN
-            ) ON COMMIT DROP
+            ) ON COMMIT PRESERVE ROWS
             """
         )
+        # The write connection is intentionally long-lived for a whole fact
+        # stream.  Reusing this table avoids per-chunk catalog churn while
+        # TRUNCATE keeps each COPY isolated from the previous batch.
+        cur.execute("TRUNCATE tmp_pending_fact_precios")
         _copy_df(cur, pending_df[cols], "tmp_pending_fact_precios")
         cur.execute(
             """
