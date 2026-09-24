@@ -373,8 +373,14 @@ class TestLoadPendingFact:
                 (run_id,),
             )
             count, price = cur.fetchone()
+            cur.execute(
+                "SELECT COUNT(*), MAX(precio_lista) FROM tmp_pending_fact_precios"
+            )
+            temp_count, temp_price = cur.fetchone()
         assert count == 1
         assert float(price) == pytest.approx(999.0)
+        assert temp_count == 1
+        assert float(temp_price) == pytest.approx(999.0)
 
 
 # ---------------------------------------------------------------------------
