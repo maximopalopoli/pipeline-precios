@@ -38,6 +38,34 @@ from etl.transform.product_identity import product_identity
 
 log = structlog.get_logger(__name__)
 
+_PENDING_FACT_COLUMNS = [
+    "run_id",
+    "producto_sk",
+    "sucursal_sk",
+    "fecha_id",
+    "precio_lista",
+    "precio_referencia",
+    "precio_promo1",
+    "precio_promo2",
+    "leyenda_promo1",
+    "leyenda_promo2",
+    "tiene_promo",
+]
+
+_PENDING_FACT_TEMP_COLUMNS = [
+    "producto_sk",
+    "sucursal_sk",
+    "fecha_id",
+    "run_id",
+    "precio_lista",
+    "precio_referencia",
+    "precio_promo1",
+    "precio_promo2",
+    "leyenda_promo1",
+    "leyenda_promo2",
+    "tiene_promo",
+]
+
 
 # ---------------------------------------------------------------------------
 # Result container
@@ -544,74 +572,97 @@ def load_pending_fact(conn, df: pd.DataFrame, run_id: int) -> int:
         log.info("warehouse.pending_fact_skipped", reason="empty_dataframe", run_id=run_id)
         return 0
 
-    cols = [
-        "producto_sk",
-        "sucursal_sk",
-        "fecha_id",
-        "run_id",
-        "precio_lista",
-        "precio_referencia",
-        "precio_promo1",
-        "precio_promo2",
-        "leyenda_promo1",
-        "leyenda_promo2",
-        "tiene_promo",
-    ]
     pending_df = df.copy()
     pending_df["run_id"] = run_id
 
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            CREATE TEMP TABLE IF NOT EXISTS tmp_pending_fact_precios (
-                producto_sk       INT,
-                sucursal_sk       INT,
-                fecha_id          INT,
-                run_id            INT,
-                precio_lista      NUMERIC(12, 2),
-                precio_referencia NUMERIC(12, 2),
-                precio_promo1     NUMERIC(12, 2),
-                precio_promo2     NUMERIC(12, 2),
-                leyenda_promo1    TEXT,
-                leyenda_promo2    TEXT,
-                tiene_promo       BOOLEAN
-            ) ON COMMIT PRESERVE ROWS
-            """
-        )
-        # The write connection is intentionally long-lived for a whole fact
-        # stream.  Reusing this table avoids per-chunk catalog churn while
-        # TRUNCATE keeps each COPY isolated from the previous batch.
-        cur.execute("TRUNCATE tmp_pending_fact_precios")
-        _copy_df(cur, pending_df[cols], "tmp_pending_fact_precios")
-        cur.execute(
-            """
-            INSERT INTO pending_fact_precios (
-                run_id, producto_sk, sucursal_sk, fecha_id,
-                precio_lista, precio_referencia,
-                precio_promo1, precio_promo2,
-                leyenda_promo1, leyenda_promo2,
-                tiene_promo
+    # The usual path has no duplicate pending grain: facts are deduplicated in
+    # the builder, and each chunk belongs to a new run.  COPY directly into
+    # the target avoids copying every batch twice.  A duplicate can still
+    # occur across chunk boundaries, so retain the established upsert path as
+    # a transaction-local fallback.
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SAVEPOINT pending_fact_direct_copy")
+            _copy_df(
+                cur,
+                pending_df[_PENDING_FACT_COLUMNS],
+                "pending_fact_precios (run_id, producto_sk, sucursal_sk, fecha_id, "
+                "precio_lista, precio_referencia, precio_promo1, precio_promo2, "
+                "leyenda_promo1, leyenda_promo2, tiene_promo)",
             )
-            SELECT run_id, producto_sk, sucursal_sk, fecha_id,
-                precio_lista, precio_referencia,
-                precio_promo1, precio_promo2,
-                leyenda_promo1, leyenda_promo2,
-                tiene_promo
-            FROM tmp_pending_fact_precios
-            ON CONFLICT (run_id, producto_sk, sucursal_sk, fecha_id) DO UPDATE SET
-                precio_lista      = EXCLUDED.precio_lista,
-                precio_referencia = EXCLUDED.precio_referencia,
-                precio_promo1     = EXCLUDED.precio_promo1,
-                precio_promo2     = EXCLUDED.precio_promo2,
-                leyenda_promo1    = EXCLUDED.leyenda_promo1,
-                leyenda_promo2    = EXCLUDED.leyenda_promo2,
-                tiene_promo       = EXCLUDED.tiene_promo
-            """
-        )
-        count = cur.rowcount
+            cur.execute("RELEASE SAVEPOINT pending_fact_direct_copy")
+    except Exception as exc:
+        if _sqlstate(exc) != "23505":
+            raise
+        # psycopg3 closes a cursor after COPY fails, while psycopg2 does not.
+        # Start a fresh cursor for the savepoint rollback so both drivers use
+        # the same safe fallback.
+        with conn.cursor() as cur:
+            cur.execute("ROLLBACK TO SAVEPOINT pending_fact_direct_copy")
+            cur.execute("RELEASE SAVEPOINT pending_fact_direct_copy")
+            count = _load_pending_fact_with_upsert(cur, pending_df)
+        log.info("warehouse.pending_fact_direct_copy_fallback", run_id=run_id)
+    else:
+        count = len(pending_df)
 
     log.info("warehouse.pending_fact_loaded", run_id=run_id, rows=count)
     return count
+
+
+def _sqlstate(exc: Exception) -> str | None:
+    """Return the portable SQLSTATE exposed by psycopg2 or psycopg3."""
+    return getattr(exc, "sqlstate", None) or getattr(exc, "pgcode", None)
+
+
+def _load_pending_fact_with_upsert(cur, pending_df: pd.DataFrame) -> int:
+    """Load one exceptional duplicate-bearing chunk through the safe upsert path."""
+    cur.execute(
+        """
+        CREATE TEMP TABLE tmp_pending_fact_precios (
+            producto_sk       INT,
+            sucursal_sk       INT,
+            fecha_id          INT,
+            run_id            INT,
+            precio_lista      NUMERIC(12, 2),
+            precio_referencia NUMERIC(12, 2),
+            precio_promo1     NUMERIC(12, 2),
+            precio_promo2     NUMERIC(12, 2),
+            leyenda_promo1    TEXT,
+            leyenda_promo2    TEXT,
+            tiene_promo       BOOLEAN
+        ) ON COMMIT PRESERVE ROWS
+        """
+    )
+    # The write connection stays open through a fact stream.  Keep the
+    # fallback's scratch relation and clear it between exceptional chunks.
+    cur.execute("TRUNCATE tmp_pending_fact_precios")
+    _copy_df(cur, pending_df[_PENDING_FACT_TEMP_COLUMNS], "tmp_pending_fact_precios")
+    cur.execute(
+        """
+        INSERT INTO pending_fact_precios (
+            run_id, producto_sk, sucursal_sk, fecha_id,
+            precio_lista, precio_referencia,
+            precio_promo1, precio_promo2,
+            leyenda_promo1, leyenda_promo2,
+            tiene_promo
+        )
+        SELECT run_id, producto_sk, sucursal_sk, fecha_id,
+            precio_lista, precio_referencia,
+            precio_promo1, precio_promo2,
+            leyenda_promo1, leyenda_promo2,
+            tiene_promo
+        FROM tmp_pending_fact_precios
+        ON CONFLICT (run_id, producto_sk, sucursal_sk, fecha_id) DO UPDATE SET
+            precio_lista      = EXCLUDED.precio_lista,
+            precio_referencia = EXCLUDED.precio_referencia,
+            precio_promo1     = EXCLUDED.precio_promo1,
+            precio_promo2     = EXCLUDED.precio_promo2,
+            leyenda_promo1    = EXCLUDED.leyenda_promo1,
+            leyenda_promo2    = EXCLUDED.leyenda_promo2,
+            tiene_promo       = EXCLUDED.tiene_promo
+        """
+    )
+    return cur.rowcount
 
 
 # ---------------------------------------------------------------------------
