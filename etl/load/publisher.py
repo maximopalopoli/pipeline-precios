@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 
 import structlog
 
 from etl.load.aggregator import aggregate
 from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation, record_product_reconciliation
+from etl.publication_metrics import record_publication_metrics
 
 log = structlog.get_logger(__name__)
 
@@ -57,7 +59,7 @@ def complete_partial_run(
         cur.execute(
             """
             UPDATE ingestion_runs
-               SET status = 'completed', finished_at = NOW(),
+               SET status = 'completed', finished_at = clock_timestamp(),
                    rows_valid = %s, error_message = NULL
              WHERE id = %s AND is_partial = TRUE
             """,
@@ -65,7 +67,9 @@ def complete_partial_run(
         )
         if cur.rowcount != 1:
             raise ValueError(f"Cannot complete full ingestion run {run_id} as partial")
-    result = PublicationResult(run_id=run_id, fecha_id=0, rows_fact=0, rows_aggregated=0)
+    result = PublicationResult(
+        run_id=run_id, fecha_id=0, rows_fact=0, rows_aggregated=0
+    )
     log.info("publisher.partial_run_completed", **result.__dict__)
     return result
 
@@ -118,7 +122,10 @@ def publish_pending_facts(
 
     _ensure_partition(conn, fecha_id)
     with conn.cursor() as cur:
+        started_at = perf_counter()
         cur.execute("DELETE FROM fact_precios WHERE fecha_id = %s", (fecha_id,))
+        delete_existing_seconds = perf_counter() - started_at
+        started_at = perf_counter()
         cur.execute(
             """
             INSERT INTO fact_precios (
@@ -140,6 +147,7 @@ def publish_pending_facts(
             (run_id, fecha_id),
         )
         rows_fact = cur.rowcount
+        insert_facts_seconds = perf_counter() - started_at
 
     if rows_fact != reconciliation.rows_fact_published:
         raise ValueError(
@@ -152,11 +160,12 @@ def publish_pending_facts(
     record_product_reconciliation(conn, run_id, reconciliation)
 
     with conn.cursor() as cur:
+        started_at = perf_counter()
         cur.execute(
             """
             UPDATE ingestion_runs
                SET status = 'completed',
-                   finished_at = NOW(),
+                   finished_at = clock_timestamp(),
                    rows_valid = %s,
                    error_message = NULL
              WHERE id = %s
@@ -166,6 +175,17 @@ def publish_pending_facts(
         if cur.rowcount != 1:
             raise ValueError(f"Cannot publish unknown ingestion run {run_id}")
         cur.execute("DELETE FROM pending_fact_precios WHERE run_id = %s", (run_id,))
+        cleanup_seconds = perf_counter() - started_at
+
+    record_publication_metrics(
+        conn,
+        run_id=run_id,
+        delete_existing_seconds=delete_existing_seconds,
+        insert_facts_seconds=insert_facts_seconds,
+        aggregate_delete_seconds=agg.delete_seconds,
+        aggregate_insert_seconds=agg.insert_seconds,
+        cleanup_seconds=cleanup_seconds,
+    )
 
     result = PublicationResult(
         run_id=run_id,
@@ -173,5 +193,13 @@ def publish_pending_facts(
         rows_fact=rows_fact,
         rows_aggregated=agg.rows_upserted,
     )
-    log.info("publisher.pending_facts_published", **result.__dict__)
+    log.info(
+        "publisher.pending_facts_published",
+        **result.__dict__,
+        delete_existing_seconds=round(delete_existing_seconds, 3),
+        insert_facts_seconds=round(insert_facts_seconds, 3),
+        aggregate_delete_seconds=round(agg.delete_seconds, 3),
+        aggregate_insert_seconds=round(agg.insert_seconds, 3),
+        cleanup_seconds=round(cleanup_seconds, 3),
+    )
     return result

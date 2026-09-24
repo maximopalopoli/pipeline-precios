@@ -26,10 +26,15 @@ class IngestionResult:
 
     outcome: IngestionOutcome
     rows_loaded: int = 0
+    run_id: int | None = None
 
     @classmethod
-    def completed(cls, rows_loaded: int) -> IngestionResult:
-        return cls(outcome=IngestionOutcome.COMPLETED, rows_loaded=rows_loaded)
+    def completed(cls, rows_loaded: int, *, run_id: int | None = None) -> IngestionResult:
+        return cls(
+            outcome=IngestionOutcome.COMPLETED,
+            rows_loaded=rows_loaded,
+            run_id=run_id,
+        )
 
     @classmethod
     def skipped(cls) -> IngestionResult:
@@ -86,6 +91,7 @@ def open_ingestion_run(
     fecha_solicitada: date | None = None,
     fecha_logica: date | None = None,
     development_policy: DevelopmentIngestionPolicy | None = None,
+    fact_chunk_size: int | None = None,
 ) -> int:
     """Create a running record and persist the dates known at its opening.
 
@@ -103,14 +109,15 @@ def open_ingestion_run(
             """
             INSERT INTO ingestion_runs (
                 raw_file_id, status, fecha_solicitada, fecha_logica,
-                is_partial, partial_chain_keys, partial_max_product_rows
+                is_partial, partial_chain_keys, partial_max_product_rows,
+                fact_chunk_size
             )
             SELECT
                 id,
                 'running',
                 COALESCE(%s, fecha_datos),
                 COALESCE(%s, fecha_datos),
-                %s, %s, %s
+                %s, %s, %s, %s
             FROM raw_files
             WHERE id = %s
             RETURNING id
@@ -121,6 +128,7 @@ def open_ingestion_run(
                 development_policy.enabled,
                 partial_chain_keys,
                 development_policy.max_product_rows,
+                fact_chunk_size,
                 raw_file_id,
             ),
         )

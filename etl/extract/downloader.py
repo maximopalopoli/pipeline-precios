@@ -162,6 +162,56 @@ def download(
     )
 
 
+def register_local_archive(
+    conn: "psycopg2.connection", zip_path: Path, fecha: date
+) -> DownloadResult:
+    """Register an existing ZIP for replay without copying or downloading it.
+
+    The SHA-256 is streamed from disk and remains the idempotency key shared
+    with downloaded archives. The pipeline still performs its normal source
+    date validation before staging.
+    """
+    path = zip_path.expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Local source archive does not exist: {path}")
+
+    sha256, size_bytes = _hash_file(path)
+    filename = path.name
+    logger = log.bind(
+        fecha=fecha.isoformat(),
+        filename=filename,
+        path=str(path),
+        sha256=sha256[:12] + "…",
+        size_bytes=size_bytes,
+    )
+    existing_id = _find_by_sha256(conn, sha256)
+    if existing_id is not None:
+        logger.info("source_archive.local_duplicate", raw_file_id=existing_id)
+        return DownloadResult(
+            raw_file_id=existing_id,
+            filename=filename,
+            path=path,
+            sha256=sha256,
+            size_bytes=size_bytes,
+            fecha_datos=fecha,
+            is_new=False,
+        )
+
+    raw_file_id = _register(
+        conn, filename, path.as_uri(), sha256, size_bytes, fecha
+    )
+    logger.info("source_archive.local_registered", raw_file_id=raw_file_id)
+    return DownloadResult(
+        raw_file_id=raw_file_id,
+        filename=filename,
+        path=path,
+        sha256=sha256,
+        size_bytes=size_bytes,
+        fecha_datos=fecha,
+        is_new=True,
+    )
+
+
 # ── Private helpers ───────────────────────────────────────────────────────────
 
 
@@ -211,6 +261,17 @@ def _stream_download(url: str, raw_dir: Path) -> DownloadPayload:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
         raise
+
+
+def _hash_file(path: Path) -> tuple[str, int]:
+    """Return a file's SHA-256 and byte size without loading it into memory."""
+    digest = hashlib.sha256()
+    size_bytes = 0
+    with path.open("rb") as source:
+        while chunk := source.read(CHUNK_SIZE):
+            digest.update(chunk)
+            size_bytes += len(chunk)
+    return digest.hexdigest(), size_bytes
 
 
 def _find_by_sha256(conn: "psycopg2.connection", sha256: str) -> int | None:

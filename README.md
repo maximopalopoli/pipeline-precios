@@ -205,6 +205,7 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 | `rows_productos_deduplicated` | Valid rows superseded by another row at the product × store fact grain. |
 | `rows_fact_pending` | Unique facts held in the provisional set before publication. |
 | `rows_fact_published` | Facts made visible by the completed atomic publication. |
+| `inner_zips_invalid_count` | Nested SEPA ZIPs that were malformed and skipped; these contain no product rows to reconcile. |
 
 For a completed run, the following invariants hold:
 
@@ -212,8 +213,12 @@ For a completed run, the following invariants hold:
 rows_productos_source >= rows_productos_selected >= rows_productos_raw
 rows_productos_raw = rows_productos_valid + rows_productos_rejected
 rows_productos_valid = rows_productos_without_keys + rows_productos_deduplicated + rows_fact_pending
-rows_fact_pending = rows_fact_published
+rows_fact_pending = rows_fact_published  # full runs only
 ```
+
+For an explicit partial development run, `rows_fact_published` is zero and its
+pending rows remain isolated for local inspection; that is the intended
+exception to the last full-run invariant.
 
 The API exposes these fields as `reconciliacion` in `GET /api/health`; the home
 page displays the latest available summary. Older runs predate these counters,
@@ -253,6 +258,31 @@ database total plus `fact_precios`, pending facts, and staging relation sizes.
 These PostgreSQL relation sizes include indexes; compare snapshots from the
 same source and bounds before drawing conclusions about capacity.
 
+Two read-only commands provide repeatable evidence before changing indexes or
+database infrastructure:
+
+```bash
+# Latest completed run, or a specific local run.
+make etl-baseline RUN_ID=5
+
+# Compare only completed replays that share source ZIP and bounded policy.
+make compare-etl-baselines RUN_ID=5
+
+# Representative /api/kpis, /api/buscador and /api/ofertas plans.
+# Requires at least one full published snapshot; bounded runs publish no facts.
+make audit-queries FECHA_ID=20260922
+```
+
+`etl-baseline` reads durable run-level timing, source size, chunk size, fact-load
+duration, fact-load process-memory high-water mark and
+reconciliation counts. `compare-etl-baselines` excludes runs that do not share
+the source archive and bounds, so its JSON rows differ only in the benchmark
+configuration such as `fact_chunk_size`; it also excludes historical runs that
+predate durable fact-load telemetry. `audit-queries` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and
+emits planning/execution time, row counts and shared-buffer reads as JSON.
+Capture a baseline before and after a candidate index migration; do not infer
+full-scale capacity from a bounded run.
+
 ### Bounded development ingestion
 
 The local bounded-ingestion mode is opt-in and uses `SEPA_DEV_CHAIN_KEYS`
@@ -274,6 +304,54 @@ bound: `--dev-chain-key ID_COMERCIO:ID_BANDERA` (repeatable) and
 
 ```bash
 python -m etl.run_pipeline --fecha 2026-03-17 --dev-chain-key 1:1 --dev-max-product-rows 5000
+```
+
+`SEPA_FACT_CHUNK_SIZE` controls how many staged product rows are prepared and
+written per fact batch (default: 300000). It changes only memory/throughput
+partitioning, not the published fact grain. Use the same value when comparing
+baselines; for example, `make ingest-bounded DATE=... DEV_MAX_PRODUCT_ROWS=5000
+FACT_CHUNK_SIZE=50000`.
+
+To benchmark multiple chunk sizes against an already-downloaded source, replay
+the exact ZIP instead of requesting the mutable weekday URL again:
+
+```bash
+make replay-bounded \
+  ZIP=data/2026-09-22_martes_<sha256>.zip \
+  DATE=2026-09-22 DEV_CHAIN_KEYS=12:1 DEV_MAX_PRODUCT_ROWS=50000 \
+  FACT_CHUNK_SIZE=10000
+```
+
+Replay streams the local archive to calculate its SHA-256, registers or reuses
+the same `raw_files` record, and performs the normal declared-date validation.
+It does not copy the ZIP or contact the SEPA URL.
+
+For a reproducible sizing experiment, run each candidate multiple times. The
+command below performs runs sequentially, remains partial, and prints the
+individual durable samples plus per-size medians and the Python/PostgreSQL/OS
+versions used for the measurement:
+
+```bash
+make benchmark-chunks \
+  ZIP=data/2026-09-22_martes_<sha256>.zip DATE=2026-09-22 \
+  DEV_CHAIN_KEYS=12:1 DEV_MAX_PRODUCT_ROWS=50000 \
+  CHUNK_SIZES=5000,10000,25000 REPEATS=3
+```
+
+Use its median durations and memory range to choose a local benchmark setting.
+Stage logs go to standard error and the final report is JSON on standard output,
+so it can be saved without mixing output streams: append
+`> benchmark-chunks.json` to the command.
+It deliberately does not alter `SEPA_FACT_CHUNK_SIZE`'s production default;
+validate any production-sized change on a machine that can run a full source.
+
+To use a checked-in or CI-provided reference report, compare an equivalent
+candidate with tolerant limits (15% elapsed time and 20% RSS by default). The
+command exits nonzero only for a material regression, not normal timing noise:
+
+```bash
+make check-benchmark-regression \
+  BASELINE=benchmark-baseline.json CANDIDATE=benchmark-chunks.json
 ```
 
 ### Run with Docker Compose (all services)

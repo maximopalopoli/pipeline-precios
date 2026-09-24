@@ -49,6 +49,7 @@ from etl.development_ingestion import (
 )
 from etl.extract import downloader
 from etl.fact_retention import apply_fact_retention
+from etl.fact_chunking import with_cli_override as fact_chunk_size_with_cli_override
 from etl.ingestion_date import resolve_ingestion_date
 from etl.ingestion_lock import (
     IngestionLock,
@@ -149,6 +150,8 @@ def run(
     fecha: date | None = None,
     raw_dir: Path | None = None,
     development_policy: DevelopmentIngestionPolicy | None = None,
+    fact_chunk_size: int | None = None,
+    source_archive: Path | None = None,
 ) -> IngestionResult:
     """
     Execute the full pipeline for *fecha* (defaults to today in Argentina).
@@ -160,6 +163,9 @@ def run(
     raw_dir.mkdir(parents=True, exist_ok=True)
     retention_policy = from_environment()
     development_policy = development_policy or development_policy_from_environment()
+    fact_chunk_size = fact_chunk_size_with_cli_override(chunk_size=fact_chunk_size)
+    if source_archive is not None and fecha is None:
+        raise ValueError("fecha is required when replaying a local source archive")
     fecha = resolve_ingestion_date(fecha)
 
     conn = _db_connect()
@@ -174,13 +180,21 @@ def run(
 
         # ── 1. Download ──────────────────────────────────────────────────────
         active_timer = StageTimer(log, "download")
-        active_timer.start()
+        active_timer.start(source="local" if source_archive is not None else "remote")
         try:
-            dl = downloader.download(conn, raw_dir, fecha)
+            dl = (
+                downloader.register_local_archive(conn, source_archive, fecha)
+                if source_archive is not None
+                else downloader.download(conn, raw_dir, fecha)
+            )
         except Exception as exc:
             active_timer.fail(error_type=type(exc).__name__)
             raise
-        active_timer.finish(filename=dl.filename, size_bytes=dl.size_bytes)
+        active_timer.finish(
+            filename=dl.filename,
+            size_bytes=dl.size_bytes,
+            source="local" if source_archive is not None else "remote",
+        )
 
         if not dl.is_new:
             if not should_process_raw_file(conn, dl.raw_file_id, partial=development_policy.enabled):
@@ -224,6 +238,7 @@ def run(
             fecha_solicitada=fecha,
             fecha_logica=fecha,
             development_policy=development_policy,
+            fact_chunk_size=fact_chunk_size,
         )
         logger = log.bind(run_id=run_id)
         logger.info(
@@ -256,6 +271,7 @@ def run(
 
         active_timer.finish(
             inner_zips=stg.inner_zips_count,
+            inner_zips_invalid=stg.inner_zips_invalid_count,
             rows_comercios=stg.rows_comercios,
             rows_sucursales=stg.rows_sucursales,
             rows_productos=stg.rows_productos,
@@ -319,7 +335,7 @@ def run(
 
         # ── 7. Build + load fact_precios in chunks ───────────────────────────
         active_timer = StageTimer(logger, "fact_load")
-        active_timer.start()
+        active_timer.start(chunk_size=fact_chunk_size)
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
         product_load = stream_pending_product_facts(
@@ -327,18 +343,27 @@ def run(
             _db_connect,
             run_id=run_id,
             run_date=dl.fecha_datos,
+            chunk_size=fact_chunk_size,
             heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
         )
-        conn.commit()
-
-        active_timer.finish(
+        fact_load_elapsed_seconds = active_timer.finish(
             chunks=product_load.chunks,
+            chunk_size=fact_chunk_size,
             rows_fact=product_load.rows_fact,
             rows_valid=product_load.rows_valid,
             rows_rejected=product_load.rows_rejected,
             rows_without_keys=product_load.rows_without_keys,
             rows_deduplicated=product_load.rows_deduplicated,
         )
+        from etl.fact_load_metrics import record_fact_load_metrics
+
+        record_fact_load_metrics(
+            conn,
+            run_id=run_id,
+            elapsed_seconds=fact_load_elapsed_seconds,
+            chunks=product_load.chunks,
+        )
+        conn.commit()
 
         # ── 8. Publish facts + aggregations atomically ───────────────────────
         active_timer = StageTimer(logger, "publication")
@@ -403,7 +428,7 @@ def run(
                 rows_fact_published=0,
                 retention_skipped=True,
             )
-            return IngestionResult.completed(product_load.rows_fact)
+            return IngestionResult.completed(product_load.rows_fact, run_id=run_id)
         try:
             retention_result = apply_fact_retention(
                 conn,
@@ -455,7 +480,7 @@ def run(
             # ZIP cleanup is last and must not affect the published snapshot.
             conn.rollback()
             logger.exception("pipeline.raw_retention.failed")
-        return IngestionResult.completed(product_load.rows_fact)
+        return IngestionResult.completed(product_load.rows_fact, run_id=run_id)
 
     except Exception as exc:
         if active_timer is not None and active_timer.is_running:
@@ -509,6 +534,13 @@ def main() -> None:
         help="Directory for downloaded ZIP files (default: ./data).",
     )
     parser.add_argument(
+        "--zip-path",
+        type=Path,
+        default=None,
+        metavar="ZIP",
+        help="Replay an existing local ZIP; requires --fecha and skips network download.",
+    )
+    parser.add_argument(
         "--dev-chain-key",
         action="append",
         default=None,
@@ -522,7 +554,17 @@ def main() -> None:
         metavar="N",
         help="Limit a local partial run to N staged product rows.",
     )
+    parser.add_argument(
+        "--fact-chunk-size",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Rows processed per product-fact batch (default: SEPA_FACT_CHUNK_SIZE or 300000).",
+    )
     args = parser.parse_args()
+
+    if args.zip_path is not None and args.fecha is None:
+        parser.error("--zip-path requires --fecha so the source date can be validated")
 
     try:
         development_policy = with_cli_overrides(
@@ -530,10 +572,15 @@ def main() -> None:
             chain_keys=args.dev_chain_key,
             max_product_rows=args.dev_max_product_rows,
         )
+        fact_chunk_size = fact_chunk_size_with_cli_override(
+            chunk_size=args.fact_chunk_size
+        )
         run(
             fecha=args.fecha,
             raw_dir=args.raw_dir,
             development_policy=development_policy,
+            fact_chunk_size=fact_chunk_size,
+            source_archive=args.zip_path,
         )
     except Exception:
         sys.exit(1)

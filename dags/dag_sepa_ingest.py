@@ -249,6 +249,7 @@ def check_file_changed(**kwargs):
 def load_staging(**kwargs):
     """Open ingestion run + load staging tables from ZIP."""
     from etl.ingestion_run import open_ingestion_run, record_source_date
+    from etl.fact_chunking import from_environment as fact_chunk_size_from_environment
     from etl.staging import loader as staging_loader
     from etl.storage_metrics import collect_storage_footprint
     from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
@@ -256,6 +257,7 @@ def load_staging(**kwargs):
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
     development_policy = _development_policy_from_xcom(ti)
+    fact_chunk_size = fact_chunk_size_from_environment()
 
     conn = _db_connect()
     run_id: int | None = None
@@ -276,6 +278,7 @@ def load_staging(**kwargs):
                 date.fromisoformat(fecha_logica) if fecha_logica is not None else None
             ),
             development_policy=development_policy,
+            fact_chunk_size=fact_chunk_size,
         )
         fecha_fuente = inspect_source_archive_date(dl_info["path"])
         record_source_date(conn, run_id, fecha_fuente)
@@ -415,6 +418,8 @@ def load_dimensions(**kwargs):
 
 def load_pending_fact_precios(**kwargs):
     """Stream staging products into the run-local pending table."""
+    from etl.fact_chunking import from_run as fact_chunk_size_from_run
+    from etl.fact_load_metrics import record_fact_load_metrics
     from etl.ingestion_processing import stream_pending_product_facts
 
     ti = kwargs["ti"]
@@ -427,24 +432,33 @@ def load_pending_fact_precios(**kwargs):
     timer: StageTimer | None = None
     try:
         _renew_ingestion_lock(conn, ti)
+        chunk_size = fact_chunk_size_from_run(conn, run_id)
         timer = StageTimer(log.bind(run_id=run_id), "fact_load")
-        timer.start()
+        timer.start(chunk_size=chunk_size)
         result = stream_pending_product_facts(
             conn,
             _db_connect,
             run_id=run_id,
             run_date=run_date,
+            chunk_size=chunk_size,
             heartbeat=lambda: _renew_ingestion_lock(conn, ti),
         )
-        conn.commit()
-        timer.finish(
+        fact_load_elapsed_seconds = timer.finish(
             chunks=result.chunks,
+            chunk_size=chunk_size,
             rows_fact=result.rows_fact,
             rows_valid=result.rows_valid,
             rows_rejected=result.rows_rejected,
             rows_without_keys=result.rows_without_keys,
             rows_deduplicated=result.rows_deduplicated,
         )
+        record_fact_load_metrics(
+            conn,
+            run_id=run_id,
+            elapsed_seconds=fact_load_elapsed_seconds,
+            chunks=result.chunks,
+        )
+        conn.commit()
         return {
             "chunks": result.chunks,
             "rows_fact": result.rows_fact,

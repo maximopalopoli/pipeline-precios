@@ -48,7 +48,9 @@ def seed_data(pg_conn):
             RETURNING producto_sk, id_producto
             """
         )
-        productos = {id_producto: producto_sk for producto_sk, id_producto in cur.fetchall()}
+        productos = {
+            id_producto: producto_sk for producto_sk, id_producto in cur.fetchall()
+        }
     pg_conn.commit()
     return {"sucursal_sk": sucursal_sk, "productos": productos}
 
@@ -71,7 +73,9 @@ def _create_run(pg_conn, filename: str) -> int:
         return cur.fetchone()[0]
 
 
-def _insert_fact(pg_conn, *, run_id: int, producto_sk: int, sucursal_sk: int, price: Decimal) -> None:
+def _insert_fact(
+    pg_conn, *, run_id: int, producto_sk: int, sucursal_sk: int, price: Decimal
+) -> None:
     with pg_conn.cursor() as cur:
         cur.execute(
             """
@@ -153,10 +157,25 @@ def test_publish_replaces_the_full_daily_snapshot(pg_conn, seed_data):
             (FECHA_ID,),
         )
         assert cur.fetchone()[0] == 1
-        cur.execute("SELECT status, rows_valid FROM ingestion_runs WHERE id = %s", (pending_run_id,))
+        cur.execute(
+            "SELECT status, rows_valid FROM ingestion_runs WHERE id = %s",
+            (pending_run_id,),
+        )
         assert cur.fetchone() == ("completed", 1)
-        cur.execute("SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s", (pending_run_id,))
+        cur.execute(
+            "SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s",
+            (pending_run_id,),
+        )
         assert cur.fetchone()[0] == 0
+        cur.execute(
+            """
+            SELECT delete_existing_seconds, insert_facts_seconds,
+                   aggregate_delete_seconds, aggregate_insert_seconds, cleanup_seconds
+            FROM ingestion_publication_metrics WHERE run_id = %s
+            """,
+            (pending_run_id,),
+        )
+        assert all(value >= 0 for value in cur.fetchone())
 
 
 def test_successful_retry_clears_a_previous_failure_message(pg_conn, seed_data):
@@ -195,11 +214,47 @@ def test_successful_retry_clears_a_previous_failure_message(pg_conn, seed_data):
         assert cur.fetchone() == ("completed", None)
 
 
+def test_publication_finished_at_uses_wall_clock_not_transaction_start(
+    pg_conn, seed_data
+):
+    run_id = _create_run(pg_conn, "finished-at.zip")
+    _insert_pending_fact(
+        pg_conn,
+        run_id=run_id,
+        producto_sk=seed_data["productos"]["AAA"],
+        sucursal_sk=seed_data["sucursal_sk"],
+        price=Decimal("125.00"),
+    )
+    pg_conn.commit()
+
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT transaction_timestamp()")
+        cur.execute("SELECT pg_sleep(0.02)")
+
+    publisher.publish_pending_facts(
+        pg_conn,
+        run_id=run_id,
+        fecha_id=FECHA_ID,
+        reconciliation=ProductReconciliation(1, 0, 0, 0, 1, 1),
+    )
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT finished_at > transaction_timestamp() "
+            "FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        assert cur.fetchone()[0] is True
+
+
 def test_partial_completion_keeps_the_visible_snapshot_unchanged(pg_conn, seed_data):
     _seed_published_day(pg_conn, seed_data)
     partial_run_id = _create_run(pg_conn, "partial.zip")
     with pg_conn.cursor() as cur:
-        cur.execute("UPDATE ingestion_runs SET is_partial = TRUE WHERE id = %s", (partial_run_id,))
+        cur.execute(
+            "UPDATE ingestion_runs SET is_partial = TRUE WHERE id = %s",
+            (partial_run_id,),
+        )
     _insert_pending_fact(
         pg_conn,
         run_id=partial_run_id,
@@ -232,11 +287,16 @@ def test_partial_completion_keeps_the_visible_snapshot_unchanged(pg_conn, seed_d
             (partial_run_id,),
         )
         assert cur.fetchone() == (1, 0, True)
-        cur.execute("SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s", (partial_run_id,))
+        cur.execute(
+            "SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s",
+            (partial_run_id,),
+        )
         assert cur.fetchone()[0] == 1
 
 
-def test_failed_publication_keeps_the_previous_snapshot(pg_conn, seed_data, monkeypatch):
+def test_failed_publication_keeps_the_previous_snapshot(
+    pg_conn, seed_data, monkeypatch
+):
     _seed_published_day(pg_conn, seed_data)
     pending_run_id = _create_run(pg_conn, "failed-rectification.zip")
     _insert_pending_fact(
@@ -273,7 +333,12 @@ def test_failed_publication_keeps_the_previous_snapshot(pg_conn, seed_data, monk
             (FECHA_ID,),
         )
         assert cur.fetchone()[0] == 2
-        cur.execute("SELECT status FROM ingestion_runs WHERE id = %s", (pending_run_id,))
+        cur.execute(
+            "SELECT status FROM ingestion_runs WHERE id = %s", (pending_run_id,)
+        )
         assert cur.fetchone()[0] == "running"
-        cur.execute("SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s", (pending_run_id,))
+        cur.execute(
+            "SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s",
+            (pending_run_id,),
+        )
         assert cur.fetchone()[0] == 1

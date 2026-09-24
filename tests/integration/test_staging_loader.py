@@ -259,3 +259,40 @@ def test_load_streams_quoted_newlines_and_strips_nul_bytes(pg_conn, tmp_path):
             (run_id,),
         )
         assert cur.fetchone() == ("Descripcion con\nsalto de linea", "Marca limpia")
+
+
+def test_load_skips_an_invalid_inner_zip_and_records_its_count(
+    pg_conn, sample_zip_path, tmp_path
+):
+    raw_file_id = _insert_raw_file(pg_conn)
+    run_id = _insert_run(pg_conn, raw_file_id=raw_file_id)
+    archive_path = tmp_path / "archive-with-empty-inner.zip"
+
+    with (
+        zipfile.ZipFile(sample_zip_path) as sample_zip,
+        zipfile.ZipFile(archive_path, "w") as archive,
+    ):
+        for info in sample_zip.infolist():
+            archive.writestr(info, sample_zip.read(info))
+        archive.writestr("sepa_2_comercio-sepa-36_empty.zip", b"")
+
+    result = load(pg_conn, archive_path, run_id)
+
+    assert result == LoadResult(
+        inner_zips_count=EXPECTED_INNER_ZIPS + 1,
+        rows_comercios=EXPECTED_COMERCIOS,
+        rows_sucursales=EXPECTED_SUCURSALES,
+        rows_productos=EXPECTED_PRODUCTOS,
+        rows_productos_source=EXPECTED_PRODUCTOS,
+        rows_productos_selected=EXPECTED_PRODUCTOS,
+        inner_zips_invalid_count=1,
+    )
+
+    register_counts(pg_conn, run_id, result)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT inner_zips_count, inner_zips_invalid_count "
+            "FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        assert cur.fetchone() == (EXPECTED_INNER_ZIPS + 1, 1)

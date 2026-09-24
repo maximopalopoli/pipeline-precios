@@ -11,7 +11,7 @@ import pandas as pd
 import structlog
 
 from etl.load import warehouse_loader
-from etl.performance import StageTimer
+from etl.performance import StageTimer, items_per_second
 from etl.reconciliation import ProductReconciliation, record_product_rejections
 from etl.transform.cleaner import clean_comercios, clean_productos, clean_sucursales
 from etl.transform.fact_builder import (
@@ -102,6 +102,8 @@ def load_staged_dimensions(
 
 def iter_staged_products(conn_read, run_id: int, chunk_size: int = PRODUTO_CHUNK_SIZE):
     """Yield staged product rows in bounded DataFrame chunks for one run."""
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be a positive integer")
     with conn_read.cursor("stg_productos_cursor") as cur:
         cur.itersize = chunk_size
         cur.execute(
@@ -159,7 +161,7 @@ def stream_pending_product_facts(
             timer = StageTimer(
                 log.bind(run_id=run_id, chunk=chunks), "fact_chunk_preparation"
             )
-            timer.start(rows_staged=len(chunk_df))
+            timer.start(rows_staged=len(chunk_df), chunk_size=chunk_size)
             try:
                 clean_result = clean_productos(chunk_df)
                 rows_valid += len(clean_result.clean)
@@ -193,12 +195,20 @@ def stream_pending_product_facts(
                 rows_deduplicated += chunk_rows_deduplicated
                 rows_fact_attempted += len(fact_result.df)
 
-                timer.finish(
+                elapsed_seconds = timer.finish(
                     rows_valid=len(clean_result.clean),
                     rows_rejected=len(clean_result.rejected),
                     rows_without_keys=len(fact_result.rejected),
                     rows_deduplicated=chunk_rows_deduplicated,
                     rows_fact_pending=len(fact_result.df),
+                )
+                log.info(
+                    "pipeline.chunk.throughput",
+                    run_id=run_id,
+                    chunk=chunks,
+                    stage="fact_chunk_preparation",
+                    rows=len(chunk_df),
+                    rows_per_second=items_per_second(len(chunk_df), elapsed_seconds),
                 )
             except Exception:
                 timer.fail()
@@ -243,7 +253,15 @@ def _commit_pending_fact_chunk(
     except Exception:
         timer.fail()
         raise
-    timer.finish(rows_persisted=rows)
+    elapsed_seconds = timer.finish(rows_persisted=rows)
+    log.info(
+        "pipeline.chunk.throughput",
+        run_id=run_id,
+        chunk=chunk,
+        stage="pending_fact_write",
+        rows=rows,
+        rows_per_second=items_per_second(rows, elapsed_seconds),
+    )
     return rows
 
 

@@ -19,6 +19,7 @@ aggregate(conn, fecha_id)  → AggResult
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import perf_counter
 
 import structlog
 
@@ -29,6 +30,8 @@ log = structlog.get_logger(__name__)
 class AggResult:
     fecha_id: int
     rows_upserted: int
+    delete_seconds: float
+    insert_seconds: float
 
 
 _DELETE_SQL = "DELETE FROM agg_precios_diarios WHERE fecha_id = %(fecha_id)s"
@@ -96,9 +99,19 @@ def aggregate(conn, fecha_id: int) -> AggResult:
     log.info("aggregator.start", fecha_id=fecha_id)
 
     with conn.cursor() as cur:
+        started_at = perf_counter()
         cur.execute(_DELETE_SQL, {"fecha_id": fecha_id})
+        delete_seconds = perf_counter() - started_at
+        started_at = perf_counter()
         cur.execute(_INSERT_SQL, {"fecha_id": fecha_id})
         rows = cur.rowcount
+        insert_seconds = perf_counter() - started_at
 
-    log.info("aggregator.done", fecha_id=fecha_id, rows_upserted=rows)
-    return AggResult(fecha_id=fecha_id, rows_upserted=rows)
+    log.info(
+        "aggregator.done",
+        fecha_id=fecha_id,
+        rows_upserted=rows,
+        delete_seconds=round(delete_seconds, 3),
+        insert_seconds=round(insert_seconds, 3),
+    )
+    return AggResult(fecha_id, rows, delete_seconds, insert_seconds)
