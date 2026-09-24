@@ -34,9 +34,9 @@ class RunBaseline:
     rows_fact_pending: int | None
     rows_fact_published: int | None
     staged_rows_per_second: float | None
-    publication_insert_facts_seconds: float | None
-    publication_partition_swap_seconds: float | None
-    publication_aggregate_insert_seconds: float | None
+    publication_insert_facts_seconds: float | None = None
+    publication_partition_swap_seconds: float | None = None
+    publication_aggregate_insert_seconds: float | None = None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)

@@ -1,7 +1,9 @@
 from etl.query_audit import audit_queries, representative_queries
+from etl.load.warehouse_loader import _ensure_partition
 
 
 def test_audit_queries_executes_representative_plans_against_published_facts(pg_conn):
+    _ensure_partition(pg_conn, 20260317)
     with pg_conn.cursor() as cur:
         cur.execute(
             """

@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from etl.load.warehouse_loader import _ensure_partition
+
 
 _ROOT = Path(__file__).parent.parent.parent
 _SEEDS = _ROOT / "db" / "seeds" / "seed_provincias.sql"
@@ -9,6 +11,7 @@ _MIGRATION = _ROOT / "db" / "migrations" / "018_normalize_effective_promotion_fl
 
 
 def test_promotion_flag_migration_corrects_historical_facts_and_aggregates(pg_conn):
+    _ensure_partition(pg_conn, 20260315)
     with pg_conn.cursor() as cur:
         cur.execute(_SEEDS.read_text())
         cur.execute(
