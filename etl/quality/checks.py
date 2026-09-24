@@ -311,9 +311,14 @@ def check_pk_uniqueness(
              WHERE run_id = %s
         """,
         "stg_productos": """
-            SELECT COUNT(*) - COUNT(DISTINCT (id_comercio, id_bandera, id_sucursal, id_producto))
-              FROM stg_productos
-             WHERE run_id = %s
+            SELECT COALESCE(SUM(row_count - 1), 0)
+              FROM (
+                  SELECT COUNT(*) AS row_count
+                    FROM stg_productos
+                   WHERE run_id = %s
+                   GROUP BY id_comercio, id_bandera, id_sucursal, id_producto
+                  HAVING COUNT(*) > 1
+              ) AS duplicate_keys
         """,
     }
 

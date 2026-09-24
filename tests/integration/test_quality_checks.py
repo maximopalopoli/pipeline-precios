@@ -154,7 +154,7 @@ def test_check_pk_uniqueness_detects_duplicate_producto(pg_conn, sample_zip_path
 
     result = check_pk_uniqueness(pg_conn, run_id)
     assert not result.passed
-    assert "stg_productos" in result.details["duplicate_rows"]
+    assert result.details["duplicate_rows"]["stg_productos"] == 1
 
 
 # ── FK integrity ───────────────────────────────────────────────────────────────

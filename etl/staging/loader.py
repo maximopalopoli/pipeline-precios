@@ -87,6 +87,7 @@ _PRODUCTOS_COLS = [
 _INNER_ZIP_CHAIN_KEY = re.compile(
     r"(?:^|/)sepa_(?P<id_bandera>\d+)_comercio-sepa-(?P<id_comercio>\d+)_"
 )
+_DEFAULT_COPY_CHUNK_ROWS = 100_000
 
 
 # ── Result dataclass ───────────────────────────────────────────────────────────
@@ -112,6 +113,7 @@ def load(
     run_id: int,
     heartbeat: Callable[[], None] | None = None,
     development_policy: DevelopmentIngestionPolicy | None = None,
+    copy_chunk_rows: int = _DEFAULT_COPY_CHUNK_ROWS,
 ) -> LoadResult:
     """
     Parse *zip_path* and load all three staging tables for *run_id*.
@@ -140,6 +142,8 @@ def load(
     LoadResult with per-table row counts and inner-archive metrics.
     """
     development_policy = development_policy or DevelopmentIngestionPolicy()
+    if copy_chunk_rows <= 0:
+        raise ValueError("copy_chunk_rows must be positive")
     logger = log.bind(
         run_id=run_id,
         zip_path=str(zip_path),
@@ -232,6 +236,7 @@ def load(
                                             if counter_name == "productos"
                                             else None
                                         ),
+                                        copy_chunk_rows=copy_chunk_rows,
                                     )
                                 )
                             if counter_name == "comercios":
@@ -437,6 +442,7 @@ def _stream_copy_into(
     source: str = "",
     chain_keys: tuple[tuple[int, int], ...] = (),
     max_rows: int | None = None,
+    copy_chunk_rows: int = _DEFAULT_COPY_CHUNK_ROWS,
 ) -> tuple[int, int, int]:
     """
     Stream a CSV into a staging table via chunked COPY,
@@ -449,8 +455,6 @@ def _stream_copy_into(
     CSV's source order.
     """
     import csv as csv_mod
-
-    _CHUNK = 100_000  # rows per COPY batch
 
     text_stream = io.TextIOWrapper(
         raw_file, encoding="utf-8-sig", errors="replace", newline=""
@@ -520,7 +524,7 @@ def _stream_copy_into(
         row_count += 1
         chunk_rows += 1
 
-        if chunk_rows >= _CHUNK:
+        if chunk_rows >= copy_chunk_rows:
             _flush_chunk(buf)
             buf = io.StringIO()
             writer = csv_mod.writer(buf)
