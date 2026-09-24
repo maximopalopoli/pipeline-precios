@@ -404,6 +404,9 @@ def test_cli_partial_run_is_isolated_and_a_later_full_run_publishes(
             (partial_run[0],),
         )
         assert cur.fetchone()[0] == 2
+    # The next full publication detaches the daily leaf. Release this fixture
+    # connection's read locks before exercising that independent lifecycle.
+    pg_conn.commit()
 
     monkeypatch.delenv("SEPA_DEV_CHAIN_KEYS")
     monkeypatch.delenv("SEPA_DEV_MAX_PRODUCT_ROWS")
