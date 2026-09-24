@@ -120,7 +120,7 @@ def publish_pending_facts(
             f"pending facts, found {total_rows}"
         )
 
-    delete_existing_seconds, insert_facts_seconds, rows_fact = _swap_daily_partition(
+    partition_swap_seconds, insert_facts_seconds, rows_fact = _swap_daily_partition(
         conn, run_id=run_id, fecha_id=fecha_id
     )
 
@@ -155,11 +155,12 @@ def publish_pending_facts(
     record_publication_metrics(
         conn,
         run_id=run_id,
-        delete_existing_seconds=delete_existing_seconds,
+        delete_existing_seconds=0,
         insert_facts_seconds=insert_facts_seconds,
         aggregate_delete_seconds=agg.delete_seconds,
         aggregate_insert_seconds=agg.insert_seconds,
         cleanup_seconds=cleanup_seconds,
+        partition_swap_seconds=partition_swap_seconds,
     )
 
     result = PublicationResult(
@@ -171,7 +172,7 @@ def publish_pending_facts(
     log.info(
         "publisher.pending_facts_published",
         **result.__dict__,
-        delete_existing_seconds=round(delete_existing_seconds, 3),
+        partition_swap_seconds=round(partition_swap_seconds, 3),
         insert_facts_seconds=round(insert_facts_seconds, 3),
         aggregate_delete_seconds=round(agg.delete_seconds, 3),
         aggregate_insert_seconds=round(agg.insert_seconds, 3),
@@ -221,5 +222,5 @@ def _swap_daily_partition(conn, *, run_id: int, fecha_id: int) -> tuple[float, f
             f"FOR VALUES FROM ({fecha_id}) TO ({fecha_id + 1})"
         )
         cur.execute(f"DROP TABLE {daily_partition}")
-        delete_existing_seconds = perf_counter() - started_at
-    return delete_existing_seconds, insert_facts_seconds, rows_fact
+        partition_swap_seconds = perf_counter() - started_at
+    return partition_swap_seconds, insert_facts_seconds, rows_fact
