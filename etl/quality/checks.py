@@ -314,7 +314,7 @@ def check_pk_uniqueness(
              WHERE run_id = %s
         """,
         "stg_productos": """
-            SELECT COALESCE(SUM(row_count - 1), 0)
+            SELECT COALESCE(SUM(row_count - 1), 0)::bigint
               FROM (
                   SELECT COUNT(*) AS row_count
                     FROM stg_productos
