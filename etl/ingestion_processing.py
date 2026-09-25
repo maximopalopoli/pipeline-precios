@@ -129,16 +129,20 @@ def stream_pending_product_facts(
     run_id: int,
     run_date: date,
     chunk_size: int = PRODUTO_CHUNK_SIZE,
+    commit_every_chunks: int = 5,
     heartbeat: Callable[[], None] | None = None,
 ) -> ProductLoadResult:
     """Build and load a run's pending facts without materializing all products.
 
     Dimensions must already be populated.  A read connection streams staging
-    rows while a separate write connection commits each pending-fact chunk;
-    those provisional rows cannot become visible to consumers until the caller
-    publishes the run atomically. ``heartbeat`` runs once per processed chunk
-    when supplied.
+    rows while a separate write connection commits bounded groups of
+    pending-fact chunks; those provisional rows cannot become visible to
+    consumers until the caller publishes the run atomically. ``heartbeat``
+    runs once per processed chunk when supplied.
     """
+    if commit_every_chunks <= 0:
+        raise ValueError("commit_every_chunks must be positive")
+
     fecha_id, comercio_cache, sucursal_cache, producto_cache = build_sk_caches(
         conn, run_date
     )
@@ -218,11 +222,18 @@ def stream_pending_product_facts(
                 pending.result()
 
             pending = executor.submit(
-                _commit_pending_fact_chunk, conn_write, fact_result.df, run_id, chunks
+                _commit_pending_fact_chunk,
+                conn_write,
+                fact_result.df,
+                run_id,
+                chunks,
+                chunks % commit_every_chunks == 0,
             )
 
         if pending is not None:
             pending.result()
+        if chunks and chunks % commit_every_chunks:
+            executor.submit(conn_write.commit).result()
     finally:
         executor.shutdown(wait=True)
         conn_write.close()
@@ -242,14 +253,15 @@ def stream_pending_product_facts(
 
 
 def _commit_pending_fact_chunk(
-    conn, df: pd.DataFrame, run_id: int, chunk: int
+    conn, df: pd.DataFrame, run_id: int, chunk: int, commit: bool
 ) -> int:
     """Persist one chunk and emit its isolated database-write measurement."""
     timer = StageTimer(log.bind(run_id=run_id, chunk=chunk), "pending_fact_write")
     timer.start(rows_fact_pending=len(df))
     try:
         rows = warehouse_loader.load_pending_fact(conn, df, run_id)
-        conn.commit()
+        if commit:
+            conn.commit()
     except Exception:
         timer.fail()
         raise

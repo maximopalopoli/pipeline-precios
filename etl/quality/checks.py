@@ -209,15 +209,18 @@ def run_all(
     """
     logger = log.bind(run_id=run_id)
     logger.info("quality.checks.start")
+    product_rows = _product_row_count(conn, run_id)
 
     results: list[CheckResult] = [
         check_schema(conn, run_id),
         check_pk_uniqueness(conn, run_id),
         check_fk_integrity(conn, run_id),
         check_positive_prices(conn, run_id),
-        check_min_row_count(conn, run_id, min_productos=min_productos),
+        check_min_row_count(
+            conn, run_id, min_productos=min_productos, current_rows=product_rows
+        ),
         # Warning checks
-        check_row_count_drift(conn, run_id, max_drift=max_drift),
+        check_row_count_drift(conn, run_id, max_drift=max_drift, current_rows=product_rows),
         check_required_nulls(conn, run_id),
         check_coordinates_bbox(conn, run_id),
         check_tipo_sucursal(conn, run_id),
@@ -311,7 +314,7 @@ def check_pk_uniqueness(
              WHERE run_id = %s
         """,
         "stg_productos": """
-            SELECT COALESCE(SUM(row_count - 1), 0)
+            SELECT COALESCE(SUM(row_count - 1), 0)::bigint
               FROM (
                   SELECT COUNT(*) AS row_count
                     FROM stg_productos
@@ -356,46 +359,37 @@ def check_fk_integrity(
     violations: dict[str, int] = {}
 
     with conn.cursor() as cur:
-        # productos → comercio
         cur.execute(
             """
-            SELECT COUNT(*)
+            WITH comercios AS (
+                SELECT DISTINCT id_comercio, id_bandera
+                  FROM stg_comercios
+                 WHERE run_id = %s
+            ), sucursales AS (
+                SELECT DISTINCT id_comercio, id_bandera, id_sucursal
+                  FROM stg_sucursales
+                 WHERE run_id = %s
+            )
+            SELECT
+                COUNT(*) FILTER (WHERE c.id_comercio IS NULL),
+                COUNT(*) FILTER (WHERE s.id_comercio IS NULL)
               FROM stg_productos p
+              LEFT JOIN comercios c
+                ON c.id_comercio = p.id_comercio
+               AND c.id_bandera = p.id_bandera
+              LEFT JOIN sucursales s
+                ON s.id_comercio = p.id_comercio
+               AND s.id_bandera = p.id_bandera
+               AND s.id_sucursal = p.id_sucursal
              WHERE p.run_id = %s
-               AND NOT EXISTS (
-                   SELECT 1
-                     FROM stg_comercios c
-                    WHERE c.run_id = p.run_id
-                      AND c.id_comercio = p.id_comercio
-                      AND c.id_bandera  = p.id_bandera
-               )
             """,
-            (run_id,),
+            (run_id, run_id, run_id),
         )
-        count = cur.fetchone()[0]
-        if count:
-            violations["productos_sin_comercio"] = count
-
-        # productos → sucursales
-        cur.execute(
-            """
-            SELECT COUNT(*)
-              FROM stg_productos p
-             WHERE p.run_id = %s
-               AND NOT EXISTS (
-                   SELECT 1
-                     FROM stg_sucursales s
-                    WHERE s.run_id     = p.run_id
-                      AND s.id_comercio = p.id_comercio
-                      AND s.id_bandera  = p.id_bandera
-                      AND s.id_sucursal = p.id_sucursal
-               )
-            """,
-            (run_id,),
-        )
-        count = cur.fetchone()[0]
-        if count:
-            violations["productos_sin_sucursal"] = count
+        missing_comercios, missing_sucursales = cur.fetchone()
+        if missing_comercios:
+            violations["productos_sin_comercio"] = missing_comercios
+        if missing_sucursales:
+            violations["productos_sin_sucursal"] = missing_sucursales
 
     return CheckResult(
         name="fk_integrity",
@@ -419,24 +413,19 @@ def check_positive_prices(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT COUNT(*)
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE productos_precio_lista = ''
+                       OR productos_precio_lista !~ '^[0-9]+(\\.[0-9]+)?$'
+                       OR productos_precio_lista::numeric <= 0
+                ),
+                COUNT(*)
               FROM stg_productos
              WHERE run_id = %s
-               AND (
-                   productos_precio_lista = ''
-                   OR productos_precio_lista !~ '^[0-9]+(\\.[0-9]+)?$'
-                   OR productos_precio_lista::numeric <= 0
-               )
             """,
             (run_id,),
         )
-        bad_count = cur.fetchone()[0]
-
-        cur.execute(
-            "SELECT COUNT(*) FROM stg_productos WHERE run_id = %s",
-            (run_id,),
-        )
-        total = cur.fetchone()[0]
+        bad_count, total = cur.fetchone()
 
     return CheckResult(
         name="positive_prices",
@@ -446,11 +435,18 @@ def check_positive_prices(
     )
 
 
+def _product_row_count(conn: "psycopg2.connection", run_id: int) -> int:
+    with conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM stg_productos WHERE run_id = %s", (run_id,))
+        return cur.fetchone()[0]
+
+
 def check_min_row_count(
     conn: "psycopg2.connection",
     run_id: int,
     *,
     min_productos: int = DEFAULT_MIN_PRODUCTOS,
+    current_rows: int | None = None,
 ) -> CheckResult:
     """
     Verify that stg_productos has at least *min_productos* rows for *run_id*.
@@ -458,12 +454,7 @@ def check_min_row_count(
     A very low row count is a strong indicator that the source ZIP was
     truncated or corrupted during download.  Severity: CRITICAL.
     """
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT COUNT(*) FROM stg_productos WHERE run_id = %s",
-            (run_id,),
-        )
-        actual = cur.fetchone()[0]
+    actual = current_rows if current_rows is not None else _product_row_count(conn, run_id)
 
     return CheckResult(
         name="min_row_count",
@@ -481,6 +472,7 @@ def check_row_count_drift(
     run_id: int,
     *,
     max_drift: float = DEFAULT_MAX_DRIFT,
+    current_rows: int | None = None,
 ) -> CheckResult:
     """
     Compare productos row count vs the previous completed run.
@@ -491,11 +483,7 @@ def check_row_count_drift(
     Severity: WARNING.
     """
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT COUNT(*) FROM stg_productos WHERE run_id = %s",
-            (run_id,),
-        )
-        current = cur.fetchone()[0]
+        current = current_rows if current_rows is not None else _product_row_count(conn, run_id)
 
         cur.execute(
             """
@@ -559,20 +547,24 @@ def check_required_nulls(
 
     with conn.cursor() as cur:
         for table, required_cols in table_checks:
-            col_nulls: dict[str, int] = {}
-            for col in required_cols:
-                cur.execute(
-                    f"""
-                    SELECT COUNT(*)
-                      FROM {table}
-                     WHERE run_id = %s
-                       AND (TRIM({col}) = '' OR {col} IS NULL)
-                    """,
-                    (run_id,),
-                )
-                count = cur.fetchone()[0]
-                if count:
-                    col_nulls[col] = count
+            counts_sql = ", ".join(
+                f"COUNT(*) FILTER (WHERE TRIM({col}) = '' OR {col} IS NULL)"
+                for col in required_cols
+            )
+            cur.execute(
+                f"""
+                SELECT {counts_sql}
+                  FROM {table}
+                 WHERE run_id = %s
+                """,
+                (run_id,),
+            )
+            counts = cur.fetchone()
+            col_nulls = {
+                column: count
+                for column, count in zip(required_cols, counts, strict=True)
+                if count
+            }
             if col_nulls:
                 nulls_by_table[table] = col_nulls
 

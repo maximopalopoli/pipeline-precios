@@ -237,6 +237,30 @@ class TestLoadDimensions:
 
 
 class TestLoadDimensionProductoFromStaging:
+    def test_uses_transaction_local_work_mem(self, pg_conn, run_id):
+        with pg_conn.cursor() as cur:
+            cur.execute("SHOW work_mem")
+            default_work_mem = cur.fetchone()[0]
+            cur.execute(
+                """
+                INSERT INTO stg_productos (
+                    run_id, id_comercio, id_bandera, id_sucursal, id_producto,
+                    productos_ean, productos_descripcion
+                ) VALUES (%s, '1', '1', '10', 'internal-milk-1l', '0', 'Leche entera')
+                """,
+                (run_id,),
+            )
+
+        load_dim_produto_from_staging(pg_conn, run_id)
+        with pg_conn.cursor() as cur:
+            cur.execute("SHOW work_mem")
+            assert cur.fetchone()[0] == "128MB"
+
+        pg_conn.commit()
+        with pg_conn.cursor() as cur:
+            cur.execute("SHOW work_mem")
+            assert cur.fetchone()[0] == default_work_mem
+
     def test_scopes_internal_codes_and_shares_valid_eans(self, pg_conn, run_id):
         with pg_conn.cursor() as cur:
             cur.executemany(

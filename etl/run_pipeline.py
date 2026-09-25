@@ -338,12 +338,16 @@ def run(
         active_timer.start(chunk_size=fact_chunk_size)
 
         ingestion_lock = renew_ingestion_lock(conn, ingestion_lock)
+        pending_commit_every_chunks = int(
+            os.environ.get("SEPA_PENDING_FACT_COMMIT_EVERY_CHUNKS", "5")
+        )
         product_load = stream_pending_product_facts(
             conn,
             _db_connect,
             run_id=run_id,
             run_date=dl.fecha_datos,
             chunk_size=fact_chunk_size,
+            commit_every_chunks=pending_commit_every_chunks,
             heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
         )
         fact_load_elapsed_seconds = active_timer.finish(

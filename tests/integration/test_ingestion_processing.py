@@ -12,6 +12,19 @@ _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds"
 _RUN_DATE = date(2026, 3, 15)
 
 
+class _CommitTrackingConnection:
+    def __init__(self, connection):
+        self._connection = connection
+        self.commits = 0
+
+    def commit(self):
+        self.commits += 1
+        return self._connection.commit()
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
 def _create_run(conn) -> int:
     with conn.cursor() as cur:
         cur.execute(
@@ -80,6 +93,58 @@ def test_streaming_product_processing_loads_pending_facts_in_chunks(pg_conn, sam
     with pg_conn.cursor() as cur:
         cur.execute("SELECT rows_loaded FROM ingestion_runs WHERE id = %s", (run_id,))
         assert cur.fetchone()[0] == 7
+        cur.execute("SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == 7
+
+
+def test_streaming_product_processing_batches_pending_fact_commits(
+    pg_conn, sample_zip_path
+):
+    with pg_conn.cursor() as cur:
+        cur.execute((_SEEDS / "seed_provincias.sql").read_text())
+        cur.execute((_SEEDS / "seed_fechas.sql").read_text())
+    run_id = _create_run(pg_conn)
+    staging_loader.load(pg_conn, sample_zip_path, run_id)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO stg_productos
+            SELECT * FROM stg_productos
+            WHERE run_id = %s
+            LIMIT 1
+            """,
+            (run_id,),
+        )
+    load_staged_dimensions(pg_conn, run_id)
+    pg_conn.commit()
+
+    connections: list[_CommitTrackingConnection] = []
+
+    def connection_factory():
+        connection = _CommitTrackingConnection(
+            psycopg.connect(
+                host=pg_conn.info.host,
+                port=pg_conn.info.port,
+                user=pg_conn.info.user,
+                dbname=pg_conn.info.dbname,
+            )
+        )
+        connections.append(connection)
+        return connection
+
+    result = stream_pending_product_facts(
+        pg_conn,
+        connection_factory,
+        run_id=run_id,
+        run_date=_RUN_DATE,
+        chunk_size=2,
+        commit_every_chunks=3,
+    )
+
+    assert result.chunks == 4
+    assert result.rows_fact == 7
+    assert connections[1].commits == 2
+    with pg_conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM pending_fact_precios WHERE run_id = %s", (run_id,))
         assert cur.fetchone()[0] == 7
 
