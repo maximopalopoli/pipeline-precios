@@ -39,7 +39,11 @@ class RetentionPolicy:
         return self.raw_retention_days is not None
 
     def fact_cutoff(self, as_of: date) -> date | None:
-        """Return the oldest date to retain, or ``None`` when disabled."""
+        """Return the oldest date to retain, or ``None`` when disabled.
+
+        Facts dated before the cutoff are dropped by whole daily partition, so
+        ``as_of`` plus the previous ``fact_retention_days`` days stay online.
+        """
         if self.fact_retention_days is None:
             return None
         return as_of - timedelta(days=self.fact_retention_days)

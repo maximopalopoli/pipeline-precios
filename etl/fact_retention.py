@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 import structlog
 
@@ -13,7 +13,8 @@ from etl.retention_audit import record_retention_event
 
 log = structlog.get_logger(__name__)
 
-_PARTITION_NAME = re.compile(r"^fact_precios_(\d{4})(\d{2})$")
+_MONTHLY_PARTITION_NAME = re.compile(r"^fact_precios_(\d{4})(\d{2})$")
+_DAILY_PARTITION_NAME = re.compile(r"^fact_precios_(\d{4})(\d{2})(\d{2})$")
 
 
 @dataclass(frozen=True)
@@ -44,29 +45,41 @@ def apply_fact_retention(
 
 
 def find_expired_fact_partitions(conn, *, cutoff: date) -> tuple[str, ...]:
-    """Return whole monthly fact partitions ending on or before ``cutoff``.
+    """Return fact partitions whose whole range ends on or before ``cutoff``.
 
-    A partially overlapping month is deliberately retained.  Dropping only
-    whole child tables makes the operation fast and recoverable from the
-    original ZIPs, without issuing a large row-by-row delete or a VACUUM.
+    Daily leaves dated before ``cutoff`` come first, then monthly parents that
+    are entirely expired, so dropping in order never targets a missing table.
+    A monthly parent that still holds a retained day is kept.  Dropping whole
+    tables is fast and recoverable from the original ZIPs, without a large
+    row-by-row delete or a VACUUM.
     """
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT child.relname
-            FROM pg_inherits inheritance
-            JOIN pg_class parent ON parent.oid = inheritance.inhparent
-            JOIN pg_class child ON child.oid = inheritance.inhrelid
-            JOIN pg_namespace namespace ON namespace.oid = child.relnamespace
+            SELECT monthly.relname, daily.relname
+            FROM pg_inherits monthly_link
+            JOIN pg_class parent ON parent.oid = monthly_link.inhparent
+            JOIN pg_class monthly ON monthly.oid = monthly_link.inhrelid
+            JOIN pg_namespace namespace ON namespace.oid = monthly.relnamespace
+            LEFT JOIN pg_inherits daily_link ON daily_link.inhparent = monthly.oid
+            LEFT JOIN pg_class daily
+              ON daily.oid = daily_link.inhrelid
+             AND daily.relname ~ '^fact_precios_[0-9]{8}$'
             WHERE parent.relname = 'fact_precios'
               AND namespace.nspname = 'public'
-              AND child.relname ~ '^fact_precios_[0-9]{6}$'
-            ORDER BY child.relname
+              AND monthly.relname ~ '^fact_precios_[0-9]{6}$'
+            ORDER BY monthly.relname, daily.relname
             """
         )
-        names = [row[0] for row in cur.fetchall()]
+        rows = cur.fetchall()
 
-    return tuple(name for name in names if _partition_end(name) <= cutoff)
+    monthly_names = sorted({monthly for monthly, _ in rows})
+    daily_names = sorted(daily for _, daily in rows if daily is not None)
+    expired_days = [name for name in daily_names if _daily_partition_end(name) <= cutoff]
+    expired_months = [
+        name for name in monthly_names if _monthly_partition_end(name) <= cutoff
+    ]
+    return tuple(expired_days + expired_months)
 
 
 def purge_expired_fact_partitions(
@@ -75,7 +88,7 @@ def purge_expired_fact_partitions(
     cutoff: date,
     dry_run: bool = True,
 ) -> FactRetentionResult:
-    """Optionally drop expired whole-month partitions selected by ``cutoff``.
+    """Optionally drop the expired daily and monthly partitions before ``cutoff``.
 
     ``dry_run`` defaults to true so callers must explicitly opt into a
     destructive operation.  The caller owns the transaction and must commit
@@ -89,7 +102,10 @@ def purge_expired_fact_partitions(
         for partition in partitions:
             # Names come from PostgreSQL's catalog and are checked again before
             # being interpolated as identifiers.
-            if _PARTITION_NAME.fullmatch(partition) is None:
+            if (
+                _DAILY_PARTITION_NAME.fullmatch(partition) is None
+                and _MONTHLY_PARTITION_NAME.fullmatch(partition) is None
+            ):
                 raise ValueError(f"Unexpected fact partition name: {partition}")
             cur.execute(f"DROP TABLE {partition}")
 
@@ -104,8 +120,19 @@ def purge_expired_fact_partitions(
     return result
 
 
-def _partition_end(partition: str) -> date:
-    match = _PARTITION_NAME.fullmatch(partition)
+def _daily_partition_end(partition: str) -> date:
+    match = _DAILY_PARTITION_NAME.fullmatch(partition)
+    if match is None:
+        raise ValueError(f"Unexpected fact partition name: {partition}")
+    year, month, day = (int(value) for value in match.groups())
+    try:
+        return date(year, month, day) + timedelta(days=1)
+    except ValueError as exc:
+        raise ValueError(f"Unexpected fact partition day: {partition}") from exc
+
+
+def _monthly_partition_end(partition: str) -> date:
+    match = _MONTHLY_PARTITION_NAME.fullmatch(partition)
     if match is None:
         raise ValueError(f"Unexpected fact partition name: {partition}")
     year, month = (int(value) for value in match.groups())
