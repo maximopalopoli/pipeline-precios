@@ -69,7 +69,7 @@ def test_only_completed_unarchived_files_are_candidates(pg_conn):
     assert [raw.id for raw in candidates] == [earlier, later]
     assert candidates[0].sha256 == "earlier"
     assert candidates[0].size_bytes == 10
-    assert candidates[0].fecha_datos == date(2026, 1, 1)
+    assert candidates[0].declared_date == date(2026, 1, 1)
 
 
 def test_marking_a_file_archived_removes_it_from_candidates(pg_conn):

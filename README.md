@@ -329,16 +329,19 @@ an `archive` folder inside the raw directory):
 archive/2026/09/2026-09-25_<sha256>.zip
 ```
 
-The key comes from the declared date and the content hash, never from the
-source file name. A copy is a hard link when both folders share a file system,
+The key comes from the date declared inside the ZIP, as validated by its
+completed run, and the content hash, never from the source file name or an
+earlier mistaken requested date. A copy is a hard link when both folders share a file system,
 so archiving costs no extra space; on another disk the bytes are copied. The
 copy is checked against the registered SHA-256 and size before it is recorded in
 `raw_files.archive_key` and `raw_files.archived_at`. A failed or missing copy is
 logged, never fails the publication, and is retried by the next run.
 
 `SEPA_RAW_RETENTION_DAYS` deletes a local ZIP only when its archived copy is
-recorded and still present with the registered size. The archive folder is the
-historical backup: point `SEPA_ARCHIVE_DIR` at another disk, or sync it off the
+recorded and still present with the registered size. With the default archive
+on the same disk the archived hard link keeps the bytes, so this retention frees
+no space; it only reclaims space when `SEPA_ARCHIVE_DIR` is on another disk. The
+archive folder is the historical backup: point `SEPA_ARCHIVE_DIR` at another disk, or sync it off the
 server, if the history must survive a disk failure.
 
 To re-ingest a day from the archive, for example after fact retention dropped
@@ -354,7 +357,8 @@ already completed. With no registry row, as after rebuilding the database, it
 searches the archive folder by date and asks for `--zip-path` if several
 versions exist. Fact retention drops a restored day again once it falls outside
 `SEPA_FACT_RETENTION_DAYS`. A ZIP replayed with `--zip-path` from outside the raw
-directory is not archived.
+directory is not archived. A restore always publishes, so it fails if
+`SEPA_DEV_CHAIN_KEYS` or `SEPA_DEV_MAX_PRODUCT_ROWS` is set.
 
 ### Ingestion results and failures
 
@@ -576,7 +580,7 @@ All variables have development defaults. Set them in `.env` (see
 | `SEPA_PENDING_FACT_COMMIT_EVERY_CHUNKS` | Pending-fact chunks written per commit (default 5) |
 | `SEPA_FACT_RETENTION_DAYS` | Opt-in; keeps the ingested date plus the previous N days of facts and drops older daily partitions and their daily aggregates. Use at least 7 while the weekly KPI, Variaciones and Evolución views exist; the first run on a long history deletes old aggregates in one transaction. Off when unset |
 | `SEPA_STAGING_RETENTION_DAYS` | Opt-in; removes staging rows of terminal runs older than N days. Off when unset |
-| `SEPA_RAW_RETENTION_DAYS` | Opt-in; removes local ZIPs older than N days only when a verified archived copy exists. Off when unset |
+| `SEPA_RAW_RETENTION_DAYS` | Opt-in; removes local ZIPs older than N days only when a verified archived copy exists. Frees space only when the archive is on another disk. Off when unset |
 | `SEPA_ARCHIVE_DIR` | Source ZIP archive folder (default: `archive` inside the raw directory) |
 | `SEPA_DEV_CHAIN_KEYS`, `SEPA_DEV_MAX_PRODUCT_ROWS` | Bounded development ingestion (see above) |
 

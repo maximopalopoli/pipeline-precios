@@ -8,6 +8,7 @@ import psycopg
 import pytest
 
 import etl.run_pipeline as cli_pipeline
+from etl.development_ingestion import DevelopmentIngestionPolicy
 from etl.raw_archive import archive_key_for, find_archived_zip, register_archived_zip
 
 _RUN_DATE = date(2026, 3, 17)
@@ -69,6 +70,36 @@ def test_a_day_removed_locally_is_reingested_from_the_archive(
         assert cur.fetchone()[0] == 2
         cur.execute("SELECT COUNT(*) FROM raw_files")
         assert cur.fetchone()[0] == 1
+
+
+def test_a_zip_first_requested_for_a_wrong_date_is_archived_by_its_declared_date(
+    pg_conn, sample_zip_path, tmp_path, cli
+):
+    local_zip = tmp_path / "sepa_lunes.zip"
+    shutil.copyfile(sample_zip_path, local_zip)
+    with pytest.raises(ValueError, match="does not match logical ingestion date"):
+        cli.run(fecha=date(2026, 3, 16), raw_dir=tmp_path, source_archive=local_zip)
+    cli.run(fecha=_RUN_DATE, raw_dir=tmp_path, source_archive=local_zip)
+    local_zip.unlink()
+
+    restored = cli.run(fecha=_RUN_DATE, raw_dir=tmp_path, from_archive=True)
+
+    assert restored.rows_loaded == 7
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT fecha_datos, archive_key FROM raw_files")
+        fecha_datos, archive_key = cur.fetchone()
+    assert fecha_datos == date(2026, 3, 16)
+    assert archive_key.startswith("2026/03/2026-03-17_")
+
+
+def test_a_restore_refuses_a_partial_development_run(tmp_path, cli):
+    with pytest.raises(ValueError, match="must publish"):
+        cli.run(
+            fecha=_RUN_DATE,
+            raw_dir=tmp_path,
+            from_archive=True,
+            development_policy=DevelopmentIngestionPolicy(max_product_rows=5),
+        )
 
 
 def test_a_rebuilt_database_finds_the_zip_in_the_archive_folder(

@@ -179,6 +179,11 @@ def run(
         raise ValueError("fecha is required when restoring from the archive")
     if from_archive and source_archive is not None:
         raise ValueError("from_archive and source_archive are mutually exclusive")
+    if from_archive and development_policy.enabled:
+        raise ValueError(
+            "A restore from the archive must publish; unset SEPA_DEV_CHAIN_KEYS "
+            "and SEPA_DEV_MAX_PRODUCT_ROWS"
+        )
     fecha = resolve_ingestion_date(fecha)
 
     conn = _db_connect()

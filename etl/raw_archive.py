@@ -30,7 +30,7 @@ class UnarchivedRawFile:
     filename: str
     sha256: str
     size_bytes: int
-    fecha_datos: date
+    declared_date: date
 
 
 @dataclass(frozen=True)
@@ -51,17 +51,34 @@ def archive_dir_from_environment(
     return Path(configured) if configured else raw_dir / "archive"
 
 
-def archive_key_for(fecha_datos: date, sha256: str) -> str:
+def archive_key_for(declared_date: date, sha256: str) -> str:
     """Return the immutable archive location of one source ZIP version."""
-    return f"{fecha_datos:%Y/%m}/{fecha_datos.isoformat()}_{sha256}.zip"
+    return f"{declared_date:%Y/%m}/{declared_date.isoformat()}_{sha256}.zip"
 
 
 def find_unarchived_raw_files(conn) -> tuple[UnarchivedRawFile, ...]:
-    """Return raw ZIPs whose latest ingestion completed and are not archived."""
+    """Return raw ZIPs whose latest ingestion completed and are not archived.
+
+    The date of each file is the one declared inside the ZIP and validated by
+    its latest completed run.  ``raw_files.fecha_datos`` keeps the date of the
+    first registration of that hash, which can be a wrong requested date.
+    """
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT raw.id, raw.filename, raw.sha256, raw.size_bytes, raw.fecha_datos
+            SELECT raw.id, raw.filename, raw.sha256, raw.size_bytes,
+                   COALESCE(
+                       (
+                           SELECT run.fecha_fuente
+                           FROM ingestion_runs run
+                           WHERE run.raw_file_id = raw.id
+                             AND run.status = 'completed'
+                             AND run.fecha_fuente IS NOT NULL
+                           ORDER BY run.started_at DESC, run.id DESC
+                           LIMIT 1
+                       ),
+                       raw.fecha_datos
+                   ) AS declared_date
             FROM raw_files raw
             WHERE raw.archived_at IS NULL
               AND (
@@ -71,7 +88,7 @@ def find_unarchived_raw_files(conn) -> tuple[UnarchivedRawFile, ...]:
                   ORDER BY latest.started_at DESC, latest.id DESC
                   LIMIT 1
               ) = 'completed'
-            ORDER BY raw.fecha_datos, raw.id
+            ORDER BY declared_date, raw.id
             """
         )
         return tuple(UnarchivedRawFile(*row) for row in cur.fetchall())
@@ -103,7 +120,7 @@ def archive_raw_file(
     copy is verified against the registered hash and size before it becomes
     visible under its final key, and an existing copy is verified, not replaced.
     """
-    key = archive_key_for(raw.fecha_datos, raw.sha256)
+    key = archive_key_for(raw.declared_date, raw.sha256)
     destination = archive_dir / key
     if destination.exists():
         _verify(destination, raw)
@@ -113,6 +130,8 @@ def archive_raw_file(
     if source.name != raw.filename:
         raise ValueError(f"Raw filename is not a plain basename: {raw.filename}")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # Two runs archiving the same backlog at once can share this temporary
+    # name; the loser fails verification or the rename and is retried later.
     temp = destination.with_name(f"{destination.name}.part")
     temp.unlink(missing_ok=True)
     try:
@@ -171,17 +190,19 @@ def _verify(path: Path, raw: UnarchivedRawFile) -> None:
 def find_archived_zip(conn, *, archive_dir: Path, fecha: date) -> Path:
     """Return the archived source ZIP to re-ingest for ``fecha``.
 
-    The registry picks the archived version whose full publication finished
-    last, so a rectified file wins over the early one.  Without a registry row,
-    for example after rebuilding the database, the archive folder is searched
-    by declared date; several versions of that date are ambiguous.
+    Archive keys start with the declared date, so both the registry and the
+    folder are searched by it.  The registry picks the archived version whose
+    full publication finished last, so a rectified file wins over the early
+    one.  Without a registry row, for example after rebuilding the database,
+    the folder is searched; several versions of that date are ambiguous.
     """
+    prefix = archive_key_for(fecha, "")[: -len(".zip")]
     with conn.cursor() as cur:
         cur.execute(
             """
             SELECT raw.archive_key
             FROM raw_files raw
-            WHERE raw.fecha_datos = %s
+            WHERE starts_with(raw.archive_key, %s)
               AND raw.archived_at IS NOT NULL
             ORDER BY (
                 SELECT MAX(run.finished_at)
@@ -192,7 +213,7 @@ def find_archived_zip(conn, *, archive_dir: Path, fecha: date) -> Path:
             ) DESC NULLS LAST, raw.id DESC
             LIMIT 1
             """,
-            (fecha,),
+            (prefix,),
         )
         row = cur.fetchone()
     if row is not None:
@@ -201,7 +222,7 @@ def find_archived_zip(conn, *, archive_dir: Path, fecha: date) -> Path:
             raise FileNotFoundError(f"Archived copy is missing: {path}")
         return path
 
-    candidates = sorted(archive_dir.glob(f"{fecha:%Y/%m}/{fecha.isoformat()}_*.zip"))
+    candidates = sorted(archive_dir.glob(f"{prefix}*.zip"))
     if not candidates:
         raise FileNotFoundError(f"No archived source ZIP for {fecha} in {archive_dir}")
     if len(candidates) > 1:
