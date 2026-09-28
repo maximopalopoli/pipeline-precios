@@ -119,7 +119,7 @@ def test_dry_run_never_drops_the_selected_partitions(pg_conn):
     )
 
     assert result.partitions == ("fact_precios_20250101", "fact_precios_202501")
-    assert result.dropped is False
+    assert result.partitions_dropped is False
     assert _exists(pg_conn, "fact_precios_202501")
     assert _exists(pg_conn, "fact_precios_20250101")
 
@@ -133,7 +133,7 @@ def test_explicit_non_dry_run_drops_only_expired_whole_partitions(pg_conn):
     pg_conn.commit()
 
     assert result.partitions == ("fact_precios_20250101", "fact_precios_202501")
-    assert result.dropped is True
+    assert result.partitions_dropped is True
     assert not _exists(pg_conn, "fact_precios_202501")
     assert not _exists(pg_conn, "fact_precios_20250101")
     assert _exists(pg_conn, "fact_precios_202502")
@@ -237,3 +237,43 @@ def test_retention_keeps_facts_and_aggregates_for_the_same_days(pg_conn):
         assert [row[0] for row in cur.fetchall()] == retained
         cur.execute("SELECT MAX(fecha_id) FROM agg_precios_diarios")
         assert cur.fetchone()[0] == 20250324
+
+
+def test_dry_run_never_deletes_expired_aggregates(pg_conn):
+    latest = date(2025, 3, 24)
+    _publish_days(pg_conn, latest - timedelta(days=5), latest)
+
+    result = purge_expired_fact_partitions(
+        pg_conn, cutoff=date(2025, 3, 21), dry_run=True
+    )
+
+    assert result.partitions == ("fact_precios_20250319",)
+    assert result.aggregate_rows_deleted == 0
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT fecha_id FROM agg_precios_diarios ORDER BY fecha_id")
+        assert [row[0] for row in cur.fetchall()] == [20250319, 20250324]
+
+
+def test_expired_aggregates_without_partitions_are_deleted_and_audited(pg_conn):
+    latest = date(2025, 3, 24)
+    _publish_days(pg_conn, latest - timedelta(days=5), latest)
+    # Simulate aggregates left behind by an earlier month-level retention.
+    with pg_conn.cursor() as cur:
+        cur.execute("DROP TABLE fact_precios_20250319")
+    pg_conn.commit()
+
+    result = apply_fact_retention(
+        pg_conn,
+        policy=RetentionPolicy(fact_retention_days=3),
+        fecha_datos=latest,
+    )
+
+    assert result is not None
+    assert result.partitions == ()
+    assert result.partitions_dropped is False
+    assert result.aggregate_rows_deleted == 1
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT DISTINCT fecha_id FROM agg_precios_diarios")
+        assert [row[0] for row in cur.fetchall()] == [20250324]
+        cur.execute("SELECT kind, cutoff, targets FROM retention_events")
+        assert cur.fetchall() == [("fact_partitions", date(2025, 3, 21), [])]

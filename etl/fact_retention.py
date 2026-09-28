@@ -19,10 +19,14 @@ _DAILY_PARTITION_NAME = re.compile(r"^fact_precios_(\d{4})(\d{2})(\d{2})$")
 
 @dataclass(frozen=True)
 class FactRetentionResult:
-    """Partitions selected for retention and whether they were dropped."""
+    """Partitions selected for retention and what was actually deleted.
+
+    ``partitions_dropped`` is false for a dry run or when no partition expired;
+    expired daily aggregates can still be deleted in the latter case.
+    """
 
     partitions: tuple[str, ...]
-    dropped: bool
+    partitions_dropped: bool
     aggregate_rows_deleted: int = 0
 
 
@@ -69,7 +73,6 @@ def find_expired_fact_partitions(conn, *, cutoff: date) -> tuple[str, ...]:
             WHERE parent.relname = 'fact_precios'
               AND namespace.nspname = 'public'
               AND monthly.relname ~ '^fact_precios_[0-9]{6}$'
-            ORDER BY monthly.relname, daily.relname
             """
         )
         rows = cur.fetchall()
@@ -98,15 +101,11 @@ def purge_expired_fact_partitions(
     """
     partitions = find_expired_fact_partitions(conn, cutoff=cutoff)
     if dry_run:
-        return FactRetentionResult(partitions=partitions, dropped=False)
+        return FactRetentionResult(partitions=partitions, partitions_dropped=False)
 
     aggregate_rows_deleted = _delete_expired_aggregates(conn, cutoff=cutoff)
-    if not partitions:
-        return FactRetentionResult(
-            partitions=partitions,
-            dropped=False,
-            aggregate_rows_deleted=aggregate_rows_deleted,
-        )
+    if not partitions and not aggregate_rows_deleted:
+        return FactRetentionResult(partitions=partitions, partitions_dropped=False)
 
     with conn.cursor() as cur:
         for partition in partitions:
@@ -127,10 +126,10 @@ def purge_expired_fact_partitions(
     )
     result = FactRetentionResult(
         partitions=partitions,
-        dropped=True,
+        partitions_dropped=bool(partitions),
         aggregate_rows_deleted=aggregate_rows_deleted,
     )
-    log.info("retention.fact_partitions_dropped", cutoff=str(cutoff), **result.__dict__)
+    log.info("retention.fact_data_deleted", cutoff=str(cutoff), **result.__dict__)
     return result
 
 
