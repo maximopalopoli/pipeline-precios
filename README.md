@@ -1,12 +1,21 @@
-# SEPA Precios — Data Pipeline
+# SEPA Precios
 
-ETL pipeline that ingests, validates, transforms, and warehouses daily retail price data from
+A shopping-list price comparator for nearby supermarkets in AMBA (CABA and
+Greater Buenos Aires), built on the daily retail price data from
 [Argentina's SEPA price transparency system](https://datos.produccion.gob.ar/dataset/sepa-precios),
 published by the Secretaría de Comercio Interior.
 
-The dataset contains prices observed at the **store × product × day** level, reported
-by retail chains under Resolución 678/2020. Each day publishes ~12 million
-price observations across ~18 commercial chains.
+The source reports prices at the **product × store × day** level under
+Resolución 678/2020: about 12–15 million observations per day from roughly 20
+chains. The product goals are:
+
+- **Unambiguous products.** Every offer maps to one product identity, so the
+  user compares the same item across chains without guessing.
+- **Visible freshness.** Every price shows the date it was reported.
+- **Nearby and focused.** AMBA only for now; about half of the national rows.
+
+This repository holds the ETL pipeline that ingests, validates and publishes
+that data, plus the API and web client that serve it.
 
 ## Architecture
 
@@ -63,15 +72,22 @@ Daily ZIP (~300 MB)
 pipeline-precios/
 ├── etl/
 │   ├── extract/downloader.py         # ZIP download + SHA-256 hash
+│   ├── source_archive.py             # Declared-date validation from inner ZIP names
+│   ├── ingestion_date.py             # Logical date in the Buenos Aires time zone
 │   ├── staging/loader.py             # Nested ZIP parsing → staging
 │   ├── quality/checks.py             # 8 critical checks + 7 warnings
 │   ├── quality/reporters.py          # Structured logging + persistence
 │   ├── transform/cleaner.py          # Type casting + normalization
+│   ├── transform/product_identity.py # EAN vs chain-scoped product identity
 │   ├── transform/dimension_resolver.py  # Surrogate key resolution (SCD Type 1)
 │   ├── transform/fact_builder.py     # Fact DataFrame construction
-│   ├── load/warehouse_loader.py      # Bulk COPY + upserts + auto-partitioning
+│   ├── load/warehouse_loader.py      # Bulk COPY + upserts + pending facts
+│   ├── load/publisher.py             # Atomic daily publication
 │   ├── load/aggregator.py            # Daily aggregate recalculation
-│   └── run_pipeline.py               # End-to-end orchestration
+│   ├── ingestion_run.py, ingestion_lock.py, reconciliation.py  # Run records, per-date lock, counts
+│   ├── development_ingestion.py      # Bounded partial development mode
+│   ├── *_retention.py                # Opt-in fact, staging and raw ZIP retention
+│   └── run_pipeline.py               # End-to-end orchestration (shared with Airflow)
 ├── models/
 │   ├── comercio.py                   # ComercioRecord (Pydantic v2)
 │   ├── sucursal.py                   # SucursalRecord
@@ -83,7 +99,7 @@ pipeline-precios/
 │   ├── unit/                         # focused module and lifecycle tests
 │   ├── integration/                  # database-backed ETL, publication and entrypoint tests
 │   └── fixtures/sample.zip           # Sample ZIP (2 chains, 7 products)
-├── scripts/benchmark_queries.py      # Benchmark: agg vs direct fact queries
+├── scripts/                          # Baseline, benchmark and regression-check commands
 ├── dags/dag_sepa_ingest.py           # Airflow DAG (7 tasks, dual daily schedule)
 ├── api/                              # FastAPI backend (REST endpoints, asyncpg)
 ├── web/                              # React frontend (Vite + TypeScript + Tailwind)
@@ -95,8 +111,9 @@ pipeline-precios/
 
 ## SEPA Dataset
 
-The government portal publishes one ZIP per weekday (~300 MB each). The ZIP for each day
-is overwritten weekly — there is no historical archive.
+The government portal publishes one ZIP per weekday (~300 MB each) at a fixed
+URL. Each URL is overwritten weekly — there is no historical archive, so keep
+local copies if you need to replay a day.
 
 ### ZIP Structure
 
@@ -104,18 +121,34 @@ is overwritten weekly — there is no historical archive.
 sepa_martes.zip
 └── 2026-03-17/
     ├── sepa_1_comercio-sepa-8_2026-03-17_09-05-11.zip
-    │   ├── comercio.csv      (~1 row)
-    │   ├── sucursales.csv    (~10-1000 rows)
-    │   └── productos.csv     (~1K-5M rows)
-    └── ... (18 chains)
+    │   ├── comercio.csv      (one row per banner)
+    │   ├── sucursales.csv    (one row per store)
+    │   └── productos.csv     (one row per product per store)
+    └── ... (one inner ZIP per chain delivery)
 ```
 
 - **Delimiter:** pipe `|`
 - **Encoding:** UTF-8
 - **Prices:** dot `.` as decimal separator
-- **Trailer:** each CSV ends with `Ultima actualizacion: YYYY-MM-DDTHH:MM:SS-03:00` (discarded during parsing)
+- **Trailer:** each CSV ends with a `&#032;` line and
+  `Última actualización:YYYY-MM-DDTHH:MM:SS-03:00` (discarded during parsing)
 
-See [sepa_datasets.md](sepa_datasets.md) for the full schema of each CSV.
+Data rules the pipeline relies on:
+
+- **Trust the date inside the archive.** The date folder and inner ZIP names
+  must match the logical date; a mismatch aborts the run. Local file names are
+  not evidence.
+- **Product identity.** A product is `ean:<id>` only when the source flags it as
+  an EAN and it passes the EAN-8/13 checksum; otherwise it is scoped to its
+  chain. Products are never merged by name similarity.
+- **Store identity.** `id_sucursal` is unique only within a chain.
+- **Prices.** The list price must be > 0; a promotion counts only when it is
+  > 0 and lower than the list price. Bank and wallet discounts are not published.
+- **Completeness varies.** Whole chains can be missing on a given day, and an
+  inner ZIP can be malformed (it is skipped and counted). A chain absent from
+  one file has not closed its stores.
+- **Not only supermarkets.** SEPA also includes pharmacies and gas-station
+  shops.
 
 ## Requirements
 
@@ -134,7 +167,7 @@ make ingest-bounded DATE=2026-03-17 DEV_CHAIN_KEYS=1:1 DEV_MAX_PRODUCT_ROWS=5000
 make dev                  # start DB + API + frontend for local development
 ```
 
-That's it. The dashboard will be at http://localhost:5173 and the API at http://localhost:8000.
+That's it. The web app will be at http://localhost:5173 and the API at http://localhost:8000.
 
 The checked-in development defaults are sufficient for a local run. To use
 different database or Airflow credentials, copy `.env.example` to `.env` and
@@ -394,6 +427,10 @@ All variables have development defaults. Set them in `.env` (see
 | `AIRFLOW_ADMIN_USER` | Airflow web UI username |
 | `AIRFLOW_ADMIN_PASSWORD` | Airflow web UI password |
 | `AIRFLOW_SECRET_KEY` | Airflow secret key |
+| `SEPA_FACT_CHUNK_SIZE` | Staged product rows per fact batch (default 300000) |
+| `SEPA_PENDING_FACT_COMMIT_EVERY_CHUNKS` | Pending-fact chunks written per commit (default 5) |
+| `SEPA_FACT_RETENTION_DAYS`, `SEPA_STAGING_RETENTION_DAYS`, `SEPA_RAW_RETENTION_DAYS` | Opt-in retention windows; off when unset |
+| `SEPA_DEV_CHAIN_KEYS`, `SEPA_DEV_MAX_PRODUCT_ROWS` | Bounded development ingestion (see above) |
 
 ### Airflow
 
@@ -403,9 +440,14 @@ to capture government rectifications). Its tasks run download → duplicate chec
 If a task fails after opening an ingestion run, the DAG records the terminal
 failure before Airflow retries or marks the task as failed.
 
-### Dashboard
+### Web app
 
-6 screens: Home (KPIs + overview), Buscador (price finder with map), Evolución (price history charts), Variaciones (top price changes), Ofertas (daily promotions), Locales (nearby store locator). Built with React + TypeScript, Recharts for charts, React-Leaflet for maps, TanStack Table/Query for data.
+Pages: Home, Buscador (price finder with map), BuscadorEAN (lookup by barcode),
+Lista (shopping list), Ofertas (daily promotions), Locales (nearby store
+locator), Evolución and Variaciones. The last two, along with the KPIs on Home,
+are analytics views being retired: detailed price history is out of scope for
+the comparator. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
+TanStack Table/Query for data.
 
 ## Technical Decisions
 
@@ -418,21 +460,17 @@ failure before Airflow retries or marks the task as failed.
 
 ## Project Status
 
-| Stage | Status |
-|-------|--------|
-| 1. Data Exploration | Done |
-| 2. Docker Infrastructure | Done |
-| 3. ETL Core | Done |
-| 4. Aggregations | Done |
-| 5. Airflow Orchestration | Done |
-| 6. Dashboard (React + FastAPI) | ~95% |
-| 7. Testing & Quality | ~95% |
-
-See [ROADMAP.md](ROADMAP.md) for the detailed plan.
+| Area | Status |
+|------|--------|
+| Ingestion (download, staging, quality, atomic publication, reconciliation) | Done |
+| Airflow orchestration and bounded development mode | Done |
+| Source measurements (price change rate, AMBA share, coverage) | Done |
+| Storage: current snapshot in PostgreSQL, history in archived ZIPs | Next |
+| AMBA scope, carry-forward of missing chains, price date on every offer | Next |
+| Canonical product catalog and shopping-list comparison UI | Planned |
+| Promotions and discounts beyond SEPA's list/promo prices | Later |
 
 ## References
 
 - [SEPA Dataset](https://datos.produccion.gob.ar/dataset/sepa-precios) — Open data portal
 - Resolución 678/2020, Anexo II — Official format specification
-- [sepa-pipeline-spec.md](sepa-pipeline-spec.md) — Full technical specification
-- [sepa_datasets.md](sepa_datasets.md) — Detailed schema for all 3 CSVs
