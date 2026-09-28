@@ -481,6 +481,10 @@ def publish_daily_snapshot(**kwargs):
     from etl.ingestion_lock import release_ingestion_lock
     from etl.ingestion_run import is_partial_run
     from etl.load.publisher import complete_partial_run, publish_pending_facts
+    from etl.raw_archive import (
+        archive_completed_raw_files,
+        archive_dir_from_environment,
+    )
     from etl.raw_retention import apply_raw_retention
     from etl.retention_policy import from_environment
     from etl.staging_retention import apply_staging_retention
@@ -550,6 +554,20 @@ def publish_daily_snapshot(**kwargs):
             )
             release_ingestion_lock(conn, _lock_from_xcom(ti))
             return
+        raw_dir = Path(Variable.get("sepa_raw_dir", default_var="/opt/airflow/data"))
+        try:
+            archive_result = archive_completed_raw_files(
+                conn,
+                raw_dir=raw_dir,
+                archive_dir=archive_dir_from_environment(raw_dir),
+            )
+            log.info(
+                "airflow.raw_archive.completed", run_id=run_id, **archive_result.__dict__
+            )
+        except Exception:
+            # Archiving is retried by the next run; it must not fail publication.
+            conn.rollback()
+            log.exception("airflow.raw_archive.failed", run_id=run_id)
         retention_policy = None
         try:
             retention_policy = from_environment()
@@ -590,9 +608,7 @@ def publish_daily_snapshot(**kwargs):
             try:
                 raw_retention_result = apply_raw_retention(
                     conn,
-                    raw_dir=Path(
-                        Variable.get("sepa_raw_dir", default_var="/opt/airflow/data")
-                    ),
+                    raw_dir=raw_dir,
                     policy=retention_policy,
                     fecha_datos=fecha,
                 )

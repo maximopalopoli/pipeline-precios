@@ -175,7 +175,7 @@ def register_local_archive(
     if not path.is_file():
         raise FileNotFoundError(f"Local source archive does not exist: {path}")
 
-    sha256, size_bytes = _hash_file(path)
+    sha256, size_bytes = hash_file(path)
     filename = path.name
     logger = log.bind(
         fecha=fecha.isoformat(),
@@ -263,7 +263,7 @@ def _stream_download(url: str, raw_dir: Path) -> DownloadPayload:
         raise
 
 
-def _hash_file(path: Path) -> tuple[str, int]:
+def hash_file(path: Path) -> tuple[str, int]:
     """Return a file's SHA-256 and byte size without loading it into memory."""
     digest = hashlib.sha256()
     size_bytes = 0

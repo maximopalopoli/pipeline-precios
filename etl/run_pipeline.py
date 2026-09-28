@@ -72,6 +72,7 @@ from etl.load.publisher import complete_partial_run, publish_pending_facts
 from etl.performance import StageTimer, items_per_second, process_max_rss_bytes
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
+from etl.raw_archive import archive_completed_raw_files, archive_dir_from_environment
 from etl.raw_retention import apply_raw_retention
 from etl.retention_policy import from_environment
 from etl.staging_retention import apply_staging_retention
@@ -433,6 +434,17 @@ def run(
                 retention_skipped=True,
             )
             return IngestionResult.completed(product_load.rows_fact, run_id=run_id)
+        try:
+            archive_result = archive_completed_raw_files(
+                conn,
+                raw_dir=raw_dir,
+                archive_dir=archive_dir_from_environment(raw_dir),
+            )
+            logger.info("pipeline.raw_archive.completed", **archive_result.__dict__)
+        except Exception:
+            # Archiving is retried by the next run; it must not fail publication.
+            conn.rollback()
+            logger.exception("pipeline.raw_archive.failed")
         try:
             retention_result = apply_fact_retention(
                 conn,
