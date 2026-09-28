@@ -174,6 +174,7 @@ class TestCleanProductos:
         r = clean_productos(_df(_producto(productos_ean="2")))
         assert len(r.rejected) == 1
         assert "productos_ean" in r.rejected[0]["reason"]
+        assert r.rejected[0]["code"] == "productos_ean_invalid"
 
     def test_tiene_promo_true_when_promo1_set(self):
         r = clean_productos(_df(_producto(productos_precio_unitario_promo1="200.00")))
@@ -208,6 +209,7 @@ class TestCleanProductos:
     def test_zero_precio_lista_rejected(self):
         r = clean_productos(_df(_producto(productos_precio_lista="0")))
         assert len(r.rejected) == 1
+        assert r.rejected[0]["code"] == "productos_precio_lista_not_positive"
 
     def test_negative_precio_referencia_rejected(self):
         r = clean_productos(_df(_producto(productos_precio_referencia="-5.00")))
@@ -217,6 +219,7 @@ class TestCleanProductos:
         r = clean_productos(_df(_producto(productos_precio_lista="N/A")))
         assert len(r.rejected) == 1
         assert "productos_precio_lista" in r.rejected[0]["reason"]
+        assert r.rejected[0]["code"] == "productos_precio_lista_not_decimal"
 
     def test_blank_promo_becomes_none(self):
         r = clean_productos(_df(_producto(productos_precio_unitario_promo1="")))

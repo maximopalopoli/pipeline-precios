@@ -8,8 +8,8 @@ Consumes the list[CheckResult] produced by checks.run_all() and:
   2. Emits a single summary event with aggregate counts.
   3. Optionally persists a compact text summary into
      ingestion_runs.error_message (non-empty only when there are failures).
-  4. Optionally inserts individual bad rows into rejected_rows so the
-     transform stage can skip them by joining on that table.
+  4. Optionally counts bad rows per reason in rejection_counts and keeps a
+     bounded sample of them in rejected_rows.
 
 Usage::
 
@@ -28,12 +28,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import structlog
 
 from etl.ingestion_run import mark_run_failed
 from etl.quality.checks import CheckResult, Severity
+from etl.rejection_counts import record_rejections, sample_rows_from_environment
 
 if TYPE_CHECKING:
     import psycopg2
@@ -78,8 +79,9 @@ def report(
     When *conn* is supplied:
       - Failed checks are written to ingestion_runs.error_message.
       - CRITICAL failures also set status='failed' and finished_at.
-      - Individual bad rows from failed WARNING checks are inserted into
-        rejected_rows and ingestion_runs.rows_rejected is updated.
+      - Bad rows from failed WARNING checks are counted per reason, a bounded
+        sample is kept in rejected_rows, and ingestion_runs.rows_rejected is
+        updated.
 
     Parameters
     ----------
@@ -235,24 +237,42 @@ _VALID_PROVINCIAS = (
     "AR-A", "AR-J", "AR-D", "AR-Z", "AR-S", "AR-G", "AR-V", "AR-T",
 )
 
-# Row tuple type: (run_id, source_file, raw_data, rejection_reason)
-_RejectedRow = tuple[int, str, str, str]
+
+@dataclass(frozen=True)
+class _RejectionQuery:
+    """Staging rows rejected for one stable reason code.
+
+    ``columns`` are joined with ``|`` as the sampled ``raw_data``; ``detail``
+    builds the detailed reason of one sampled row from them.
+    """
+
+    table: str
+    code: str
+    columns: tuple[str, ...]
+    condition: str
+    detail: Callable[[tuple], str]
+    params: tuple = ()
 
 
 def register_rejected_rows(
     conn: "psycopg2.connection",
     run_id: int,
     results: list[CheckResult],
+    *,
+    sample_rows: int | None = None,
 ) -> int:
     """
-    Insert individual bad staging rows into rejected_rows.
+    Count bad staging rows per reason and keep a bounded sample of them.
 
     Only processes failed WARNING checks — CRITICAL failures abort the
-    pipeline before rows are worth persisting.  Updates
-    ingestion_runs.rows_rejected with the total count.
+    pipeline before rows are worth recording.  Every bad row is counted in
+    rejection_counts, at most ``sample_rows`` per table and reason are stored
+    in rejected_rows, and ingestion_runs.rows_rejected gets the full total.
 
-    Returns the number of rows inserted.
+    Returns the number of rows counted.
     """
+    if sample_rows is None:
+        sample_rows = sample_rows_from_environment()
     handlers = {
         "positive_prices": _reject_positive_prices,
         "required_nulls":  _reject_required_nulls,
@@ -261,179 +281,149 @@ def register_rejected_rows(
         "provincia":       _reject_provincia,
     }
 
-    rows: list[_RejectedRow] = []
+    total = 0
     for result in results:
         if result.passed or result.severity != Severity.WARNING:
             continue
         handler = handlers.get(result.name)
         if handler is None:
             continue
-        rows.extend(handler(conn, run_id))
+        for query in handler():
+            total += _record_rejection_query(conn, run_id, query, sample_rows)
 
-    if not rows:
+    if total == 0:
         return 0
 
     with conn.cursor() as cur:
-        cur.executemany(
-            """
-            INSERT INTO rejected_rows (run_id, source_file, raw_data, rejection_reason)
-            VALUES (%s, %s, %s, %s)
-            """,
-            rows,
-        )
         cur.execute(
             "UPDATE ingestion_runs SET rows_rejected = %s WHERE id = %s",
-            (len(rows), run_id),
+            (total, run_id),
         )
     conn.commit()
-    log.info("quality.rejected_rows.registered", run_id=run_id, count=len(rows))
-    return len(rows)
+    log.info("quality.rejected_rows.registered", run_id=run_id, count=total)
+    return total
 
 
-def _reject_positive_prices(
+def _record_rejection_query(
     conn: "psycopg2.connection",
     run_id: int,
-) -> list[_RejectedRow]:
+    query: _RejectionQuery,
+    sample_rows: int,
+) -> int:
+    where = f"FROM {query.table} WHERE run_id = %s AND ({query.condition})"
+    params = (run_id, *query.params)
     with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id_comercio, id_bandera, id_sucursal, id_producto,
-                   productos_precio_lista
-              FROM stg_productos
-             WHERE run_id = %s
-               AND (
-                   productos_precio_lista = ''
-                   OR productos_precio_lista !~ '^[0-9]+(\\.[0-9]+)?$'
-                   OR productos_precio_lista::numeric <= 0
-               )
-            """,
-            (run_id,),
-        )
-        return [
-            (
-                run_id,
-                "stg_productos",
-                "|".join(str(v) for v in row),
-                f"precio_lista inválido: {row[4]!r}",
+        cur.execute(f"SELECT COUNT(*) {where}", params)
+        count = cur.fetchone()[0]
+        if count == 0:
+            return 0
+        rows: list[tuple] = []
+        if sample_rows > 0:
+            cur.execute(
+                f"SELECT {', '.join(query.columns)} {where} LIMIT %s",
+                (*params, sample_rows),
             )
-            for row in cur.fetchall()
-        ]
+            rows = cur.fetchall()
+    return record_rejections(
+        conn,
+        run_id=run_id,
+        source_file=query.table,
+        counts={query.code: count},
+        samples=(
+            (query.code, "|".join(str(v) for v in row), query.detail(row))
+            for row in rows
+        ),
+        sample_rows=sample_rows,
+    )
 
 
-def _reject_required_nulls(
-    conn: "psycopg2.connection",
-    run_id: int,
-) -> list[_RejectedRow]:
-    rows: list[_RejectedRow] = []
-    table_specs = [
-        ("stg_comercios",  _REQUIRED_COMERCIOS,  ["id_comercio", "id_bandera"]),
-        ("stg_sucursales", _REQUIRED_SUCURSALES, ["id_comercio", "id_bandera", "id_sucursal"]),
-        ("stg_productos",  _REQUIRED_PRODUCTOS,  ["id_comercio", "id_bandera", "id_sucursal", "id_producto"]),
+def _reject_positive_prices() -> list[_RejectionQuery]:
+    return [
+        _RejectionQuery(
+            table="stg_productos",
+            code="precio_lista_invalid",
+            columns=(
+                "id_comercio", "id_bandera", "id_sucursal", "id_producto",
+                "productos_precio_lista",
+            ),
+            condition="""
+                productos_precio_lista = ''
+                OR productos_precio_lista !~ '^[0-9]+(\\.[0-9]+)?$'
+                OR productos_precio_lista::numeric <= 0
+            """,
+            detail=lambda row: f"precio_lista inválido: {row[4]!r}",
+        )
     ]
-    with conn.cursor() as cur:
-        for table, required_cols, id_cols in table_specs:
-            for col in required_cols:
-                cur.execute(
-                    f"""
-                    SELECT {", ".join(id_cols)}, %s AS bad_col
-                      FROM {table}
-                     WHERE run_id = %s
-                       AND (TRIM({col}) = '' OR {col} IS NULL)
-                    """,
-                    (col, run_id),
+
+
+def _reject_required_nulls() -> list[_RejectionQuery]:
+    table_specs = [
+        ("stg_comercios",  _REQUIRED_COMERCIOS,  ("id_comercio", "id_bandera")),
+        ("stg_sucursales", _REQUIRED_SUCURSALES, ("id_comercio", "id_bandera", "id_sucursal")),
+        ("stg_productos",  _REQUIRED_PRODUCTOS,  ("id_comercio", "id_bandera", "id_sucursal", "id_producto")),
+    ]
+    return [
+        _RejectionQuery(
+            table=table,
+            code=f"{col}_empty",
+            columns=id_cols,
+            condition=f"TRIM({col}) = '' OR {col} IS NULL",
+            detail=lambda row, col=col: f"campo requerido vacío: {col}",
+        )
+        for table, required_cols, id_cols in table_specs
+        for col in required_cols
+    ]
+
+
+def _reject_coordinates_bbox() -> list[_RejectionQuery]:
+    return [
+        _RejectionQuery(
+            table="stg_sucursales",
+            code="coordinates_outside_argentina",
+            columns=(
+                "id_comercio", "id_bandera", "id_sucursal",
+                "sucursales_latitud", "sucursales_longitud",
+            ),
+            condition="""
+                sucursales_latitud  <> ''
+                AND sucursales_longitud <> ''
+                AND sucursales_latitud  ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                AND sucursales_longitud ~ '^-?[0-9]+(\\.[0-9]+)?$'
+                AND NOT (
+                    sucursales_latitud::numeric  BETWEEN %s AND %s
+                    AND sucursales_longitud::numeric BETWEEN %s AND %s
                 )
-                for row in cur.fetchall():
-                    id_part = "|".join(str(v) for v in row[:-1])
-                    bad_col = row[-1]
-                    rows.append((
-                        run_id,
-                        table,
-                        id_part,
-                        f"campo requerido vacío: {bad_col}",
-                    ))
-    return rows
-
-
-def _reject_coordinates_bbox(
-    conn: "psycopg2.connection",
-    run_id: int,
-) -> list[_RejectedRow]:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id_comercio, id_bandera, id_sucursal,
-                   sucursales_latitud, sucursales_longitud
-              FROM stg_sucursales
-             WHERE run_id = %s
-               AND sucursales_latitud  <> ''
-               AND sucursales_longitud <> ''
-               AND sucursales_latitud  ~ '^-?[0-9]+(\\.[0-9]+)?$'
-               AND sucursales_longitud ~ '^-?[0-9]+(\\.[0-9]+)?$'
-               AND NOT (
-                   sucursales_latitud::numeric  BETWEEN %s AND %s
-                   AND sucursales_longitud::numeric BETWEEN %s AND %s
-               )
             """,
-            (run_id, _ARG_LAT_MIN, _ARG_LAT_MAX, _ARG_LON_MIN, _ARG_LON_MAX),
+            params=(_ARG_LAT_MIN, _ARG_LAT_MAX, _ARG_LON_MIN, _ARG_LON_MAX),
+            detail=lambda row: (
+                "coordenadas fuera del bounding box de Argentina: "
+                f"lat={row[3]} lon={row[4]}"
+            ),
         )
-        return [
-            (
-                run_id,
-                "stg_sucursales",
-                "|".join(str(v) for v in row),
-                f"coordenadas fuera del bounding box de Argentina: lat={row[3]} lon={row[4]}",
-            )
-            for row in cur.fetchall()
-        ]
+    ]
 
 
-def _reject_tipo_sucursal(
-    conn: "psycopg2.connection",
-    run_id: int,
-) -> list[_RejectedRow]:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id_comercio, id_bandera, id_sucursal, sucursales_tipo
-              FROM stg_sucursales
-             WHERE run_id = %s
-               AND sucursales_tipo <> ''
-               AND sucursales_tipo != ALL(%s)
-            """,
-            (run_id, list(_VALID_TIPOS)),
+def _reject_tipo_sucursal() -> list[_RejectionQuery]:
+    return [
+        _RejectionQuery(
+            table="stg_sucursales",
+            code="sucursal_tipo_invalid",
+            columns=("id_comercio", "id_bandera", "id_sucursal", "sucursales_tipo"),
+            condition="sucursales_tipo <> '' AND sucursales_tipo != ALL(%s)",
+            params=(list(_VALID_TIPOS),),
+            detail=lambda row: f"tipo de sucursal inválido: {row[3]!r}",
         )
-        return [
-            (
-                run_id,
-                "stg_sucursales",
-                "|".join(str(v) for v in row),
-                f"tipo de sucursal inválido: {row[3]!r}",
-            )
-            for row in cur.fetchall()
-        ]
+    ]
 
 
-def _reject_provincia(
-    conn: "psycopg2.connection",
-    run_id: int,
-) -> list[_RejectedRow]:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT id_comercio, id_bandera, id_sucursal, sucursales_provincia
-              FROM stg_sucursales
-             WHERE run_id = %s
-               AND sucursales_provincia <> ''
-               AND sucursales_provincia != ALL(%s)
-            """,
-            (run_id, list(_VALID_PROVINCIAS)),
+def _reject_provincia() -> list[_RejectionQuery]:
+    return [
+        _RejectionQuery(
+            table="stg_sucursales",
+            code="provincia_invalid",
+            columns=("id_comercio", "id_bandera", "id_sucursal", "sucursales_provincia"),
+            condition="sucursales_provincia <> '' AND sucursales_provincia != ALL(%s)",
+            params=(list(_VALID_PROVINCIAS),),
+            detail=lambda row: f"provincia inválida: {row[3]!r}",
         )
-        return [
-            (
-                run_id,
-                "stg_sucursales",
-                "|".join(str(v) for v in row),
-                f"provincia inválida: {row[3]!r}",
-            )
-            for row in cur.fetchall()
-        ]
+    ]

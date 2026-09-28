@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 import json
-from typing import Iterable
 
 import structlog
+
+from etl.rejection_counts import record_rejections
 
 
 log = structlog.get_logger(__name__)
@@ -97,33 +99,32 @@ def record_product_rejections(
     *,
     run_id: int,
     source: str,
-    rejected: Iterable[dict],
+    rejected: list[dict],
+    sample_rows: int | None = None,
 ) -> int:
-    """Persist product-level rejections without retaining a full-run list.
+    """Count product-level rejections and keep a bounded sample of them.
 
     ``source`` identifies the processing step (for example ``clean_productos``
-    or ``fact_key_resolution``). Values are JSON-encoded with ``str`` fallback
-    because pandas and Decimal values may appear in the rejected row payload.
+    or ``fact_key_resolution``).  Each item carries a stable ``code``, counted
+    in full, and a detailed ``reason`` stored with the sampled row.  Values are
+    JSON-encoded with ``str`` fallback because pandas and Decimal values may
+    appear in the rejected row payload.
     """
-    rows = [
+    if not rejected:
+        return 0
+    samples = (
         (
-            run_id,
-            source,
+            item["code"],
             json.dumps(item["row"], default=str, sort_keys=True),
             item["reason"],
         )
         for item in rejected
-    ]
-    if not rows:
-        return 0
-
-    with conn.cursor() as cur:
-        cur.executemany(
-            """
-            INSERT INTO rejected_rows (run_id, source_file, raw_data, rejection_reason)
-            VALUES (%s, %s, %s, %s)
-            """,
-            rows,
-        )
-    log.info("ingestion.product_rejections_recorded", run_id=run_id, source=source, count=len(rows))
-    return len(rows)
+    )
+    return record_rejections(
+        conn,
+        run_id=run_id,
+        source_file=source,
+        counts=Counter(item["code"] for item in rejected),
+        samples=samples,
+        sample_rows=sample_rows,
+    )

@@ -257,8 +257,10 @@ def clean_productos(df: pd.DataFrame) -> CleanResult:
     # Work on a copy to avoid mutating the caller's DataFrame
     df = df.copy()
 
-    # Reason series: first failure wins per row
+    # Reason series: first failure wins per row.  ``code`` is the stable
+    # category counted per run; ``reason`` keeps the offending value.
     reason = pd.Series("", index=df.index, dtype="object")
+    code = pd.Series("", index=df.index, dtype="object")
     bad = pd.Series(False, index=df.index, dtype="bool")
 
     # ── 1. Integer IDs ────────────────────────────────────────────────────────
@@ -267,6 +269,7 @@ def clean_productos(df: pd.DataFrame) -> CleanResult:
         fail = num.isna()
         new_bad = fail & ~bad
         reason[new_bad] = col + ": cannot cast '" + df[col][new_bad].astype(str) + "' to int"
+        code[new_bad] = f"{col}_not_integer"
         bad |= fail
         df[col] = num
 
@@ -275,6 +278,7 @@ def clean_productos(df: pd.DataFrame) -> CleanResult:
     ean_valid = ean.isin(["0", "1"])
     new_bad = ~ean_valid & ~bad
     reason[new_bad] = "productos_ean: expected '0' or '1', got '" + ean[new_bad] + "'"
+    code[new_bad] = "productos_ean_invalid"
     bad |= ~ean_valid
     df["es_ean"] = ean == "1"
 
@@ -284,11 +288,13 @@ def clean_productos(df: pd.DataFrame) -> CleanResult:
         cast_fail = num.isna()
         new_bad = cast_fail & ~bad
         reason[new_bad] = col + ": cannot cast '" + df[col][new_bad].astype(str) + "' to Decimal"
+        code[new_bad] = f"{col}_not_decimal"
         bad |= cast_fail
 
         le_zero = (num <= 0) & ~num.isna()
         new_bad = le_zero & ~bad
         reason[new_bad] = col + " must be > 0, got " + num[new_bad].astype(str)
+        code[new_bad] = f"{col}_not_positive"
         bad |= le_zero
         # Keep the original string column — PostgreSQL COPY handles the cast
 
@@ -300,6 +306,7 @@ def clean_productos(df: pd.DataFrame) -> CleanResult:
         cast_fail = num.isna() & ~is_empty
         new_bad = cast_fail & ~bad
         reason[new_bad] = col + ": cannot cast '" + df[col][new_bad].astype(str) + "' to Decimal"
+        code[new_bad] = f"{col}_not_decimal"
         bad |= cast_fail
         # Replace empty values with None in the original column
         df[col] = df[col].where(~is_empty, other=None)
@@ -345,9 +352,11 @@ def clean_productos(df: pd.DataFrame) -> CleanResult:
     if bad.any():
         rej_df = df.loc[bad]
         rej_reasons = reason.loc[bad]
+        rej_codes = code.loc[bad]
         for idx in rej_df.index:
             rejected_list.append({
                 "row": rej_df.loc[idx].to_dict(),
+                "code": rej_codes.at[idx],
                 "reason": rej_reasons.at[idx],
             })
 

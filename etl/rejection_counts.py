@@ -1,17 +1,40 @@
 """Complete rejection counts per ingestion run, source and reason.
 
-``rejected_rows`` grows with every rejected row of every run.  These counts
-keep the full totals in a table whose size depends only on the number of
-distinct reasons, so the stored rows can become a bounded sample.
+``rejection_counts`` keeps the full totals per stable reason code, so its size
+depends only on the number of distinct reasons.  ``rejected_rows`` keeps at
+most ``SEPA_REJECTED_SAMPLE_ROWS`` example rows per run, source and code for
+diagnosis; the complete rows can be recovered by replaying the archived ZIP.
 """
 
 from __future__ import annotations
 
-from typing import Mapping
+import os
+from typing import Iterable, Mapping
 
 import structlog
 
 log = structlog.get_logger(__name__)
+
+_SAMPLE_ROWS_ENV = "SEPA_REJECTED_SAMPLE_ROWS"
+DEFAULT_SAMPLE_ROWS = 100
+
+# (code, raw_data, detailed reason) of one rejected row
+RejectedSample = tuple[str, str, str]
+
+
+def sample_rows_from_environment(env: Mapping[str, str] | None = None) -> int:
+    """Return the sample size per run, source and code (0 keeps no rows)."""
+    values = os.environ if env is None else env
+    configured = values.get(_SAMPLE_ROWS_ENV, "").strip()
+    if not configured:
+        return DEFAULT_SAMPLE_ROWS
+    try:
+        sample_rows = int(configured)
+    except ValueError:
+        raise ValueError(f"{_SAMPLE_ROWS_ENV} must be a whole number") from None
+    if sample_rows < 0:
+        raise ValueError(f"{_SAMPLE_ROWS_ENV} must be zero or positive")
+    return sample_rows
 
 
 def add_rejection_counts(
@@ -71,3 +94,65 @@ def rejection_counts_for_run(conn, run_id: int) -> dict[tuple[str, str], int]:
             (run_id,),
         )
         return {(source, reason): count for source, reason, count in cur.fetchall()}
+
+
+def record_rejections(
+    conn,
+    *,
+    run_id: int,
+    source_file: str,
+    counts: Mapping[str, int],
+    samples: Iterable[RejectedSample],
+    sample_rows: int | None = None,
+) -> int:
+    """Add complete ``counts`` and store a bounded sample of their rows.
+
+    ``samples`` may be longer than the sample; it is consumed only until each
+    code has its ``sample_rows`` rows for this run and source, counting rows
+    stored by earlier chunks.  A sample row whose code is not in ``counts`` is
+    an error, so every stored row is also counted.  The caller owns the
+    transaction.  Returns the number of rows counted.
+    """
+    if sample_rows is None:
+        sample_rows = sample_rows_from_environment()
+    already_counted = {
+        reason: count
+        for (source, reason), count in rejection_counts_for_run(conn, run_id).items()
+        if source == source_file
+    }
+    remaining = {
+        code: min(count, max(0, sample_rows - already_counted.get(code, 0)))
+        for code, count in counts.items()
+        if count > 0
+    }
+    kept: list[tuple[int, str, str, str]] = []
+    if any(remaining.values()):
+        for code, raw_data, reason in samples:
+            if code not in remaining:
+                raise ValueError(f"Sampled rejection code {code!r} is not counted")
+            if remaining[code] == 0:
+                continue
+            remaining[code] -= 1
+            kept.append((run_id, source_file, raw_data, reason))
+            if not any(remaining.values()):
+                break
+    if kept:
+        with conn.cursor() as cur:
+            cur.executemany(
+                """
+                INSERT INTO rejected_rows (run_id, source_file, raw_data, rejection_reason)
+                VALUES (%s, %s, %s, %s)
+                """,
+                kept,
+            )
+    total = add_rejection_counts(
+        conn, run_id=run_id, source_file=source_file, counts=counts
+    )
+    log.info(
+        "rejections.recorded",
+        run_id=run_id,
+        source_file=source_file,
+        count=total,
+        sampled=len(kept),
+    )
+    return total

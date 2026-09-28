@@ -153,6 +153,7 @@ def build_fact_df(
         if sucursal_sk is None:
             rejected.append({
                 "row": p.__dict__,
+                "code": "sucursal_not_found",
                 "reason": (
                     f"sucursal_sk not found for "
                     f"(id_comercio={p.id_comercio}, id_bandera={p.id_bandera}, "
@@ -165,6 +166,7 @@ def build_fact_df(
         if producto_sk is None:
             rejected.append({
                 "row": p.__dict__,
+                "code": "producto_not_found",
                 "reason": f"producto_sk not found for id_producto={p.id_producto!r}",
             })
             continue
@@ -301,6 +303,7 @@ def build_fact_chunk(
             row = df.loc[idx]
             rejected.append({
                 "row": row.to_dict(),
+                "code": "sucursal_not_found",
                 "reason": (
                     f"sucursal_sk not found for "
                     f"(id_comercio={row['id_comercio']}, id_bandera={row['id_bandera']}, "
@@ -311,6 +314,7 @@ def build_fact_chunk(
             row = df.loc[idx]
             rejected.append({
                 "row": row.to_dict(),
+                "code": "producto_not_found",
                 "reason": f"producto_sk not found for id_producto={row['id_producto']!r}",
             })
 
@@ -361,6 +365,7 @@ def _build_fact_chunk_list(
         if sucursal_sk is None:
             rejected.append({
                 "row": p.__dict__,
+                "code": "sucursal_not_found",
                 "reason": (
                     f"sucursal_sk not found for "
                     f"(id_comercio={p.id_comercio}, id_bandera={p.id_bandera}, "
@@ -373,6 +378,7 @@ def _build_fact_chunk_list(
         if producto_sk is None:
             rejected.append({
                 "row": p.__dict__,
+                "code": "producto_not_found",
                 "reason": f"producto_sk not found for id_producto={p.id_producto!r}",
             })
             continue

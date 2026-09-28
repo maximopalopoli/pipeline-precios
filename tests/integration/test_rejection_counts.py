@@ -3,7 +3,14 @@
 import psycopg
 import pytest
 
-from etl.rejection_counts import add_rejection_counts, rejection_counts_for_run
+from etl.reconciliation import record_product_rejections
+from etl.rejection_counts import (
+    DEFAULT_SAMPLE_ROWS,
+    add_rejection_counts,
+    record_rejections,
+    rejection_counts_for_run,
+    sample_rows_from_environment,
+)
 
 
 def _create_run(conn) -> int:
@@ -100,3 +107,122 @@ def test_the_schema_rejects_a_nonpositive_count(pg_conn):
                 (run_id,),
             )
     pg_conn.rollback()
+
+
+def _sampled_rows(conn, run_id: int) -> list[tuple[str, str]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT source_file, rejection_reason
+            FROM rejected_rows
+            WHERE run_id = %s
+            ORDER BY id
+            """,
+            (run_id,),
+        )
+        return cur.fetchall()
+
+
+def _product_rejections(code: str, rows: int) -> list[dict]:
+    return [
+        {"row": {"id_producto": str(i)}, "code": code, "reason": f"{code} #{i}"}
+        for i in range(rows)
+    ]
+
+
+def test_every_rejection_is_counted_but_only_a_sample_is_stored(pg_conn):
+    run_id = _create_run(pg_conn)
+
+    for _chunk in range(3):
+        record_product_rejections(
+            pg_conn,
+            run_id=run_id,
+            source="clean_productos",
+            rejected=_product_rejections("invalid_price", 4)
+            + _product_rejections("missing_ean", 1),
+            sample_rows=5,
+        )
+    pg_conn.commit()
+
+    assert rejection_counts_for_run(pg_conn, run_id) == {
+        ("clean_productos", "invalid_price"): 12,
+        ("clean_productos", "missing_ean"): 3,
+    }
+    reasons = [reason for _source, reason in _sampled_rows(pg_conn, run_id)]
+    assert reasons == [
+        "invalid_price #0",
+        "invalid_price #1",
+        "invalid_price #2",
+        "invalid_price #3",
+        "missing_ean #0",
+        "invalid_price #0",
+        "missing_ean #0",
+        "missing_ean #0",
+    ]
+
+
+def test_samples_are_bounded_per_source(pg_conn):
+    run_id = _create_run(pg_conn)
+
+    for source in ("clean_productos", "fact_key_resolution"):
+        record_product_rejections(
+            pg_conn,
+            run_id=run_id,
+            source=source,
+            rejected=_product_rejections("x", 3),
+            sample_rows=2,
+        )
+    pg_conn.commit()
+
+    assert [source for source, _reason in _sampled_rows(pg_conn, run_id)] == [
+        "clean_productos",
+        "clean_productos",
+        "fact_key_resolution",
+        "fact_key_resolution",
+    ]
+
+
+def test_a_zero_sample_keeps_only_counts(pg_conn):
+    run_id = _create_run(pg_conn)
+
+    counted = record_product_rejections(
+        pg_conn,
+        run_id=run_id,
+        source="clean_productos",
+        rejected=_product_rejections("x", 3),
+        sample_rows=0,
+    )
+
+    assert counted == 3
+    assert rejection_counts_for_run(pg_conn, run_id) == {("clean_productos", "x"): 3}
+    assert _sampled_rows(pg_conn, run_id) == []
+
+
+def test_a_sampled_row_must_be_counted(pg_conn):
+    run_id = _create_run(pg_conn)
+
+    with pytest.raises(ValueError, match="is not counted"):
+        record_rejections(
+            pg_conn,
+            run_id=run_id,
+            source_file="clean_productos",
+            counts={"x": 1},
+            samples=[("y", "raw", "reason")],
+            sample_rows=5,
+        )
+
+
+@pytest.mark.parametrize(
+    ("configured", "expected"),
+    [(None, DEFAULT_SAMPLE_ROWS), ("", DEFAULT_SAMPLE_ROWS), (" 25 ", 25), ("0", 0)],
+)
+def test_sample_size_comes_from_the_environment(configured, expected):
+    env = {} if configured is None else {"SEPA_REJECTED_SAMPLE_ROWS": configured}
+
+    assert sample_rows_from_environment(env) == expected
+
+
+@pytest.mark.parametrize("configured", ["-1", "many", "1.5"])
+def test_an_invalid_sample_size_fails_fast(configured):
+    with pytest.raises(ValueError, match="SEPA_REJECTED_SAMPLE_ROWS"):
+        sample_rows_from_environment({"SEPA_REJECTED_SAMPLE_ROWS": configured})

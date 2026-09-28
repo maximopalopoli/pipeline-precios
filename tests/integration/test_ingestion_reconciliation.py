@@ -74,6 +74,7 @@ def test_record_product_rejections_keeps_reason_and_source(pg_conn):
         rejected=[
             {
                 "row": {"id_producto": "missing", "precio": "12.50"},
+                "code": "producto_not_found",
                 "reason": "producto_sk not found",
             }
         ],

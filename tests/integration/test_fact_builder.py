@@ -211,6 +211,7 @@ class TestBuildFactDf:
         assert len(result.df) == 0
         assert len(result.rejected) == 1
         assert "sucursal_sk not found" in result.rejected[0]["reason"]
+        assert result.rejected[0]["code"] == "sucursal_not_found"
 
     def test_empty_inputs_returns_empty_df(self, pg_conn):
         result = build_fact_df(
