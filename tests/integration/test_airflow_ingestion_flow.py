@@ -270,11 +270,18 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
             (policy, fecha_datos)
         ),
     )
+    archive_calls = []
+    monkeypatch.delenv("SEPA_ARCHIVE_DIR", raising=False)
+    monkeypatch.setattr(
+        cli_pipeline,
+        "archive_completed_raw_files",
+        lambda conn, *, raw_dir, archive_dir: archive_calls.append((raw_dir, archive_dir)),
+    )
     monkeypatch.setattr(
         cli_pipeline,
         "apply_raw_retention",
-        lambda conn, *, raw_dir, policy, fecha_datos: raw_retention_calls.append(
-            (raw_dir, policy, fecha_datos)
+        lambda conn, *, raw_dir, archive_dir, policy, fecha_datos: (
+            raw_retention_calls.append((raw_dir, archive_dir, policy, fecha_datos))
         ),
     )
     monkeypatch.setattr(
@@ -299,7 +306,10 @@ def test_cli_and_airflow_publish_equivalent_snapshots(
     cli_result = cli_pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
     assert cli_result.rows_loaded == 7
     assert staging_retention_calls == [(cli_pipeline.from_environment(), _RUN_DATE)]
-    assert raw_retention_calls == [(tmp_path, cli_pipeline.from_environment(), _RUN_DATE)]
+    assert raw_retention_calls == [
+        (tmp_path, tmp_path / "archive", cli_pipeline.from_environment(), _RUN_DATE)
+    ]
+    assert archive_calls == [(tmp_path, tmp_path / "archive")]
     with pg_conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
         assert cur.fetchone()[0] == 0
@@ -600,10 +610,16 @@ def test_airflow_applies_enabled_retention_after_publication(
             (policy, fecha_datos)
         ),
     )
+    archive_calls = []
+    monkeypatch.delenv("SEPA_ARCHIVE_DIR", raising=False)
+    monkeypatch.setattr(
+        "etl.raw_archive.archive_completed_raw_files",
+        lambda conn, *, raw_dir, archive_dir: archive_calls.append((raw_dir, archive_dir)),
+    )
     monkeypatch.setattr(
         "etl.raw_retention.apply_raw_retention",
-        lambda conn, *, raw_dir, policy, fecha_datos: raw_retention_calls.append(
-            (raw_dir, policy, fecha_datos)
+        lambda conn, *, raw_dir, archive_dir, policy, fecha_datos: (
+            raw_retention_calls.append((raw_dir, archive_dir, policy, fecha_datos))
         ),
     )
     monkeypatch.setattr(
@@ -642,9 +658,11 @@ def test_airflow_applies_enabled_retention_after_publication(
             _RUN_DATE,
         )
     ]
+    assert archive_calls == [(tmp_path, tmp_path / "archive")]
     assert raw_retention_calls == [
         (
             tmp_path,
+            tmp_path / "archive",
             RetentionPolicy(
                 fact_retention_days=14, staging_retention_days=7, raw_retention_days=30
             ),

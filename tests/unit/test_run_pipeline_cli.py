@@ -98,3 +98,48 @@ def test_cli_requires_a_date_for_local_archive_replay(monkeypatch):
         pipeline.main()
 
     assert exc_info.value.code == 2
+
+
+def test_cli_passes_an_archive_restore_to_the_pipeline(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(
+        pipeline,
+        "run",
+        lambda **kwargs: captured.update(kwargs) or IngestionResult.completed(0),
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["run_pipeline", "--fecha", "2026-09-22", "--from-archive"]
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main()
+
+    assert exc_info.value.code == 0
+    assert captured["from_archive"] is True
+    assert captured["source_archive"] is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["run_pipeline", "--from-archive"],
+        [
+            "run_pipeline",
+            "--fecha",
+            "2026-09-22",
+            "--from-archive",
+            "--zip-path",
+            "data/source.zip",
+        ],
+    ],
+    ids=["without-date", "with-zip-path"],
+)
+def test_cli_rejects_an_invalid_archive_restore(monkeypatch, argv):
+    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main()
+
+    assert exc_info.value.code == 2

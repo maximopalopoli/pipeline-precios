@@ -86,6 +86,7 @@ pipeline-precios/
 │   ├── load/aggregator.py            # Daily aggregate recalculation
 │   ├── ingestion_run.py, ingestion_lock.py, reconciliation.py  # Run records, per-date lock, counts
 │   ├── development_ingestion.py      # Bounded partial development mode
+│   ├── raw_archive.py                # Verified source ZIP archive and restore
 │   ├── *_retention.py                # Opt-in fact, staging and raw ZIP retention
 │   └── run_pipeline.py               # End-to-end orchestration (shared with Airflow)
 ├── models/
@@ -117,8 +118,9 @@ under Resolución 678/2020, Annex II. The same data feeds the official
 
 The portal publishes one ZIP per weekday (~300–330 MB) at a fixed URL,
 `.../download/sepa_{dia}.zip` (`lunes` … `domingo`). Each URL is overwritten
-weekly — there is no historical archive, so keep local copies (by hash) if you
-need to replay a day. Chains must deliver by 06:00 on the effective day and may
+weekly and the portal keeps no history, so the pipeline archives every
+completed ZIP (see [Source ZIP archive](#source-zip-archive-and-restore)).
+Chains must deliver by 06:00 on the effective day and may
 rectify until 10:00, which is why the DAG runs at 06:30 and 10:30.
 
 ### ZIP Structure
@@ -316,6 +318,47 @@ make ingest-bounded DATE=2026-03-17 DEV_CHAIN_KEYS=1:1 DEV_MAX_PRODUCT_ROWS=5000
 At least one bound is required. `DEV_CHAIN_KEYS` follows the same
 comma-separated `id_comercio:id_bandera` format as `SEPA_DEV_CHAIN_KEYS`; the
 row cap is optional when chains alone are enough.
+
+### Source ZIP archive and restore
+
+After each full publication, the CLI and the DAG archive every completed ZIP
+not archived yet, earlier days included, under `SEPA_ARCHIVE_DIR` (default:
+an `archive` folder inside the raw directory):
+
+```
+archive/2026/09/2026-09-25_<sha256>.zip
+```
+
+The key comes from the date declared inside the ZIP, as validated by its
+completed run, and the content hash, never from the source file name or an
+earlier mistaken requested date. A copy is a hard link when both folders share a file system,
+so archiving costs no extra space; on another disk the bytes are copied. The
+copy is checked against the registered SHA-256 and size before it is recorded in
+`raw_files.archive_key` and `raw_files.archived_at`. A failed or missing copy is
+logged, never fails the publication, and is retried by the next run.
+
+`SEPA_RAW_RETENTION_DAYS` deletes a local ZIP only when its archived copy is
+recorded and still present with the registered size. With the default archive
+on the same disk the archived hard link keeps the bytes, so this retention frees
+no space; it only reclaims space when `SEPA_ARCHIVE_DIR` is on another disk. The
+archive folder is the historical backup: point `SEPA_ARCHIVE_DIR` at another disk, or sync it off the
+server, if the history must survive a disk failure.
+
+To re-ingest a day from the archive, for example after fact retention dropped
+it or to reprocess it after a fix:
+
+```bash
+make restore-date DATE=2026-09-25
+```
+
+The restore picks the archived version with the latest full publication (a
+10:00 rectification wins), verifies its hash, and reprocesses it even if it had
+already completed. With no registry row, as after rebuilding the database, it
+searches the archive folder by date and asks for `--zip-path` if several
+versions exist. Fact retention drops a restored day again once it falls outside
+`SEPA_FACT_RETENTION_DAYS`. A ZIP replayed with `--zip-path` from outside the raw
+directory is not archived. A restore always publishes, so it fails if
+`SEPA_DEV_CHAIN_KEYS` or `SEPA_DEV_MAX_PRODUCT_ROWS` is set.
 
 ### Ingestion results and failures
 
@@ -536,7 +579,9 @@ All variables have development defaults. Set them in `.env` (see
 | `SEPA_FACT_CHUNK_SIZE` | Staged product rows per fact batch (default 300000) |
 | `SEPA_PENDING_FACT_COMMIT_EVERY_CHUNKS` | Pending-fact chunks written per commit (default 5) |
 | `SEPA_FACT_RETENTION_DAYS` | Opt-in; keeps the ingested date plus the previous N days of facts and drops older daily partitions and their daily aggregates. Use at least 7 while the weekly KPI, Variaciones and Evolución views exist; the first run on a long history deletes old aggregates in one transaction. Off when unset |
-| `SEPA_STAGING_RETENTION_DAYS`, `SEPA_RAW_RETENTION_DAYS` | Opt-in retention windows; off when unset |
+| `SEPA_STAGING_RETENTION_DAYS` | Opt-in; removes staging rows of terminal runs older than N days. Off when unset |
+| `SEPA_RAW_RETENTION_DAYS` | Opt-in; removes local ZIPs older than N days only when a verified archived copy exists. Frees space only when the archive is on another disk. Off when unset |
+| `SEPA_ARCHIVE_DIR` | Source ZIP archive folder (default: `archive` inside the raw directory) |
 | `SEPA_DEV_CHAIN_KEYS`, `SEPA_DEV_MAX_PRODUCT_ROWS` | Bounded development ingestion (see above) |
 
 ### Airflow
@@ -562,6 +607,7 @@ TanStack Table/Query for data.
 - **Untyped staging:** all VARCHAR to preserve raw data and simplify quality check debugging
 - **SCD Type 1:** dimensions update with last-write-wins (no change history)
 - **Daily fact leaves:** `fact_precios` uses monthly parents with daily leaves, so a prepared day can be atomically replaced and retention can drop whole expired days (and fully expired months) without row-by-row deletes.
+- **Source ZIP archive:** the weekday URL is overwritten weekly, so each completed ZIP is kept under its declared date and hash, verified before local deletion, and used to re-ingest any day
 - **Two-level quality checks:** critical (abort pipeline) vs warnings (log and continue)
 - **structlog:** structured logging with context (run_id, filename, counts) for traceability
 
