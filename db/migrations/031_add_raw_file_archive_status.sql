@@ -24,6 +24,6 @@ END
 $$;
 
 COMMENT ON COLUMN raw_files.archive_key IS
-    'Location of the verified archived copy, relative to the archive root (YYYY/MM/<fecha_datos>_<sha256>.zip).';
+    'Location of the verified archived copy, relative to the archive root (YYYY/MM/<declared date>_<sha256>.zip). The date is the one declared inside the ZIP, not raw_files.fecha_datos.';
 COMMENT ON COLUMN raw_files.archived_at IS
     'When the archived copy was verified against sha256 and size_bytes; NULL while not archived.';
