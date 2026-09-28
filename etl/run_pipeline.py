@@ -483,6 +483,7 @@ def run(
             raw_retention_result = apply_raw_retention(
                 conn,
                 raw_dir=raw_dir,
+                archive_dir=archive_dir_from_environment(raw_dir),
                 policy=retention_policy,
                 fecha_datos=dl.fecha_datos,
             )
@@ -492,6 +493,7 @@ def run(
                     cutoff=str(retention_policy.raw_cutoff(dl.fecha_datos)),
                     deleted_file_ids=raw_retention_result.deleted_file_ids,
                     missing_file_ids=raw_retention_result.missing_file_ids,
+                    archive_missing_file_ids=raw_retention_result.archive_missing_file_ids,
                 )
         except Exception:
             # ZIP cleanup is last and must not affect the published snapshot.

@@ -609,6 +609,7 @@ def publish_daily_snapshot(**kwargs):
                 raw_retention_result = apply_raw_retention(
                     conn,
                     raw_dir=raw_dir,
+                    archive_dir=archive_dir_from_environment(raw_dir),
                     policy=retention_policy,
                     fecha_datos=fecha,
                 )
@@ -618,6 +619,7 @@ def publish_daily_snapshot(**kwargs):
                         cutoff=str(retention_policy.raw_cutoff(fecha)),
                         deleted_file_ids=raw_retention_result.deleted_file_ids,
                         missing_file_ids=raw_retention_result.missing_file_ids,
+                        archive_missing_file_ids=raw_retention_result.archive_missing_file_ids,
                     )
             except Exception:
                 # Raw ZIP cleanup is last and must not prevent lock release.
