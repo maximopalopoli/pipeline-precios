@@ -17,7 +17,7 @@ from typing import Mapping
 
 import structlog
 
-from etl.extract.downloader import hash_file
+from etl.extract.downloader import DownloadResult, hash_file, register_local_archive
 
 log = structlog.get_logger(__name__)
 
@@ -166,3 +166,78 @@ def _verify(path: Path, raw: UnarchivedRawFile) -> None:
             f"Archived copy {path} does not match raw file {raw.id}: "
             f"sha256={sha256} size_bytes={size_bytes}"
         )
+
+
+def find_archived_zip(conn, *, archive_dir: Path, fecha: date) -> Path:
+    """Return the archived source ZIP to re-ingest for ``fecha``.
+
+    The registry picks the archived version whose full publication finished
+    last, so a rectified file wins over the early one.  Without a registry row,
+    for example after rebuilding the database, the archive folder is searched
+    by declared date; several versions of that date are ambiguous.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT raw.archive_key
+            FROM raw_files raw
+            WHERE raw.fecha_datos = %s
+              AND raw.archived_at IS NOT NULL
+            ORDER BY (
+                SELECT MAX(run.finished_at)
+                FROM ingestion_runs run
+                WHERE run.raw_file_id = raw.id
+                  AND run.status = 'completed'
+                  AND NOT run.is_partial
+            ) DESC NULLS LAST, raw.id DESC
+            LIMIT 1
+            """,
+            (fecha,),
+        )
+        row = cur.fetchone()
+    if row is not None:
+        path = archive_dir / row[0]
+        if not path.is_file():
+            raise FileNotFoundError(f"Archived copy is missing: {path}")
+        return path
+
+    candidates = sorted(archive_dir.glob(f"{fecha:%Y/%m}/{fecha.isoformat()}_*.zip"))
+    if not candidates:
+        raise FileNotFoundError(f"No archived source ZIP for {fecha} in {archive_dir}")
+    if len(candidates) > 1:
+        names = ", ".join(path.name for path in candidates)
+        raise ValueError(
+            f"Several archived source ZIPs for {fecha}: {names}; replay one with --zip-path"
+        )
+    return candidates[0]
+
+
+def register_archived_zip(conn, *, archive_dir: Path, fecha: date) -> DownloadResult:
+    """Register the archived ZIP of ``fecha`` for replay, checking its hash.
+
+    A copy found only in the folder is recorded as archived, so the next run
+    does not try to archive it again from ``raw_dir``.
+    """
+    path = find_archived_zip(conn, archive_dir=archive_dir, fecha=fecha)
+    sha256, _ = hash_file(path)
+    key = archive_key_for(fecha, sha256)
+    if path != archive_dir / key:
+        raise ValueError(f"Archived copy {path} does not match its hash {sha256}")
+    download = register_local_archive(conn, path, fecha)
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE raw_files
+            SET archive_key = %s, archived_at = NOW()
+            WHERE id = %s AND archived_at IS NULL
+            """,
+            (key, download.raw_file_id),
+        )
+    conn.commit()
+    log.info(
+        "raw_archive.restored",
+        fecha=fecha.isoformat(),
+        raw_file_id=download.raw_file_id,
+        archive_key=key,
+    )
+    return download

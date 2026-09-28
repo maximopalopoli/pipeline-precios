@@ -72,7 +72,11 @@ from etl.load.publisher import complete_partial_run, publish_pending_facts
 from etl.performance import StageTimer, items_per_second, process_max_rss_bytes
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
-from etl.raw_archive import archive_completed_raw_files, archive_dir_from_environment
+from etl.raw_archive import (
+    archive_completed_raw_files,
+    archive_dir_from_environment,
+    register_archived_zip,
+)
 from etl.raw_retention import apply_raw_retention
 from etl.retention_policy import from_environment
 from etl.staging_retention import apply_staging_retention
@@ -153,9 +157,13 @@ def run(
     development_policy: DevelopmentIngestionPolicy | None = None,
     fact_chunk_size: int | None = None,
     source_archive: Path | None = None,
+    from_archive: bool = False,
 ) -> IngestionResult:
     """
     Execute the full pipeline for *fecha* (defaults to today in Argentina).
+
+    ``from_archive`` re-ingests the archived source ZIP of *fecha*, even when
+    it already completed, for example after retention dropped that day.
 
     Returns an explicit completed or skipped result. Raises on unexpected
     errors after marking the run as failed.
@@ -167,6 +175,10 @@ def run(
     fact_chunk_size = fact_chunk_size_with_cli_override(chunk_size=fact_chunk_size)
     if source_archive is not None and fecha is None:
         raise ValueError("fecha is required when replaying a local source archive")
+    if from_archive and fecha is None:
+        raise ValueError("fecha is required when restoring from the archive")
+    if from_archive and source_archive is not None:
+        raise ValueError("from_archive and source_archive are mutually exclusive")
     fecha = resolve_ingestion_date(fecha)
 
     conn = _db_connect()
@@ -180,24 +192,33 @@ def run(
         _ensure_seeds(conn)
 
         # ── 1. Download ──────────────────────────────────────────────────────
+        if from_archive:
+            source = "archive"
+        elif source_archive is not None:
+            source = "local"
+        else:
+            source = "remote"
         active_timer = StageTimer(log, "download")
-        active_timer.start(source="local" if source_archive is not None else "remote")
+        active_timer.start(source=source)
         try:
-            dl = (
-                downloader.register_local_archive(conn, source_archive, fecha)
-                if source_archive is not None
-                else downloader.download(conn, raw_dir, fecha)
-            )
+            if from_archive:
+                dl = register_archived_zip(
+                    conn, archive_dir=archive_dir_from_environment(raw_dir), fecha=fecha
+                )
+            elif source_archive is not None:
+                dl = downloader.register_local_archive(conn, source_archive, fecha)
+            else:
+                dl = downloader.download(conn, raw_dir, fecha)
         except Exception as exc:
             active_timer.fail(error_type=type(exc).__name__)
             raise
         active_timer.finish(
             filename=dl.filename,
             size_bytes=dl.size_bytes,
-            source="local" if source_archive is not None else "remote",
+            source=source,
         )
 
-        if not dl.is_new:
+        if not dl.is_new and not from_archive:
             if not should_process_raw_file(conn, dl.raw_file_id, partial=development_policy.enabled):
                 log.info(
                     "pipeline.skipped",
@@ -223,7 +244,9 @@ def run(
             raw_file_id=dl.raw_file_id,
             owner="cli",
         )
-        if not should_process_raw_file(conn, dl.raw_file_id, partial=development_policy.enabled):
+        if not from_archive and not should_process_raw_file(
+            conn, dl.raw_file_id, partial=development_policy.enabled
+        ):
             log.info(
                 "pipeline.skipped",
                 reason="completed_while_waiting_for_ingestion_lock",
@@ -560,6 +583,11 @@ def main() -> None:
         help="Replay an existing local ZIP; requires --fecha and skips network download.",
     )
     parser.add_argument(
+        "--from-archive",
+        action="store_true",
+        help="Re-ingest the archived ZIP of --fecha, even if it already completed.",
+    )
+    parser.add_argument(
         "--dev-chain-key",
         action="append",
         default=None,
@@ -584,6 +612,10 @@ def main() -> None:
 
     if args.zip_path is not None and args.fecha is None:
         parser.error("--zip-path requires --fecha so the source date can be validated")
+    if args.from_archive and args.fecha is None:
+        parser.error("--from-archive requires --fecha")
+    if args.from_archive and args.zip_path is not None:
+        parser.error("--from-archive and --zip-path are mutually exclusive")
 
     try:
         development_policy = with_cli_overrides(
@@ -600,6 +632,7 @@ def main() -> None:
             development_policy=development_policy,
             fact_chunk_size=fact_chunk_size,
             source_archive=args.zip_path,
+            from_archive=args.from_archive,
         )
     except Exception:
         sys.exit(1)
