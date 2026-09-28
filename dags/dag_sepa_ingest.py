@@ -563,6 +563,7 @@ def publish_daily_snapshot(**kwargs):
                     "airflow.fact_retention.completed",
                     cutoff=str(retention_policy.fact_cutoff(fecha)),
                     partitions=retention_result.partitions,
+                    aggregate_rows_deleted=retention_result.aggregate_rows_deleted,
                 )
         except Exception:
             # The snapshot is already committed. Do not report a successful

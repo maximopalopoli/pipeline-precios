@@ -535,7 +535,8 @@ All variables have development defaults. Set them in `.env` (see
 | `AIRFLOW_SECRET_KEY` | Airflow secret key |
 | `SEPA_FACT_CHUNK_SIZE` | Staged product rows per fact batch (default 300000) |
 | `SEPA_PENDING_FACT_COMMIT_EVERY_CHUNKS` | Pending-fact chunks written per commit (default 5) |
-| `SEPA_FACT_RETENTION_DAYS`, `SEPA_STAGING_RETENTION_DAYS`, `SEPA_RAW_RETENTION_DAYS` | Opt-in retention windows; off when unset |
+| `SEPA_FACT_RETENTION_DAYS` | Opt-in; keeps the ingested date plus the previous N days of facts and drops older daily partitions and their daily aggregates. Use at least 7 while the weekly KPI, Variaciones and Evolución views exist; the first run on a long history deletes old aggregates in one transaction. Off when unset |
+| `SEPA_STAGING_RETENTION_DAYS`, `SEPA_RAW_RETENTION_DAYS` | Opt-in retention windows; off when unset |
 | `SEPA_DEV_CHAIN_KEYS`, `SEPA_DEV_MAX_PRODUCT_ROWS` | Bounded development ingestion (see above) |
 
 ### Airflow
@@ -560,7 +561,7 @@ TanStack Table/Query for data.
 - **Idempotency:** SHA-256 plus a completed ingestion to skip duplicate downloads; failed runs remain retryable; `ON CONFLICT DO UPDATE` on dimensions and facts; re-runs recalculate aggregates
 - **Untyped staging:** all VARCHAR to preserve raw data and simplify quality check debugging
 - **SCD Type 1:** dimensions update with last-write-wins (no change history)
-- **Daily fact leaves:** `fact_precios` uses monthly parents with daily leaves, so a prepared day can be atomically replaced while monthly retention remains efficient.
+- **Daily fact leaves:** `fact_precios` uses monthly parents with daily leaves, so a prepared day can be atomically replaced and retention can drop whole expired days (and fully expired months) without row-by-row deletes.
 - **Two-level quality checks:** critical (abort pipeline) vs warnings (log and continue)
 - **structlog:** structured logging with context (run_id, filename, counts) for traceability
 

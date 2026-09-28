@@ -444,6 +444,7 @@ def run(
                     "pipeline.fact_retention.completed",
                     cutoff=str(retention_policy.fact_cutoff(dl.fecha_datos)),
                     partitions=retention_result.partitions,
+                    aggregate_rows_deleted=retention_result.aggregate_rows_deleted,
                 )
         except Exception:
             # Publication is already committed. Retention is best-effort and
