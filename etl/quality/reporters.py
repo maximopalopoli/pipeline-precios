@@ -34,7 +34,11 @@ import structlog
 
 from etl.ingestion_run import mark_run_failed
 from etl.quality.checks import CheckResult, Severity
-from etl.rejection_counts import record_rejections, sample_rows_from_environment
+from etl.rejection_counts import (
+    clear_rejections,
+    record_rejections,
+    sample_rows_from_environment,
+)
 
 if TYPE_CHECKING:
     import psycopg2
@@ -238,6 +242,9 @@ _VALID_PROVINCIAS = (
 )
 
 
+_STAGING_TABLES = ("stg_comercios", "stg_sucursales", "stg_productos")
+
+
 @dataclass(frozen=True)
 class _RejectionQuery:
     """Staging rows rejected for one stable reason code.
@@ -281,6 +288,7 @@ def register_rejected_rows(
         "provincia":       _reject_provincia,
     }
 
+    clear_rejections(conn, run_id=run_id, source_files=_STAGING_TABLES)
     total = 0
     for result in results:
         if result.passed or result.severity != Severity.WARNING:
@@ -292,6 +300,7 @@ def register_rejected_rows(
             total += _record_rejection_query(conn, run_id, query, sample_rows)
 
     if total == 0:
+        conn.commit()
         return 0
 
     with conn.cursor() as cur:

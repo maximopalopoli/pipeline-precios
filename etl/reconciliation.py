@@ -13,6 +13,11 @@ from etl.rejection_counts import record_rejections
 
 log = structlog.get_logger(__name__)
 
+# Sources of product rejections in rejection_counts; each must reconcile with
+# its counter in ProductReconciliation.
+CLEANING_SOURCE = "clean_productos"
+KEY_RESOLUTION_SOURCE = "fact_key_resolution"
+
 
 @dataclass(frozen=True)
 class ProductReconciliation:
@@ -68,6 +73,7 @@ def record_product_reconciliation(
                 f"Run {run_id} raw product rows ({rows_raw}) do not reconcile with "
                 f"valid + rejected ({counts.rows_valid + counts.rows_rejected})."
             )
+        _check_rejection_counts(cur, run_id, counts)
         cur.execute(
             """
             UPDATE ingestion_runs
@@ -92,6 +98,37 @@ def record_product_reconciliation(
         if cur.rowcount != 1:
             raise ValueError(f"Ingestion run {run_id} does not exist.")
     log.info("ingestion.reconciliation_recorded", run_id=run_id, **counts.__dict__)
+
+
+def _check_rejection_counts(cur, run_id: int, counts: ProductReconciliation) -> None:
+    """Require the stored rejection counts to match the run's counters.
+
+    ``rejected_rows`` keeps only a sample, so ``rejection_counts`` is the
+    persisted evidence behind rows rejected and rows without keys.
+    """
+    cur.execute(
+        """
+        SELECT source_file, SUM(row_count)
+        FROM rejection_counts
+        WHERE run_id = %s AND source_file IN (%s, %s)
+        GROUP BY source_file
+        """,
+        (run_id, CLEANING_SOURCE, KEY_RESOLUTION_SOURCE),
+    )
+    stored = dict(cur.fetchall())
+    expected = {
+        CLEANING_SOURCE: counts.rows_rejected,
+        KEY_RESOLUTION_SOURCE: counts.rows_without_keys,
+    }
+    mismatched = {
+        source: {"expected": rows, "stored": stored.get(source, 0)}
+        for source, rows in expected.items()
+        if stored.get(source, 0) != rows
+    }
+    if mismatched:
+        raise ValueError(
+            f"Run {run_id} rejection counts do not reconcile: {mismatched}"
+        )
 
 
 def record_product_rejections(

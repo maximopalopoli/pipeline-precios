@@ -6,6 +6,11 @@ from pathlib import Path
 import psycopg
 
 from etl.ingestion_processing import load_staged_dimensions, stream_pending_product_facts
+from etl.reconciliation import (
+    ProductReconciliation,
+    record_product_reconciliation,
+)
+from etl.rejection_counts import rejection_counts_for_run
 from etl.staging import loader as staging_loader
 
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds"
@@ -207,3 +212,84 @@ def test_partial_dimension_load_preserves_existing_visible_attributes(pg_conn, s
             """
         )
         assert cur.fetchone()[0] == "LECHE ENTERA UAT 1L"
+
+
+def test_more_rejections_than_the_sample_still_reconcile_after_a_retry(
+    pg_conn, sample_zip_path, monkeypatch
+):
+    monkeypatch.setenv("SEPA_REJECTED_SAMPLE_ROWS", "1")
+    with pg_conn.cursor() as cur:
+        cur.execute((_SEEDS / "seed_provincias.sql").read_text())
+        cur.execute((_SEEDS / "seed_fechas.sql").read_text())
+    run_id = _create_run(pg_conn)
+    staging_loader.load(pg_conn, sample_zip_path, run_id)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE stg_productos SET productos_precio_lista = '0'
+            WHERE ctid IN (
+                SELECT ctid FROM stg_productos WHERE run_id = %s
+                ORDER BY id_comercio, id_sucursal, id_producto
+                LIMIT 3
+            )
+            """,
+            (run_id,),
+        )
+        cur.execute("SELECT COUNT(*) FROM stg_productos WHERE run_id = %s", (run_id,))
+        rows_raw = cur.fetchone()[0]
+        cur.execute(
+            "UPDATE ingestion_runs SET rows_productos_raw = %s WHERE id = %s",
+            (rows_raw, run_id),
+        )
+    load_staged_dimensions(pg_conn, run_id)
+    pg_conn.commit()
+
+    def stream():
+        return stream_pending_product_facts(
+            pg_conn,
+            lambda: psycopg.connect(
+                host=pg_conn.info.host,
+                port=pg_conn.info.port,
+                user=pg_conn.info.user,
+                dbname=pg_conn.info.dbname,
+            ),
+            run_id=run_id,
+            run_date=_RUN_DATE,
+            chunk_size=2,
+        )
+
+    # A retried Airflow task streams the same run again after lock renewals
+    # committed earlier chunks.  Only rejections are under test here, so the
+    # first attempt's pending facts are removed.
+    stream()
+    with pg_conn.cursor() as cur:
+        cur.execute("DELETE FROM pending_fact_precios WHERE run_id = %s", (run_id,))
+    pg_conn.commit()
+    result = stream()
+    record_product_reconciliation(
+        pg_conn,
+        run_id,
+        ProductReconciliation(
+            rows_valid=result.rows_valid,
+            rows_rejected=result.rows_rejected,
+            rows_without_keys=result.rows_without_keys,
+            rows_deduplicated=result.rows_deduplicated,
+            rows_fact_pending=result.rows_fact,
+            rows_fact_published=result.rows_fact,
+        ),
+    )
+    pg_conn.commit()
+
+    assert result.rows_rejected == 3
+    assert result.rows_valid + result.rows_rejected == rows_raw
+    assert rejection_counts_for_run(pg_conn, run_id) == {
+        ("clean_productos", "productos_precio_lista_not_positive"): 3
+    }
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM rejected_rows WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == 1
+        cur.execute(
+            "SELECT rows_productos_rejected FROM ingestion_runs WHERE id = %s",
+            (run_id,),
+        )
+        assert cur.fetchone()[0] == 3

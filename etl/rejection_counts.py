@@ -96,6 +96,25 @@ def rejection_counts_for_run(conn, run_id: int) -> dict[tuple[str, str], int]:
         return {(source, reason): count for source, reason, count in cur.fetchall()}
 
 
+def clear_rejections(conn, *, run_id: int, source_files: Iterable[str]) -> None:
+    """Remove the counts and samples of ``source_files`` for one run.
+
+    A step that recomputes its rejections from staging calls this first, so a
+    retried task with the same run does not count the same rows twice.  The
+    caller owns the transaction.
+    """
+    sources = list(source_files)
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM rejection_counts WHERE run_id = %s AND source_file = ANY(%s)",
+            (run_id, sources),
+        )
+        cur.execute(
+            "DELETE FROM rejected_rows WHERE run_id = %s AND source_file = ANY(%s)",
+            (run_id, sources),
+        )
+
+
 def record_rejections(
     conn,
     *,

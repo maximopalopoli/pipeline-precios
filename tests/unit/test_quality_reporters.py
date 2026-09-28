@@ -345,7 +345,7 @@ def test_register_rejected_rows_required_nulls(pg_conn, sample_zip_path):
     assert "comercio_cuit" in row[1]
 
 
-def test_register_rejected_rows_counts_all_but_samples_a_bounded_set(
+def test_register_rejected_rows_counts_all_but_samples_a_bounded_set_once(
     pg_conn, sample_zip_path
 ):
     run_id = _load_sample_staging(pg_conn, sample_zip_path)
@@ -359,6 +359,7 @@ def test_register_rejected_rows_counts_all_but_samples_a_bounded_set(
 
     results = [_make("required_nulls", passed=False, severity=Severity.WARNING,
                      nulls_by_table={"stg_comercios": {"comercio_cuit": 2}})]
+    register_rejected_rows(pg_conn, run_id, results, sample_rows=1)
     count = register_rejected_rows(pg_conn, run_id, results, sample_rows=1)
 
     assert count == 2
