@@ -81,3 +81,38 @@ def test_ingestion_runs_records_positive_fact_chunk_sizes(pg_conn):
         (constraint,) = cur.fetchone()
 
     assert "fact_chunk_size > 0" in constraint
+
+
+def test_ingestion_runs_records_the_regional_scope_and_its_counts(pg_conn):
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'ingestion_runs'
+              AND column_name IN (
+                  'regional_scope',
+                  'rows_sucursales_out_of_scope',
+                  'rows_sucursales_unlocated',
+                  'rows_productos_out_of_scope'
+              )
+            """
+        )
+        columns = {row[0] for row in cur.fetchall()}
+        cur.execute(
+            """
+            SELECT pg_get_constraintdef(oid)
+            FROM pg_constraint
+            WHERE conname = 'chk_ingestion_scope_counts_nonnegative'
+            """
+        )
+        (constraint,) = cur.fetchone()
+
+    assert columns == {
+        "regional_scope",
+        "rows_sucursales_out_of_scope",
+        "rows_sucursales_unlocated",
+        "rows_productos_out_of_scope",
+    }
+    assert "rows_productos_out_of_scope >= 0" in constraint
