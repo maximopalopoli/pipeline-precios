@@ -173,6 +173,7 @@ def check_file_changed(**kwargs):
     from etl.ingestion_run import should_process_raw_file
     from etl.retention_policy import from_environment
     from etl.development_ingestion import from_environment as development_policy_from_environment
+    from etl.regional_scope import scope_from_environment
 
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
@@ -181,12 +182,17 @@ def check_file_changed(**kwargs):
     # malformed. Every task later reads the same process environment.
     from_environment()
     development_policy = development_policy_from_environment()
+    regional_scope = scope_from_environment()
+    scope_name = regional_scope.name if regional_scope else None
 
     conn = _db_connect()
     lock = None
     try:
         should_process = should_process_raw_file(
-            conn, dl_info["raw_file_id"], partial=development_policy.enabled
+            conn,
+            dl_info["raw_file_id"],
+            partial=development_policy.enabled,
+            regional_scope=scope_name,
         )
         if not should_process:
             log.info(
@@ -206,7 +212,10 @@ def check_file_changed(**kwargs):
         # A CLI execution could have published between the first check and the
         # reservation. Do not start staging when that happened.
         should_process = should_process_raw_file(
-            conn, dl_info["raw_file_id"], partial=development_policy.enabled
+            conn,
+            dl_info["raw_file_id"],
+            partial=development_policy.enabled,
+            regional_scope=scope_name,
         )
         log.info(
             "download.duplicate_decision",
@@ -281,6 +290,7 @@ def load_staging(**kwargs):
             ),
             development_policy=development_policy,
             fact_chunk_size=fact_chunk_size,
+            regional_scope=regional_scope.name if regional_scope else None,
         )
         fecha_fuente = inspect_source_archive_date(dl_info["path"])
         record_source_date(conn, run_id, fecha_fuente)

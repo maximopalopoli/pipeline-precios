@@ -41,8 +41,14 @@ class IngestionResult:
         return cls(outcome=IngestionOutcome.SKIPPED)
 
 
-def has_completed_run(conn, raw_file_id: int, *, partial: bool = False) -> bool:
-    """Return whether *raw_file_id* has already been published successfully."""
+def has_completed_run(
+    conn,
+    raw_file_id: int,
+    *,
+    partial: bool = False,
+    regional_scope: str | None = None,
+) -> bool:
+    """Return whether *raw_file_id* was already published with this scope."""
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -51,22 +57,32 @@ def has_completed_run(conn, raw_file_id: int, *, partial: bool = False) -> bool:
             WHERE raw_file_id = %s
               AND status = 'completed'
               AND is_partial = FALSE
+              AND regional_scope IS NOT DISTINCT FROM %s
               AND NOT %s
             """,
-            (raw_file_id, partial),
+            (raw_file_id, regional_scope, partial),
         )
         return cur.fetchone() is not None
 
 
-def should_process_raw_file(conn, raw_file_id: int, *, partial: bool = False) -> bool:
+def should_process_raw_file(
+    conn,
+    raw_file_id: int,
+    *,
+    partial: bool = False,
+    regional_scope: str | None = None,
+) -> bool:
     """Return whether a raw file is eligible for an ingestion attempt.
 
     Failed and interrupted attempts are retried. A completed *full*
-    publication is the only terminal state that skips a full run. Partial
+    publication with the same regional scope is the only terminal state that
+    skips a full run, so changing the scope re-ingests the file. Partial
     development runs remain eligible so they can inspect a completed source
     without changing its publication status.
     """
-    return not has_completed_run(conn, raw_file_id, partial=partial)
+    return not has_completed_run(
+        conn, raw_file_id, partial=partial, regional_scope=regional_scope
+    )
 
 
 def is_partial_run(conn, run_id: int) -> bool:
@@ -92,6 +108,7 @@ def open_ingestion_run(
     fecha_logica: date | None = None,
     development_policy: DevelopmentIngestionPolicy | None = None,
     fact_chunk_size: int | None = None,
+    regional_scope: str | None = None,
 ) -> int:
     """Create a running record and persist the dates known at its opening.
 
@@ -110,14 +127,14 @@ def open_ingestion_run(
             INSERT INTO ingestion_runs (
                 raw_file_id, status, fecha_solicitada, fecha_logica,
                 is_partial, partial_chain_keys, partial_max_product_rows,
-                fact_chunk_size
+                fact_chunk_size, regional_scope
             )
             SELECT
                 id,
                 'running',
                 COALESCE(%s, fecha_datos),
                 COALESCE(%s, fecha_datos),
-                %s, %s, %s, %s
+                %s, %s, %s, %s, %s
             FROM raw_files
             WHERE id = %s
             RETURNING id
@@ -129,6 +146,7 @@ def open_ingestion_run(
                 partial_chain_keys,
                 development_policy.max_product_rows,
                 fact_chunk_size,
+                regional_scope,
                 raw_file_id,
             ),
         )

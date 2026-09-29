@@ -169,3 +169,60 @@ def test_record_product_reconciliation_requires_matching_rejection_counts(
 
     with pytest.raises(ValueError, match="rejection counts do not reconcile"):
         record_product_reconciliation(pg_conn, run_id, counts)
+
+
+def _run_with_staging_counts(conn, *, source: int, out_of_scope: int | None, raw: int) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
+            VALUES ('scope.zip', 'https://example.test/scope.zip', 'scope', 1, '2026-03-15')
+            RETURNING id
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO ingestion_runs (
+                raw_file_id, rows_productos_source, rows_productos_out_of_scope,
+                rows_productos_raw
+            )
+            VALUES (%s, %s, %s, %s)
+            RETURNING id
+            """,
+            (cur.fetchone()[0], source, out_of_scope, raw),
+        )
+        return cur.fetchone()[0]
+
+
+def _all_valid(rows: int, *, is_partial: bool = False) -> ProductReconciliation:
+    return ProductReconciliation(
+        rows_valid=rows,
+        rows_rejected=0,
+        rows_without_keys=0,
+        rows_deduplicated=0,
+        rows_fact_pending=rows,
+        rows_fact_published=0 if is_partial else rows,
+        is_partial=is_partial,
+    )
+
+
+@pytest.mark.parametrize(
+    ("source", "out_of_scope"), [(10, 6), (4, None)], ids=["scoped", "unscoped"]
+)
+def test_source_rows_reconcile_with_out_of_scope_plus_raw(pg_conn, source, out_of_scope):
+    run_id = _run_with_staging_counts(pg_conn, source=source, out_of_scope=out_of_scope, raw=4)
+
+    record_product_reconciliation(pg_conn, run_id, _all_valid(4))
+
+
+def test_source_rows_missing_from_every_bucket_do_not_reconcile(pg_conn):
+    run_id = _run_with_staging_counts(pg_conn, source=11, out_of_scope=6, raw=4)
+
+    with pytest.raises(ValueError, match="out of scope \\+ raw"):
+        record_product_reconciliation(pg_conn, run_id, _all_valid(4))
+
+
+def test_a_partial_run_may_leave_source_rows_out(pg_conn):
+    run_id = _run_with_staging_counts(pg_conn, source=11, out_of_scope=6, raw=4)
+
+    record_product_reconciliation(pg_conn, run_id, _all_valid(4, is_partial=True))
