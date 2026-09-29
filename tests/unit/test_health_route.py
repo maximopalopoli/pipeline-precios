@@ -9,6 +9,8 @@ def test_health_omits_reconciliation_for_legacy_runs():
         "rows_productos_source": None,
         "rows_productos_raw": None,
         "rows_productos_selected": None,
+        "rows_productos_out_of_scope": None,
+        "rows_productos_store_unlisted": None,
         "rows_productos_valid": None,
         "rows_productos_rejected": None,
         "rows_productos_without_keys": None,
@@ -25,6 +27,8 @@ def test_health_exposes_the_persisted_reconciliation_counts():
         "rows_productos_source": 12,
         "rows_productos_raw": 12,
         "rows_productos_selected": 12,
+        "rows_productos_out_of_scope": 0,
+        "rows_productos_store_unlisted": 0,
         "rows_productos_valid": 10,
         "rows_productos_rejected": 2,
         "rows_productos_without_keys": 1,
@@ -47,6 +51,7 @@ def test_health_returns_no_reconciliation_when_no_ingestion_exists(monkeypatch):
         "started_at": None,
         "fecha_datos": None,
         "is_partial": None,
+        "regional_scope": None,
         "reconciliacion": None,
     }
 
@@ -58,9 +63,12 @@ def test_health_returns_reconciliation_for_the_latest_ingestion(monkeypatch):
         "started_at": datetime(2026, 3, 18, 12, 30),
         "fecha_datos": date(2026, 3, 17),
         "is_partial": True,
+        "regional_scope": "amba",
         "rows_productos_source": 12,
         "rows_productos_raw": 12,
         "rows_productos_selected": 2,
+        "rows_productos_out_of_scope": 1,
+        "rows_productos_store_unlisted": 0,
         "rows_productos_valid": 10,
         "rows_productos_rejected": 2,
         "rows_productos_without_keys": 1,
@@ -80,6 +88,7 @@ def test_health_returns_reconciliation_for_the_latest_ingestion(monkeypatch):
         "started_at": "2026-03-18T12:30:00",
         "fecha_datos": "2026-03-17",
         "is_partial": True,
+        "regional_scope": "amba",
         "reconciliacion": {
             key: value
             for key, value in row.items()
@@ -89,3 +98,5 @@ def test_health_returns_reconciliation_for_the_latest_ingestion(monkeypatch):
     assert "ir.rows_productos_rejected" in captured["sql"]
     assert "ir.rows_productos_source" in captured["sql"]
     assert "ir.rows_fact_published" in captured["sql"]
+    assert "ir.rows_productos_out_of_scope" in captured["sql"]
+    assert "ir.rows_productos_store_unlisted" in captured["sql"]

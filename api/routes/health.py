@@ -12,6 +12,8 @@ def _reconciliation_response(row: dict) -> dict | None:
         "rows_productos_source",
         "rows_productos_raw",
         "rows_productos_selected",
+        "rows_productos_out_of_scope",
+        "rows_productos_store_unlisted",
         "rows_productos_valid",
         "rows_productos_rejected",
         "rows_productos_without_keys",
@@ -32,9 +34,12 @@ async def get_health():
             ir.started_at,
             rf.fecha_datos,
             ir.is_partial,
+            ir.regional_scope,
             ir.rows_productos_source,
             ir.rows_productos_raw,
             ir.rows_productos_selected,
+            ir.rows_productos_out_of_scope,
+            ir.rows_productos_store_unlisted,
             ir.rows_productos_valid,
             ir.rows_productos_rejected,
             ir.rows_productos_without_keys,
@@ -52,6 +57,7 @@ async def get_health():
             "started_at": None,
             "fecha_datos": None,
             "is_partial": None,
+            "regional_scope": None,
             "reconciliacion": None,
         }
     return {
@@ -59,5 +65,6 @@ async def get_health():
         "started_at": row["started_at"].isoformat() if row["started_at"] else None,
         "fecha_datos": row["fecha_datos"].isoformat() if row["fecha_datos"] else None,
         "is_partial": row["is_partial"],
+        "regional_scope": row["regional_scope"],
         "reconciliacion": _reconciliation_response(row),
     }

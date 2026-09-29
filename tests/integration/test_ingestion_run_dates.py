@@ -96,3 +96,17 @@ def test_is_partial_run_rejects_an_unknown_run(pg_conn):
 
     with pytest.raises(ValueError, match="does not exist"):
         is_partial_run(pg_conn, 9999)
+
+
+def test_ingestion_run_records_its_regional_scope_when_it_opens(pg_conn):
+    raw_file_id = _raw_file_id(pg_conn, date(2026, 3, 15))
+
+    scoped = open_ingestion_run(pg_conn, raw_file_id, regional_scope="amba")
+    unscoped = open_ingestion_run(pg_conn, raw_file_id)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, regional_scope FROM ingestion_runs WHERE id IN (%s, %s) ORDER BY id",
+            (scoped, unscoped),
+        )
+        assert cur.fetchall() == [(scoped, "amba"), (unscoped, None)]

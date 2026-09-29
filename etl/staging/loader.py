@@ -6,7 +6,9 @@ comercio.csv / sucursales.csv / productos.csv → loads into stg_* tables
 via COPY.
 
 All columns are kept as strings (VARCHAR) — no type coercion at this stage.
-Returns a LoadResult with row counts and inner-archive processing metrics.
+An optional regional scope leaves out stores outside the region and their
+product rows, counting both.  Returns a LoadResult with row counts and
+inner-archive processing metrics.
 """
 
 import io
@@ -23,6 +25,7 @@ import psycopg2
 import structlog
 
 from etl.development_ingestion import DevelopmentIngestionPolicy
+from etl.regional_scope import RegionalScope, StoreScope
 
 log = structlog.get_logger(__name__)
 
@@ -102,6 +105,77 @@ class LoadResult:
     rows_productos_source: int
     rows_productos_selected: int
     inner_zips_invalid_count: int = 0
+    regional_scope: str | None = None
+    rows_sucursales_out_of_scope: int = 0
+    rows_sucursales_unlocated: int = 0
+    rows_productos_out_of_scope: int = 0
+    rows_productos_store_unlisted: int = 0
+
+
+# A store key as (id_comercio, id_bandera, id_sucursal) with leading zeros
+# removed: id_sucursal is unique only within a chain and its zeros vary.
+_StoreKey = tuple[str, str, str]
+RowFilter = Callable[[list[str]], bool]
+
+
+class _ScopeFilter:
+    """Apply a regional scope to one staging load.
+
+    Each inner ZIP stages sucursales.csv before productos.csv, so the stores
+    in scope are known before their product rows are read.  Product rows are
+    kept only for those stores.  A product whose store this file does not
+    list cannot be placed, and ``dim_sucursal`` may still hold that store from
+    an earlier, unscoped ingestion, so it is left out and counted as unlisted
+    rather than published outside the scope.
+    """
+
+    def __init__(self, scope: RegionalScope) -> None:
+        self.scope = scope
+        self.included_stores: set[_StoreKey] = set()
+        self.excluded_stores: set[_StoreKey] = set()
+        self.rows_sucursales_out_of_scope = 0
+        self.rows_sucursales_unlocated = 0
+        self.rows_productos_out_of_scope = 0
+        self.rows_productos_store_unlisted = 0
+
+    def for_sucursales(self, header: list[str]) -> RowFilter:
+        key_of = _store_key_reader(header)
+        lat_idx = _column_index(header, "sucursales_latitud")
+        lon_idx = _column_index(header, "sucursales_longitud")
+        provincia_idx = _column_index(header, "sucursales_provincia")
+
+        def keep(row: list[str]) -> bool:
+            status = self.scope.classify(
+                _value(row, lat_idx), _value(row, lon_idx), _value(row, provincia_idx)
+            )
+            if status is StoreScope.IN_SCOPE:
+                self.included_stores.add(key_of(row))
+                return True
+            if status is StoreScope.UNLOCATED:
+                self.rows_sucursales_unlocated += 1
+            else:
+                self.rows_sucursales_out_of_scope += 1
+            self.excluded_stores.add(key_of(row))
+            return False
+
+        return keep
+
+    def for_productos(self, header: list[str]) -> RowFilter:
+        key_of = _store_key_reader(header)
+
+        def keep(row: list[str]) -> bool:
+            key = key_of(row)
+            # A store listed both in and out of scope keeps its products,
+            # because its in-scope row is staged.
+            if key in self.included_stores:
+                return True
+            if key in self.excluded_stores:
+                self.rows_productos_out_of_scope += 1
+            else:
+                self.rows_productos_store_unlisted += 1
+            return False
+
+        return keep
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -114,6 +188,7 @@ def load(
     heartbeat: Callable[[], None] | None = None,
     development_policy: DevelopmentIngestionPolicy | None = None,
     copy_chunk_rows: int = _DEFAULT_COPY_CHUNK_ROWS,
+    regional_scope: RegionalScope | None = None,
 ) -> LoadResult:
     """
     Parse *zip_path* and load all three staging tables for *run_id*.
@@ -136,6 +211,10 @@ def load(
         Optional explicit bounds used by the future local partial-ingestion
         entrypoint. Callers must pass this value deliberately; ambient
         environment settings never change a normal staging load.
+    regional_scope:
+        Optional production scope. Stores outside it, their product rows and
+        product rows of stores this file does not list are not staged; they
+        are counted in the result instead.
 
     Returns
     -------
@@ -150,8 +229,10 @@ def load(
         development_ingestion=development_policy.enabled,
         development_chain_keys=development_policy.chain_keys,
         development_max_product_rows=development_policy.max_product_rows,
+        regional_scope=regional_scope.name if regional_scope else None,
     )
     logger.info("staging.load.start")
+    scope_filter = _ScopeFilter(regional_scope) if regional_scope else None
 
     _truncate_staging(conn, run_id, logger)
     _ensure_productos_partition(conn, run_id, logger)
@@ -221,6 +302,12 @@ def load(
                                     csv=csv_name,
                                 )
                                 continue
+                            row_filter = None
+                            if scope_filter is not None:
+                                if counter_name == "sucursales":
+                                    row_filter = scope_filter.for_sucursales
+                                elif counter_name == "productos":
+                                    row_filter = scope_filter.for_productos
                             with inner_zip.open(csv_index[csv_name]) as raw:
                                 loaded_rows, source_rows, selected_rows = (
                                     _stream_copy_into(
@@ -237,6 +324,7 @@ def load(
                                             else None
                                         ),
                                         copy_chunk_rows=copy_chunk_rows,
+                                        row_filter=row_filter,
                                     )
                                 )
                             if counter_name == "comercios":
@@ -278,6 +366,19 @@ def load(
         rows_productos_source=rows_productos_source,
         rows_productos_selected=rows_productos_selected,
         inner_zips_invalid_count=inner_zips_invalid_count,
+        regional_scope=regional_scope.name if regional_scope else None,
+        rows_sucursales_out_of_scope=(
+            scope_filter.rows_sucursales_out_of_scope if scope_filter else 0
+        ),
+        rows_sucursales_unlocated=(
+            scope_filter.rows_sucursales_unlocated if scope_filter else 0
+        ),
+        rows_productos_out_of_scope=(
+            scope_filter.rows_productos_out_of_scope if scope_filter else 0
+        ),
+        rows_productos_store_unlisted=(
+            scope_filter.rows_productos_store_unlisted if scope_filter else 0
+        ),
     )
     logger.info("staging.load.done", **result.__dict__)
     return result
@@ -318,7 +419,12 @@ def register_counts(
                    rows_sucursales    = %s,
                    rows_productos_raw = %s,
                    rows_productos_selected = %s,
-                   rows_productos_source = %s
+                   rows_productos_source = %s,
+                   regional_scope = %s,
+                   rows_sucursales_out_of_scope = %s,
+                   rows_sucursales_unlocated = %s,
+                   rows_productos_out_of_scope = %s,
+                   rows_productos_store_unlisted = %s
              WHERE id = %s
             """,
             (
@@ -329,6 +435,11 @@ def register_counts(
                 result.rows_productos,
                 result.rows_productos_selected,
                 result.rows_productos_source,
+                result.regional_scope,
+                result.rows_sucursales_out_of_scope,
+                result.rows_sucursales_unlocated,
+                result.rows_productos_out_of_scope,
+                result.rows_productos_store_unlisted,
                 run_id,
             ),
         )
@@ -443,16 +554,18 @@ def _stream_copy_into(
     chain_keys: tuple[tuple[int, int], ...] = (),
     max_rows: int | None = None,
     copy_chunk_rows: int = _DEFAULT_COPY_CHUNK_ROWS,
+    row_filter: Callable[[list[str]], RowFilter] | None = None,
 ) -> tuple[int, int, int]:
     """
     Stream a CSV into a staging table via chunked COPY,
     bypassing pandas to keep memory usage low even for 400+ MB CSVs.
 
     Returns ``(loaded_rows, source_rows, selected_rows)``. Source rows are
-    counted before chain bounds, selected rows after chain bounds but before a
-    row cap, and loaded rows after all bounds. Input order is stable because
-    callers process sorted inner ZIP names and this function preserves each
-    CSV's source order.
+    counted before chain bounds, selected rows after chain bounds but before
+    ``row_filter`` (built from the CSV header; it counts what it leaves out)
+    and a row cap, and loaded rows after all bounds. Input order is stable
+    because callers process sorted inner ZIP names and this function preserves
+    each CSV's source order.
     """
     import csv as csv_mod
 
@@ -486,6 +599,7 @@ def _stream_copy_into(
     row_count = 0
     source_row_count = 0
     selected_row_count = 0
+    keep = row_filter(header) if row_filter is not None else None
 
     def _flush_chunk(buf: io.StringIO) -> None:
         buf.seek(0)
@@ -515,6 +629,8 @@ def _stream_copy_into(
         if chain_keys and not _matches_chain_key(parsed, comercio_idx, bandera_idx, chain_keys):
             continue
         selected_row_count += 1
+        if keep is not None and not keep(parsed):
+            continue
         if max_rows is not None and row_count >= max_rows:
             continue
         row = [run_id_str]
@@ -536,6 +652,30 @@ def _stream_copy_into(
     del buf
 
     return row_count, source_row_count, selected_row_count
+
+
+def _column_index(header: list[str], column: str) -> int | None:
+    return header.index(column) if column in header else None
+
+
+def _value(row: list[str], idx: int | None) -> str:
+    return row[idx].strip() if idx is not None and idx < len(row) else ""
+
+
+def _store_key_reader(header: list[str]) -> Callable[[list[str]], _StoreKey]:
+    """Build a reader of the normalized store key of a source row."""
+    indices = [
+        _column_index(header, column)
+        for column in ("id_comercio", "id_bandera", "id_sucursal")
+    ]
+
+    def key_of(row: list[str]) -> _StoreKey:
+        comercio, bandera, sucursal = (
+            _value(row, idx).lstrip("0") or "0" for idx in indices
+        )
+        return comercio, bandera, sucursal
+
+    return key_of
 
 
 def _matches_chain_key(

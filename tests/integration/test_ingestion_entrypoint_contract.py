@@ -21,14 +21,21 @@ def _create_raw_file(conn, sha256: str) -> int:
         return cur.fetchone()[0]
 
 
-def _create_run(conn, raw_file_id: int, status: str, *, is_partial: bool = False) -> int:
+def _create_run(
+    conn,
+    raw_file_id: int,
+    status: str,
+    *,
+    is_partial: bool = False,
+    regional_scope: str | None = None,
+) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
-            INSERT INTO ingestion_runs (raw_file_id, status, is_partial)
-            VALUES (%s, %s, %s) RETURNING id
+            INSERT INTO ingestion_runs (raw_file_id, status, is_partial, regional_scope)
+            VALUES (%s, %s, %s, %s) RETURNING id
             """,
-            (raw_file_id, status, is_partial),
+            (raw_file_id, status, is_partial, regional_scope),
         )
         return cur.fetchone()[0]
 
@@ -79,3 +86,20 @@ def test_partial_ingestion_can_inspect_a_source_already_published_fully(pg_conn)
     pg_conn.commit()
 
     assert should_process_raw_file(pg_conn, raw_file_id, partial=True) is True
+
+
+def test_a_scope_change_makes_a_completed_file_eligible_again(pg_conn):
+    raw_file_id = _create_raw_file(pg_conn, "entrypoint-scope-change")
+    _create_run(pg_conn, raw_file_id, "completed")
+    pg_conn.commit()
+
+    assert should_process_raw_file(pg_conn, raw_file_id, regional_scope="amba") is True
+
+
+def test_a_file_completed_with_the_same_scope_is_skipped(pg_conn):
+    raw_file_id = _create_raw_file(pg_conn, "entrypoint-same-scope")
+    _create_run(pg_conn, raw_file_id, "completed", regional_scope="amba")
+    pg_conn.commit()
+
+    assert should_process_raw_file(pg_conn, raw_file_id, regional_scope="amba") is False
+    assert should_process_raw_file(pg_conn, raw_file_id) is True

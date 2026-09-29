@@ -87,6 +87,22 @@ def _development_policy_from_xcom(ti):
     )
 
 
+def _regional_scope_from_xcom(ti):
+    """Read the regional scope selected when this DAG run took its lock.
+
+    The skip decision and the staging filter must use the same scope, even if
+    the environment changes between tasks.
+    """
+    from etl.regional_scope import scope_from_environment
+
+    data = ti.xcom_pull(task_ids="check_file_changed", key="regional_scope")
+    if data is None:
+        # Compatibility for direct task invocation in tests and operator tools.
+        # Normal DAG runs always persist the scope in check_file_changed.
+        return scope_from_environment()
+    return scope_from_environment({"SEPA_REGIONAL_SCOPE": data["name"] or ""})
+
+
 def _release_ingestion_lock_on_failure(context) -> None:
     """Release the date after Airflow exhausts a task's configured retries."""
     from etl.ingestion_lock import IngestionLockOwnershipError, release_ingestion_lock
@@ -173,6 +189,7 @@ def check_file_changed(**kwargs):
     from etl.ingestion_run import should_process_raw_file
     from etl.retention_policy import from_environment
     from etl.development_ingestion import from_environment as development_policy_from_environment
+    from etl.regional_scope import scope_from_environment
 
     ti = kwargs["ti"]
     dl_info = ti.xcom_pull(task_ids="download_zip")
@@ -181,12 +198,17 @@ def check_file_changed(**kwargs):
     # malformed. Every task later reads the same process environment.
     from_environment()
     development_policy = development_policy_from_environment()
+    regional_scope = scope_from_environment()
+    scope_name = regional_scope.name if regional_scope else None
 
     conn = _db_connect()
     lock = None
     try:
         should_process = should_process_raw_file(
-            conn, dl_info["raw_file_id"], partial=development_policy.enabled
+            conn,
+            dl_info["raw_file_id"],
+            partial=development_policy.enabled,
+            regional_scope=scope_name,
         )
         if not should_process:
             log.info(
@@ -206,7 +228,10 @@ def check_file_changed(**kwargs):
         # A CLI execution could have published between the first check and the
         # reservation. Do not start staging when that happened.
         should_process = should_process_raw_file(
-            conn, dl_info["raw_file_id"], partial=development_policy.enabled
+            conn,
+            dl_info["raw_file_id"],
+            partial=development_policy.enabled,
+            regional_scope=scope_name,
         )
         log.info(
             "download.duplicate_decision",
@@ -237,6 +262,7 @@ def check_file_changed(**kwargs):
                 "max_product_rows": development_policy.max_product_rows,
             },
         )
+        ti.xcom_push(key="regional_scope", value={"name": scope_name})
         return should_process
     except Exception:
         if lock is not None:
@@ -258,6 +284,7 @@ def load_staging(**kwargs):
     dl_info = ti.xcom_pull(task_ids="download_zip")
     development_policy = _development_policy_from_xcom(ti)
     fact_chunk_size = fact_chunk_size_from_environment()
+    regional_scope = _regional_scope_from_xcom(ti)
 
     conn = _db_connect()
     run_id: int | None = None
@@ -279,6 +306,7 @@ def load_staging(**kwargs):
             ),
             development_policy=development_policy,
             fact_chunk_size=fact_chunk_size,
+            regional_scope=regional_scope.name if regional_scope else None,
         )
         fecha_fuente = inspect_source_archive_date(dl_info["path"])
         record_source_date(conn, run_id, fecha_fuente)
@@ -297,6 +325,7 @@ def load_staging(**kwargs):
             run_id,
             heartbeat=lambda: _renew_ingestion_lock(conn, ti),
             development_policy=development_policy,
+            regional_scope=regional_scope,
         )
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
@@ -308,6 +337,11 @@ def load_staging(**kwargs):
             rows_productos=stg.rows_productos,
             rows_productos_source=stg.rows_productos_source,
             rows_productos_selected=stg.rows_productos_selected,
+            regional_scope=stg.regional_scope,
+            rows_sucursales_out_of_scope=stg.rows_sucursales_out_of_scope,
+            rows_sucursales_unlocated=stg.rows_sucursales_unlocated,
+            rows_productos_out_of_scope=stg.rows_productos_out_of_scope,
+            rows_productos_store_unlisted=stg.rows_productos_store_unlisted,
         )
         log.info(
             "airflow.storage_footprint",
@@ -324,6 +358,8 @@ def load_staging(**kwargs):
             "rows_productos": stg.rows_productos,
             "rows_productos_source": stg.rows_productos_source,
             "rows_productos_selected": stg.rows_productos_selected,
+            "rows_productos_out_of_scope": stg.rows_productos_out_of_scope,
+            "rows_productos_store_unlisted": stg.rows_productos_store_unlisted,
         }
     except Exception as exc:
         _fail_active_timer(timer, exc)

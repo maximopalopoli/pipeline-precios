@@ -87,6 +87,7 @@ pipeline-precios/
 │   ├── ingestion_run.py, ingestion_lock.py, reconciliation.py  # Run records, per-date lock, counts
 │   ├── rejection_counts.py           # Rejection counts per reason + bounded samples
 │   ├── development_ingestion.py      # Bounded partial development mode
+│   ├── regional_scope.py             # Opt-in regional scope (AMBA) applied while staging
 │   ├── raw_archive.py                # Verified source ZIP archive and restore
 │   ├── *_retention.py                # Opt-in fact, staging and raw ZIP retention
 │   └── run_pipeline.py               # End-to-end orchestration (shared with Airflow)
@@ -320,6 +321,39 @@ At least one bound is required. `DEV_CHAIN_KEYS` follows the same
 comma-separated `id_comercio:id_bandera` format as `SEPA_DEV_CHAIN_KEYS`; the
 row cap is optional when chains alone are enough.
 
+### Regional scope (AMBA)
+
+`SEPA_REGIONAL_SCOPE=amba` limits a published ingestion to the stores of the
+Buenos Aires metropolitan area and their product rows. Unlike the development
+bounds, a scoped run is a production run: it publishes its snapshot, and every
+row it leaves out is counted. Unset or blank keeps every store; an unknown
+name fails the run before anything is staged.
+
+Stores are classified while `sucursales.csv` is staged:
+
+| Store | Result |
+|-------|--------|
+| `sucursales_provincia` other than `AR-C` or `AR-B`, including empty or invalid values | Out of scope |
+| Plausible coordinates within 60 km of the Obelisco (`AR-C` or `AR-B`) | In scope |
+| Plausible coordinates farther than 60 km | Out of scope |
+| `AR-C` without plausible coordinates (all of CABA lies inside the radius) | In scope |
+| `AR-B` without plausible coordinates | Unlocated: counted and left out, never guessed |
+
+Coordinates are plausible when both parse as dot-decimal numbers inside
+Argentina's bounding box. Product rows are then kept only when the same file
+placed their store in scope. The store key is `id_comercio`, `id_bandera` and
+`id_sucursal` with leading zeros removed, because `id_sucursal` padding differs
+between the files. Product rows whose store is missing from `sucursales.csv`
+(for example, a chain whose store file is truncated or absent that day) cannot
+be placed; `dim_sucursal` may still hold that store from an earlier unscoped
+ingestion, so they are counted as `rows_productos_store_unlisted` and not
+staged rather than published outside the scope. The scope applies after the
+development chain filter and before the development row cap.
+
+The scope is recorded on each run (`ingestion_runs.regional_scope`). A raw file
+is skipped only when a completed run used the same scope, so changing
+`SEPA_REGIONAL_SCOPE` re-ingests the current file on the next run.
+
 ### Source ZIP archive and restore
 
 After each full publication, the CLI and the DAG archive every completed ZIP
@@ -379,9 +413,11 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 
 | Counter | Meaning |
 |---------|---------|
-| `rows_productos_source` | Product rows inspected in source archives before development chain bounds. |
-| `rows_productos_selected` | Source rows selected by development chain bounds, before an optional row cap. |
-| `rows_productos_raw` | Rows staged after all development bounds; the input to product cleaning. |
+| `rows_productos_source` | Product rows inspected in source archives before development chain bounds and the regional scope. |
+| `rows_productos_selected` | Source rows selected by development chain bounds, before the regional scope and an optional row cap. |
+| `rows_productos_out_of_scope` | Product rows of stores left out by the regional scope (out of scope or unlocated); `NULL` for runs before the scope existed. |
+| `rows_productos_store_unlisted` | Scoped runs only: product rows whose store is not listed in the source `sucursales.csv`, so the scope cannot place them. |
+| `rows_productos_raw` | Rows staged after the regional scope and all development bounds; the input to product cleaning. |
 | `rows_productos_valid` | Rows accepted by product cleaning. |
 | `rows_productos_rejected` | Rows rejected by product cleaning, counted per reason in `rejection_counts` (source `clean_productos`). |
 | `rows_productos_without_keys` | Valid rows that could not resolve the dimensions required for a fact, counted per reason in `rejection_counts` (source `fact_key_resolution`). |
@@ -389,11 +425,13 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 | `rows_fact_pending` | Unique facts held in the provisional set before publication. |
 | `rows_fact_published` | Facts made visible by the completed atomic publication. |
 | `inner_zips_invalid_count` | Nested SEPA ZIPs that were malformed and skipped; these contain no product rows to reconcile. |
+| `rows_sucursales_out_of_scope`, `rows_sucursales_unlocated` | Store rows left out by the regional scope, by reason; diagnostic, not terms of the product equations. |
 
 For a completed run, the following invariants hold:
 
 ```text
 rows_productos_source >= rows_productos_selected >= rows_productos_raw
+rows_productos_source = rows_productos_out_of_scope + rows_productos_store_unlisted + rows_productos_raw  # full runs only
 rows_productos_raw = rows_productos_valid + rows_productos_rejected
 rows_productos_valid = rows_productos_without_keys + rows_productos_deduplicated + rows_fact_pending
 rows_fact_pending = rows_fact_published  # full runs only
@@ -402,8 +440,10 @@ rows_productos_without_keys = SUM(rejection_counts.row_count) for fact_key_resol
 ```
 
 For an explicit partial development run, `rows_fact_published` is zero and its
-pending rows remain isolated for local inspection; that is the intended
-exception to the last full-run invariant.
+pending rows remain isolated for local inspection, and its bounds leave source
+rows out on purpose; those are the intended exceptions to the full-run
+invariants. A missing `rows_productos_out_of_scope` or
+`rows_productos_store_unlisted` counts as zero.
 
 ### Rejected rows
 
@@ -433,8 +473,8 @@ FROM rejected_rows
 WHERE run_id = 42 AND rejection_code = 'producto_not_found';
 ```
 
-The API exposes these fields as `reconciliacion` in `GET /api/health`; the home
-page displays the latest available summary. Older runs predate these counters,
+The API exposes these fields as `reconciliacion` in `GET /api/health`, next to
+the run's `regional_scope`; the home page displays the latest available summary. Older runs predate these counters,
 so their reconciliation is `null` rather than a failed or incomplete status.
 
 ### Performance telemetry
@@ -614,6 +654,7 @@ All variables have development defaults. Set them in `.env` (see
 | `SEPA_RAW_RETENTION_DAYS` | Opt-in; removes local ZIPs older than N days only when a verified archived copy exists. Frees space only when the archive is on another disk. Off when unset |
 | `SEPA_ARCHIVE_DIR` | Source ZIP archive folder (default: `archive` inside the raw directory) |
 | `SEPA_REJECTED_SAMPLE_ROWS` | Rejected rows kept in `rejected_rows` per run, source and reason (default 100; 0 keeps only counts) |
+| `SEPA_REGIONAL_SCOPE` | Opt-in regional scope of a published ingestion; `amba` is the only value. Changing it re-ingests the current file. Off when unset |
 | `SEPA_DEV_CHAIN_KEYS`, `SEPA_DEV_MAX_PRODUCT_ROWS` | Bounded development ingestion (see above) |
 
 ### Airflow
@@ -641,6 +682,7 @@ TanStack Table/Query for data.
 - **Daily fact leaves:** `fact_precios` uses monthly parents with daily leaves, so a prepared day can be atomically replaced and retention can drop whole expired days (and fully expired months) without row-by-row deletes.
 - **Source ZIP archive:** the weekday URL is overwritten weekly, so each completed ZIP is kept under its declared date and hash, verified before local deletion, and used to re-ingest any day
 - **Two-level quality checks:** critical (abort pipeline) vs warnings (log and continue)
+- **Regional scope:** stores are placed by province and distance to the Obelisco; stores without plausible coordinates are counted as unlocated, never guessed, and every row left out has its own reconciliation bucket
 - **Bounded rejections:** complete counts per reason reconcile with the run counters; only a sample of rejected rows is stored, and the archived ZIP holds the rest
 - **structlog:** structured logging with context (run_id, filename, counts) for traceability
 
@@ -652,7 +694,8 @@ TanStack Table/Query for data.
 | Airflow orchestration and bounded development mode | Done |
 | Source measurements (price change rate, AMBA share, coverage) | Done |
 | Storage: current snapshot in PostgreSQL, history in archived ZIPs | Next |
-| AMBA scope, carry-forward of missing chains, price date on every offer | Next |
+| AMBA regional scope | Done |
+| Carry-forward of missing chains, price date on every offer | Next |
 | Canonical product catalog and shopping-list comparison UI | Planned |
 | Promotions and discounts beyond SEPA's list/promo prices | Later |
 
