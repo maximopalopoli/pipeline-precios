@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 import json
-from typing import Iterable
 
 import structlog
 
+from etl.rejection_counts import record_rejections
+
 
 log = structlog.get_logger(__name__)
+
+# Sources of product rejections in rejection_counts; each must reconcile with
+# its counter in ProductReconciliation.
+CLEANING_SOURCE = "clean_productos"
+KEY_RESOLUTION_SOURCE = "fact_key_resolution"
 
 
 @dataclass(frozen=True)
@@ -66,6 +73,7 @@ def record_product_reconciliation(
                 f"Run {run_id} raw product rows ({rows_raw}) do not reconcile with "
                 f"valid + rejected ({counts.rows_valid + counts.rows_rejected})."
             )
+        _check_rejection_counts(cur, run_id, counts)
         cur.execute(
             """
             UPDATE ingestion_runs
@@ -92,38 +100,68 @@ def record_product_reconciliation(
     log.info("ingestion.reconciliation_recorded", run_id=run_id, **counts.__dict__)
 
 
+def _check_rejection_counts(cur, run_id: int, counts: ProductReconciliation) -> None:
+    """Require the stored rejection counts to match the run's counters.
+
+    ``rejected_rows`` keeps only a sample, so ``rejection_counts`` is the
+    persisted evidence behind rows rejected and rows without keys.
+    """
+    cur.execute(
+        """
+        SELECT source_file, SUM(row_count)
+        FROM rejection_counts
+        WHERE run_id = %s AND source_file IN (%s, %s)
+        GROUP BY source_file
+        """,
+        (run_id, CLEANING_SOURCE, KEY_RESOLUTION_SOURCE),
+    )
+    stored = dict(cur.fetchall())
+    expected = {
+        CLEANING_SOURCE: counts.rows_rejected,
+        KEY_RESOLUTION_SOURCE: counts.rows_without_keys,
+    }
+    mismatched = {
+        source: {"expected": rows, "stored": stored.get(source, 0)}
+        for source, rows in expected.items()
+        if stored.get(source, 0) != rows
+    }
+    if mismatched:
+        raise ValueError(
+            f"Run {run_id} rejection counts do not reconcile: {mismatched}"
+        )
+
+
 def record_product_rejections(
     conn,
     *,
     run_id: int,
     source: str,
-    rejected: Iterable[dict],
+    rejected: list[dict],
+    sample_rows: int | None = None,
 ) -> int:
-    """Persist product-level rejections without retaining a full-run list.
+    """Count product-level rejections and keep a bounded sample of them.
 
     ``source`` identifies the processing step (for example ``clean_productos``
-    or ``fact_key_resolution``). Values are JSON-encoded with ``str`` fallback
-    because pandas and Decimal values may appear in the rejected row payload.
+    or ``fact_key_resolution``).  Each item carries a stable ``code``, counted
+    in full, and a detailed ``reason`` stored with the sampled row.  Values are
+    JSON-encoded with ``str`` fallback because pandas and Decimal values may
+    appear in the rejected row payload.
     """
-    rows = [
+    if not rejected:
+        return 0
+    samples = (
         (
-            run_id,
-            source,
+            item["code"],
             json.dumps(item["row"], default=str, sort_keys=True),
             item["reason"],
         )
         for item in rejected
-    ]
-    if not rows:
-        return 0
-
-    with conn.cursor() as cur:
-        cur.executemany(
-            """
-            INSERT INTO rejected_rows (run_id, source_file, raw_data, rejection_reason)
-            VALUES (%s, %s, %s, %s)
-            """,
-            rows,
-        )
-    log.info("ingestion.product_rejections_recorded", run_id=run_id, source=source, count=len(rows))
-    return len(rows)
+    )
+    return record_rejections(
+        conn,
+        run_id=run_id,
+        source_file=source,
+        counts=Counter(item["code"] for item in rejected),
+        samples=samples,
+        sample_rows=sample_rows,
+    )

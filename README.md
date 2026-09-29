@@ -36,7 +36,7 @@ Daily ZIP (~300 MB)
                  │
           ┌──────▼───────┐
           │   Quality     │  etl/quality/checks.py + reporters.py
-          │   Checks      │  8 critical + 7 warnings → rejected_rows
+          │   Checks      │  8 critical + 7 warnings → rejection_counts
           └──────┬───────┘
                  │
           ┌──────▼───────┐
@@ -64,7 +64,7 @@ Daily ZIP (~300 MB)
 | **Dimensions** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
 | **Fact** | `fact_precios` (monthly parents with daily leaves; grain: product × store × day) |
 | **Aggregations** | `agg_precios_diarios`, view `v_variacion_precios` |
-| **Quality** | `rejected_rows` |
+| **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample) |
 
 ## Project Structure
 
@@ -85,6 +85,7 @@ pipeline-precios/
 │   ├── load/publisher.py             # Atomic daily publication
 │   ├── load/aggregator.py            # Daily aggregate recalculation
 │   ├── ingestion_run.py, ingestion_lock.py, reconciliation.py  # Run records, per-date lock, counts
+│   ├── rejection_counts.py           # Rejection counts per reason + bounded samples
 │   ├── development_ingestion.py      # Bounded partial development mode
 │   ├── raw_archive.py                # Verified source ZIP archive and restore
 │   ├── *_retention.py                # Opt-in fact, staging and raw ZIP retention
@@ -382,8 +383,8 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 | `rows_productos_selected` | Source rows selected by development chain bounds, before an optional row cap. |
 | `rows_productos_raw` | Rows staged after all development bounds; the input to product cleaning. |
 | `rows_productos_valid` | Rows accepted by product cleaning. |
-| `rows_productos_rejected` | Rows rejected by product cleaning; their reason and payload, along with missing-key rows, are kept in `rejected_rows`. |
-| `rows_productos_without_keys` | Valid rows that could not resolve the dimensions required for a fact. |
+| `rows_productos_rejected` | Rows rejected by product cleaning, counted per reason in `rejection_counts` (source `clean_productos`). |
+| `rows_productos_without_keys` | Valid rows that could not resolve the dimensions required for a fact, counted per reason in `rejection_counts` (source `fact_key_resolution`). |
 | `rows_productos_deduplicated` | Valid rows superseded by another row at the product × store fact grain. |
 | `rows_fact_pending` | Unique facts held in the provisional set before publication. |
 | `rows_fact_published` | Facts made visible by the completed atomic publication. |
@@ -396,11 +397,41 @@ rows_productos_source >= rows_productos_selected >= rows_productos_raw
 rows_productos_raw = rows_productos_valid + rows_productos_rejected
 rows_productos_valid = rows_productos_without_keys + rows_productos_deduplicated + rows_fact_pending
 rows_fact_pending = rows_fact_published  # full runs only
+rows_productos_rejected = SUM(rejection_counts.row_count) for clean_productos
+rows_productos_without_keys = SUM(rejection_counts.row_count) for fact_key_resolution
 ```
 
 For an explicit partial development run, `rows_fact_published` is zero and its
 pending rows remain isolated for local inspection; that is the intended
 exception to the last full-run invariant.
+
+### Rejected rows
+
+Every rejection is counted in `rejection_counts` by run, source (a staging
+table or a processing step) and a stable reason code such as
+`productos_precio_lista_not_positive` or `producto_not_found`. The detailed
+reason, including the offending value, is kept only with the sampled rows:
+`rejected_rows` stores at most `SEPA_REJECTED_SAMPLE_ROWS` rows (default 100)
+per run, source and code, so its size no longer grows with bad source data.
+Each sampled row keeps its code in `rejected_rows.rejection_code`. Only the
+`clean_productos` and `fact_key_resolution` sources are terms of the equations
+above; the `stg_*` sources come from warning-level quality checks and are
+diagnostic, so a row can appear there and in `clean_productos`. To
+inspect every rejected row of a day, replay its archived ZIP with
+`make restore-date`. Each step clears its own counts and samples before
+recomputing them, so a retried task does not count rows twice. Rows written
+by earlier versions of the pipeline are not removed.
+
+```sql
+SELECT source_file, rejection_reason, row_count
+FROM rejection_counts
+WHERE run_id = 42
+ORDER BY row_count DESC;
+
+SELECT raw_data, rejection_reason
+FROM rejected_rows
+WHERE run_id = 42 AND rejection_code = 'producto_not_found';
+```
 
 The API exposes these fields as `reconciliacion` in `GET /api/health`; the home
 page displays the latest available summary. Older runs predate these counters,
@@ -582,6 +613,7 @@ All variables have development defaults. Set them in `.env` (see
 | `SEPA_STAGING_RETENTION_DAYS` | Opt-in; removes staging rows of terminal runs older than N days. Off when unset |
 | `SEPA_RAW_RETENTION_DAYS` | Opt-in; removes local ZIPs older than N days only when a verified archived copy exists. Frees space only when the archive is on another disk. Off when unset |
 | `SEPA_ARCHIVE_DIR` | Source ZIP archive folder (default: `archive` inside the raw directory) |
+| `SEPA_REJECTED_SAMPLE_ROWS` | Rejected rows kept in `rejected_rows` per run, source and reason (default 100; 0 keeps only counts) |
 | `SEPA_DEV_CHAIN_KEYS`, `SEPA_DEV_MAX_PRODUCT_ROWS` | Bounded development ingestion (see above) |
 
 ### Airflow
@@ -609,6 +641,7 @@ TanStack Table/Query for data.
 - **Daily fact leaves:** `fact_precios` uses monthly parents with daily leaves, so a prepared day can be atomically replaced and retention can drop whole expired days (and fully expired months) without row-by-row deletes.
 - **Source ZIP archive:** the weekday URL is overwritten weekly, so each completed ZIP is kept under its declared date and hash, verified before local deletion, and used to re-ingest any day
 - **Two-level quality checks:** critical (abort pipeline) vs warnings (log and continue)
+- **Bounded rejections:** complete counts per reason reconcile with the run counters; only a sample of rejected rows is stored, and the archived ZIP holds the rest
 - **structlog:** structured logging with context (run_id, filename, counts) for traceability
 
 ## Project Status

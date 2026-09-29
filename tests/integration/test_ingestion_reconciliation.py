@@ -1,10 +1,13 @@
 import pytest
 
 from etl.reconciliation import (
+    CLEANING_SOURCE,
+    KEY_RESOLUTION_SOURCE,
     ProductReconciliation,
     record_product_reconciliation,
     record_product_rejections,
 )
+from etl.rejection_counts import add_rejection_counts
 
 
 def test_record_product_reconciliation_persists_all_counts(pg_conn):
@@ -30,6 +33,12 @@ def test_record_product_reconciliation_persists_all_counts(pg_conn):
         rows_deduplicated=2,
         rows_fact_pending=7,
         rows_fact_published=7,
+    )
+    add_rejection_counts(
+        pg_conn, run_id=run_id, source_file=CLEANING_SOURCE, counts={"a": 1, "b": 1}
+    )
+    add_rejection_counts(
+        pg_conn, run_id=run_id, source_file=KEY_RESOLUTION_SOURCE, counts={"c": 1}
     )
     record_product_reconciliation(pg_conn, run_id, counts)
     pg_conn.commit()
@@ -74,6 +83,7 @@ def test_record_product_rejections_keeps_reason_and_source(pg_conn):
         rejected=[
             {
                 "row": {"id_producto": "missing", "precio": "12.50"},
+                "code": "producto_not_found",
                 "reason": "producto_sk not found",
             }
         ],
@@ -118,4 +128,44 @@ def test_record_product_reconciliation_rejects_an_invalid_raw_count(pg_conn):
     counts = ProductReconciliation(1, 1, 0, 0, 1, 1)
 
     with pytest.raises(ValueError, match="do not reconcile"):
+        record_product_reconciliation(pg_conn, run_id, counts)
+
+
+@pytest.mark.parametrize(
+    ("cleaning_rows", "key_rows"),
+    [(1, 1), (2, 0), (2, 2)],
+    ids=["missing-cleaning-count", "missing-key-count", "extra-key-count"],
+)
+def test_record_product_reconciliation_requires_matching_rejection_counts(
+    pg_conn, cleaning_rows, key_rows
+):
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
+            VALUES ('counts.zip', 'https://example.test/counts.zip', 'counts', 1, '2026-03-15')
+            RETURNING id
+            """
+        )
+        cur.execute(
+            "INSERT INTO ingestion_runs (raw_file_id) VALUES (%s) RETURNING id",
+            (cur.fetchone()[0],),
+        )
+        run_id = cur.fetchone()[0]
+    add_rejection_counts(
+        pg_conn, run_id=run_id, source_file=CLEANING_SOURCE, counts={"a": cleaning_rows}
+    )
+    add_rejection_counts(
+        pg_conn, run_id=run_id, source_file=KEY_RESOLUTION_SOURCE, counts={"b": key_rows}
+    )
+    counts = ProductReconciliation(
+        rows_valid=10,
+        rows_rejected=2,
+        rows_without_keys=1,
+        rows_deduplicated=2,
+        rows_fact_pending=7,
+        rows_fact_published=7,
+    )
+
+    with pytest.raises(ValueError, match="rejection counts do not reconcile"):
         record_product_reconciliation(pg_conn, run_id, counts)

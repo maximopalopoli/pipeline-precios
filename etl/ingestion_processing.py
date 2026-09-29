@@ -12,7 +12,13 @@ import structlog
 
 from etl.load import warehouse_loader
 from etl.performance import StageTimer, items_per_second
-from etl.reconciliation import ProductReconciliation, record_product_rejections
+from etl.reconciliation import (
+    CLEANING_SOURCE,
+    KEY_RESOLUTION_SOURCE,
+    ProductReconciliation,
+    record_product_rejections,
+)
+from etl.rejection_counts import clear_rejections
 from etl.transform.cleaner import clean_comercios, clean_productos, clean_sucursales
 from etl.transform.fact_builder import (
     PRODUTO_CHUNK_SIZE,
@@ -143,6 +149,11 @@ def stream_pending_product_facts(
     if commit_every_chunks <= 0:
         raise ValueError("commit_every_chunks must be positive")
 
+    # Pending facts are upserted, but rejections are added; start this run's
+    # product rejections from zero so a retried task does not count them twice.
+    clear_rejections(
+        conn, run_id=run_id, source_files=(CLEANING_SOURCE, KEY_RESOLUTION_SOURCE)
+    )
     fecha_id, comercio_cache, sucursal_cache, producto_cache = build_sk_caches(
         conn, run_date
     )
@@ -173,7 +184,7 @@ def stream_pending_product_facts(
                 record_product_rejections(
                     conn,
                     run_id=run_id,
-                    source="clean_productos",
+                    source=CLEANING_SOURCE,
                     rejected=clean_result.rejected,
                 )
                 fact_result = build_fact_chunk(
@@ -188,7 +199,7 @@ def stream_pending_product_facts(
                 record_product_rejections(
                     conn,
                     run_id=run_id,
-                    source="fact_key_resolution",
+                    source=KEY_RESOLUTION_SOURCE,
                     rejected=fact_result.rejected,
                 )
                 chunk_rows_deduplicated = (
