@@ -1,8 +1,9 @@
 """Explicit bounds for a local, partial SEPA ingestion.
 
-This module only defines and validates the bounded-ingestion contract.  The
-staging and publication steps consume it in subsequent changes, so parsing a
-policy alone must never silently turn a full ingestion into a partial one.
+This module defines and validates the bounded-ingestion contract.  Staging
+applies the bounds and publication skips a partial run, so a policy is enabled
+only by an explicit setting: an unset or blank value must never silently turn
+a full ingestion into a partial one.
 """
 
 from __future__ import annotations
