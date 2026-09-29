@@ -372,10 +372,36 @@ def test_register_rejected_rows_counts_all_but_samples_a_bounded_set_once(
             (run_id,),
         )
         assert cur.fetchall() == [("stg_comercios", "comercio_cuit_empty", 2)]
-        cur.execute("SELECT COUNT(*) FROM rejected_rows WHERE run_id = %s", (run_id,))
-        assert cur.fetchone()[0] == 1
+        cur.execute(
+            "SELECT rejection_code FROM rejected_rows WHERE run_id = %s", (run_id,)
+        )
+        assert cur.fetchall() == [("comercio_cuit_empty",)]
         cur.execute("SELECT rows_rejected FROM ingestion_runs WHERE id = %s", (run_id,))
         assert cur.fetchone()[0] == 2
+
+
+def test_register_rejected_rows_resets_the_total_when_a_retry_finds_none(
+    pg_conn, sample_zip_path
+):
+    run_id = _load_sample_staging(pg_conn, sample_zip_path)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE stg_comercios SET comercio_cuit = '' WHERE run_id = %s",
+            (run_id,),
+        )
+    pg_conn.commit()
+    failed = [_make("required_nulls", passed=False, severity=Severity.WARNING,
+                    nulls_by_table={"stg_comercios": {"comercio_cuit": 2}})]
+    register_rejected_rows(pg_conn, run_id, failed)
+
+    count = register_rejected_rows(pg_conn, run_id, ALL_PASS)
+
+    assert count == 0
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT rows_rejected FROM ingestion_runs WHERE id = %s", (run_id,))
+        assert cur.fetchone()[0] == 0
+        cur.execute("SELECT COUNT(*) FROM rejection_counts WHERE run_id = %s", (run_id,))
+        assert cur.fetchone()[0] == 0
 
 
 def test_register_rejected_rows_tipo_sucursal(pg_conn, sample_zip_path):

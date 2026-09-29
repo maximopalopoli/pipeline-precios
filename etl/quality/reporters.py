@@ -299,10 +299,7 @@ def register_rejected_rows(
         for query in handler():
             total += _record_rejection_query(conn, run_id, query, sample_rows)
 
-    if total == 0:
-        conn.commit()
-        return 0
-
+    # Always overwrite the total: a retry must not keep a stale count.
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE ingestion_runs SET rows_rejected = %s WHERE id = %s",
@@ -329,7 +326,8 @@ def _record_rejection_query(
         rows: list[tuple] = []
         if sample_rows > 0:
             cur.execute(
-                f"SELECT {', '.join(query.columns)} {where} LIMIT %s",
+                f"SELECT {', '.join(query.columns)} {where} "
+                f"ORDER BY {', '.join(query.columns)} LIMIT %s",
                 (*params, sample_rows),
             )
             rows = cur.fetchall()

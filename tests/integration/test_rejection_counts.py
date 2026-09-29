@@ -148,6 +148,16 @@ def test_every_rejection_is_counted_but_only_a_sample_is_stored(pg_conn):
         ("clean_productos", "invalid_price"): 12,
         ("clean_productos", "missing_ean"): 3,
     }
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT rejection_code, COUNT(*)
+            FROM rejected_rows WHERE run_id = %s
+            GROUP BY rejection_code ORDER BY rejection_code
+            """,
+            (run_id,),
+        )
+        assert cur.fetchall() == [("invalid_price", 5), ("missing_ean", 3)]
     reasons = [reason for _source, reason in _sampled_rows(pg_conn, run_id)]
     assert reasons == [
         "invalid_price #0",

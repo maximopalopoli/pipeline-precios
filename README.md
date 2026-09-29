@@ -412,7 +412,11 @@ table or a processing step) and a stable reason code such as
 `productos_precio_lista_not_positive` or `producto_not_found`. The detailed
 reason, including the offending value, is kept only with the sampled rows:
 `rejected_rows` stores at most `SEPA_REJECTED_SAMPLE_ROWS` rows (default 100)
-per run, source and code, so its size no longer grows with bad source data. To
+per run, source and code, so its size no longer grows with bad source data.
+Each sampled row keeps its code in `rejected_rows.rejection_code`. Only the
+`clean_productos` and `fact_key_resolution` sources are terms of the equations
+above; the `stg_*` sources come from warning-level quality checks and are
+diagnostic, so a row can appear there and in `clean_productos`. To
 inspect every rejected row of a day, replay its archived ZIP with
 `make restore-date`. Each step clears its own counts and samples before
 recomputing them, so a retried task does not count rows twice. Rows written
@@ -423,6 +427,10 @@ SELECT source_file, rejection_reason, row_count
 FROM rejection_counts
 WHERE run_id = 42
 ORDER BY row_count DESC;
+
+SELECT raw_data, rejection_reason
+FROM rejected_rows
+WHERE run_id = 42 AND rejection_code = 'producto_not_found';
 ```
 
 The API exposes these fields as `reconciliacion` in `GET /api/health`; the home

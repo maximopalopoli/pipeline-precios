@@ -18,3 +18,14 @@ COMMENT ON COLUMN rejection_counts.source_file IS
     'Same value as rejected_rows.source_file: a staged CSV or a processing step such as clean_productos.';
 COMMENT ON COLUMN rejection_counts.row_count IS
     'Every row rejected for this reason in this run, sampled or not.';
+COMMENT ON COLUMN rejection_counts.rejection_reason IS
+    'Stable reason code, such as producto_not_found; matches rejected_rows.rejection_code.';
+
+-- Samples carry the code they are counted under; rejection_reason keeps the
+-- detailed message with the offending value.  Rows from earlier runs have no code.
+ALTER TABLE rejected_rows ADD COLUMN IF NOT EXISTS rejection_code TEXT;
+
+COMMENT ON COLUMN rejected_rows.rejection_code IS
+    'Stable reason code counted in rejection_counts; NULL for rows stored before sampling.';
+COMMENT ON COLUMN rejected_rows.rejection_reason IS
+    'Detailed reason for this row, including the offending value.';

@@ -144,7 +144,7 @@ def record_rejections(
         for code, count in counts.items()
         if count > 0
     }
-    kept: list[tuple[int, str, str, str]] = []
+    kept: list[tuple[int, str, str, str, str]] = []
     if any(remaining.values()):
         for code, raw_data, reason in samples:
             if code not in remaining:
@@ -152,15 +152,16 @@ def record_rejections(
             if remaining[code] == 0:
                 continue
             remaining[code] -= 1
-            kept.append((run_id, source_file, raw_data, reason))
+            kept.append((run_id, source_file, code, raw_data, reason))
             if not any(remaining.values()):
                 break
     if kept:
         with conn.cursor() as cur:
             cur.executemany(
                 """
-                INSERT INTO rejected_rows (run_id, source_file, raw_data, rejection_reason)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO rejected_rows
+                    (run_id, source_file, rejection_code, raw_data, rejection_reason)
+                VALUES (%s, %s, %s, %s, %s)
                 """,
                 kept,
             )
