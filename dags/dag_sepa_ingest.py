@@ -87,6 +87,22 @@ def _development_policy_from_xcom(ti):
     )
 
 
+def _regional_scope_from_xcom(ti):
+    """Read the regional scope selected when this DAG run took its lock.
+
+    The skip decision and the staging filter must use the same scope, even if
+    the environment changes between tasks.
+    """
+    from etl.regional_scope import scope_from_environment
+
+    data = ti.xcom_pull(task_ids="check_file_changed", key="regional_scope")
+    if data is None:
+        # Compatibility for direct task invocation in tests and operator tools.
+        # Normal DAG runs always persist the scope in check_file_changed.
+        return scope_from_environment()
+    return scope_from_environment({"SEPA_REGIONAL_SCOPE": data["name"] or ""})
+
+
 def _release_ingestion_lock_on_failure(context) -> None:
     """Release the date after Airflow exhausts a task's configured retries."""
     from etl.ingestion_lock import IngestionLockOwnershipError, release_ingestion_lock
@@ -246,6 +262,7 @@ def check_file_changed(**kwargs):
                 "max_product_rows": development_policy.max_product_rows,
             },
         )
+        ti.xcom_push(key="regional_scope", value={"name": scope_name})
         return should_process
     except Exception:
         if lock is not None:
@@ -259,7 +276,6 @@ def load_staging(**kwargs):
     """Open ingestion run + load staging tables from ZIP."""
     from etl.ingestion_run import open_ingestion_run, record_source_date
     from etl.fact_chunking import from_environment as fact_chunk_size_from_environment
-    from etl.regional_scope import scope_from_environment
     from etl.staging import loader as staging_loader
     from etl.storage_metrics import collect_storage_footprint
     from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
@@ -268,7 +284,7 @@ def load_staging(**kwargs):
     dl_info = ti.xcom_pull(task_ids="download_zip")
     development_policy = _development_policy_from_xcom(ti)
     fact_chunk_size = fact_chunk_size_from_environment()
-    regional_scope = scope_from_environment()
+    regional_scope = _regional_scope_from_xcom(ti)
 
     conn = _db_connect()
     run_id: int | None = None
@@ -325,6 +341,7 @@ def load_staging(**kwargs):
             rows_sucursales_out_of_scope=stg.rows_sucursales_out_of_scope,
             rows_sucursales_unlocated=stg.rows_sucursales_unlocated,
             rows_productos_out_of_scope=stg.rows_productos_out_of_scope,
+            rows_productos_store_unlisted=stg.rows_productos_store_unlisted,
         )
         log.info(
             "airflow.storage_footprint",
@@ -342,6 +359,7 @@ def load_staging(**kwargs):
             "rows_productos_source": stg.rows_productos_source,
             "rows_productos_selected": stg.rows_productos_selected,
             "rows_productos_out_of_scope": stg.rows_productos_out_of_scope,
+            "rows_productos_store_unlisted": stg.rows_productos_store_unlisted,
         }
     except Exception as exc:
         _fail_active_timer(timer, exc)

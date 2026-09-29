@@ -323,6 +323,7 @@ def run(
             rows_sucursales_out_of_scope=stg.rows_sucursales_out_of_scope,
             rows_sucursales_unlocated=stg.rows_sucursales_unlocated,
             rows_productos_out_of_scope=stg.rows_productos_out_of_scope,
+            rows_productos_store_unlisted=stg.rows_productos_store_unlisted,
         )
         logger.info(
             "pipeline.storage_footprint",

@@ -371,13 +371,14 @@ def test_a_regional_scope_stages_only_its_stores_and_counts_the_rest(
         inner_zips_count=1,
         rows_comercios=0,
         rows_sucursales=2,
-        rows_productos=3,
+        rows_productos=2,
         rows_productos_source=7,
         rows_productos_selected=7,
         regional_scope="amba",
         rows_sucursales_out_of_scope=2,
         rows_sucursales_unlocated=1,
         rows_productos_out_of_scope=4,
+        rows_productos_store_unlisted=1,
     )
     with pg_conn.cursor() as cur:
         cur.execute(
@@ -389,8 +390,9 @@ def test_a_regional_scope_stages_only_its_stores_and_counts_the_rest(
             "SELECT id_sucursal FROM stg_productos WHERE run_id = %s ORDER BY 1",
             (run_id,),
         )
-        # Store 9 is kept for key resolution to reject, never hidden here
-        assert cur.fetchall() == [("02",), ("1",), ("9",)]
+        # Store 9 cannot be placed: dim_sucursal may still hold it from an
+        # unscoped ingestion, so it is counted as unlisted instead of staged
+        assert cur.fetchall() == [("02",), ("1",)]
 
 
 def test_without_a_scope_every_store_is_staged(pg_conn, tmp_path):
@@ -401,6 +403,7 @@ def test_without_a_scope_every_store_is_staged(pg_conn, tmp_path):
     assert (result.rows_sucursales, result.rows_productos) == (5, 7)
     assert result.regional_scope is None
     assert result.rows_productos_out_of_scope == 0
+    assert result.rows_productos_store_unlisted == 0
 
 
 @pytest.mark.parametrize("max_product_rows", [1, 2])
@@ -420,6 +423,7 @@ def test_the_scope_applies_before_the_development_row_cap(
     assert result.rows_productos == max_product_rows
     assert result.rows_productos_selected == 7
     assert result.rows_productos_out_of_scope == 4
+    assert result.rows_productos_store_unlisted == 1
 
 
 def test_register_counts_records_the_scope_and_its_counts(pg_conn, tmp_path):
@@ -433,10 +437,11 @@ def test_register_counts_records_the_scope_and_its_counts(pg_conn, tmp_path):
             """
             SELECT regional_scope, rows_sucursales, rows_sucursales_out_of_scope,
                    rows_sucursales_unlocated, rows_productos_source,
-                   rows_productos_out_of_scope, rows_productos_raw
+                   rows_productos_out_of_scope, rows_productos_store_unlisted,
+                   rows_productos_raw
               FROM ingestion_runs
              WHERE id = %s
             """,
             (run_id,),
         )
-        assert cur.fetchone() == ("amba", 2, 2, 1, 7, 4, 3)
+        assert cur.fetchone() == ("amba", 2, 2, 1, 7, 4, 1, 2)

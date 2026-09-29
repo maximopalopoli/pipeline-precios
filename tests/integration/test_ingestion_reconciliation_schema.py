@@ -95,7 +95,8 @@ def test_ingestion_runs_records_the_regional_scope_and_its_counts(pg_conn):
                   'regional_scope',
                   'rows_sucursales_out_of_scope',
                   'rows_sucursales_unlocated',
-                  'rows_productos_out_of_scope'
+                  'rows_productos_out_of_scope',
+                  'rows_productos_store_unlisted'
               )
             """
         )
@@ -114,5 +115,7 @@ def test_ingestion_runs_records_the_regional_scope_and_its_counts(pg_conn):
         "rows_sucursales_out_of_scope",
         "rows_sucursales_unlocated",
         "rows_productos_out_of_scope",
+        "rows_productos_store_unlisted",
     }
     assert "rows_productos_out_of_scope >= 0" in constraint
+    assert "rows_productos_store_unlisted >= 0" in constraint

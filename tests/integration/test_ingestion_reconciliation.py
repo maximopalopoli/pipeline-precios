@@ -171,7 +171,14 @@ def test_record_product_reconciliation_requires_matching_rejection_counts(
         record_product_reconciliation(pg_conn, run_id, counts)
 
 
-def _run_with_staging_counts(conn, *, source: int, out_of_scope: int | None, raw: int) -> int:
+def _run_with_staging_counts(
+    conn,
+    *,
+    source: int,
+    out_of_scope: int | None,
+    raw: int,
+    store_unlisted: int | None = None,
+) -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -184,12 +191,12 @@ def _run_with_staging_counts(conn, *, source: int, out_of_scope: int | None, raw
             """
             INSERT INTO ingestion_runs (
                 raw_file_id, rows_productos_source, rows_productos_out_of_scope,
-                rows_productos_raw
+                rows_productos_store_unlisted, rows_productos_raw
             )
-            VALUES (%s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id
             """,
-            (cur.fetchone()[0], source, out_of_scope, raw),
+            (cur.fetchone()[0], source, out_of_scope, store_unlisted, raw),
         )
         return cur.fetchone()[0]
 
@@ -207,10 +214,16 @@ def _all_valid(rows: int, *, is_partial: bool = False) -> ProductReconciliation:
 
 
 @pytest.mark.parametrize(
-    ("source", "out_of_scope"), [(10, 6), (4, None)], ids=["scoped", "unscoped"]
+    ("source", "out_of_scope", "store_unlisted"),
+    [(10, 6, None), (12, 6, 2), (4, None, None)],
+    ids=["scoped", "scoped-with-unlisted-stores", "unscoped"],
 )
-def test_source_rows_reconcile_with_out_of_scope_plus_raw(pg_conn, source, out_of_scope):
-    run_id = _run_with_staging_counts(pg_conn, source=source, out_of_scope=out_of_scope, raw=4)
+def test_source_rows_reconcile_with_every_bucket_plus_raw(
+    pg_conn, source, out_of_scope, store_unlisted
+):
+    run_id = _run_with_staging_counts(
+        pg_conn, source=source, out_of_scope=out_of_scope, raw=4, store_unlisted=store_unlisted
+    )
 
     record_product_reconciliation(pg_conn, run_id, _all_valid(4))
 
@@ -218,7 +231,7 @@ def test_source_rows_reconcile_with_out_of_scope_plus_raw(pg_conn, source, out_o
 def test_source_rows_missing_from_every_bucket_do_not_reconcile(pg_conn):
     run_id = _run_with_staging_counts(pg_conn, source=11, out_of_scope=6, raw=4)
 
-    with pytest.raises(ValueError, match="out of scope \\+ raw"):
+    with pytest.raises(ValueError, match="out of scope \\+ store unlisted \\+ raw"):
         record_product_reconciliation(pg_conn, run_id, _all_valid(4))
 
 

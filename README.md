@@ -340,12 +340,15 @@ Stores are classified while `sucursales.csv` is staged:
 | `AR-B` without plausible coordinates | Unlocated: counted and left out, never guessed |
 
 Coordinates are plausible when both parse as dot-decimal numbers inside
-Argentina's bounding box. Product rows are then kept only when their store was
-not left out. The store key is `id_comercio`, `id_bandera` and `id_sucursal`
-with leading zeros removed, because `id_sucursal` padding differs between the
-files. Product rows whose store is missing from `sucursales.csv` are kept, so
-dimension resolution rejects and counts them instead of hiding them. The scope
-applies after the development chain filter and before the development row cap.
+Argentina's bounding box. Product rows are then kept only when the same file
+placed their store in scope. The store key is `id_comercio`, `id_bandera` and
+`id_sucursal` with leading zeros removed, because `id_sucursal` padding differs
+between the files. Product rows whose store is missing from `sucursales.csv`
+(for example, a chain whose store file is truncated or absent that day) cannot
+be placed; `dim_sucursal` may still hold that store from an earlier unscoped
+ingestion, so they are counted as `rows_productos_store_unlisted` and not
+staged rather than published outside the scope. The scope applies after the
+development chain filter and before the development row cap.
 
 The scope is recorded on each run (`ingestion_runs.regional_scope`). A raw file
 is skipped only when a completed run used the same scope, so changing
@@ -413,6 +416,7 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 | `rows_productos_source` | Product rows inspected in source archives before development chain bounds and the regional scope. |
 | `rows_productos_selected` | Source rows selected by development chain bounds, before the regional scope and an optional row cap. |
 | `rows_productos_out_of_scope` | Product rows of stores left out by the regional scope (out of scope or unlocated); `NULL` for runs before the scope existed. |
+| `rows_productos_store_unlisted` | Scoped runs only: product rows whose store is not listed in the source `sucursales.csv`, so the scope cannot place them. |
 | `rows_productos_raw` | Rows staged after the regional scope and all development bounds; the input to product cleaning. |
 | `rows_productos_valid` | Rows accepted by product cleaning. |
 | `rows_productos_rejected` | Rows rejected by product cleaning, counted per reason in `rejection_counts` (source `clean_productos`). |
@@ -427,7 +431,7 @@ For a completed run, the following invariants hold:
 
 ```text
 rows_productos_source >= rows_productos_selected >= rows_productos_raw
-rows_productos_source = rows_productos_out_of_scope + rows_productos_raw  # full runs only
+rows_productos_source = rows_productos_out_of_scope + rows_productos_store_unlisted + rows_productos_raw  # full runs only
 rows_productos_raw = rows_productos_valid + rows_productos_rejected
 rows_productos_valid = rows_productos_without_keys + rows_productos_deduplicated + rows_fact_pending
 rows_fact_pending = rows_fact_published  # full runs only
@@ -438,7 +442,8 @@ rows_productos_without_keys = SUM(rejection_counts.row_count) for fact_key_resol
 For an explicit partial development run, `rows_fact_published` is zero and its
 pending rows remain isolated for local inspection, and its bounds leave source
 rows out on purpose; those are the intended exceptions to the full-run
-invariants. A missing `rows_productos_out_of_scope` counts as zero.
+invariants. A missing `rows_productos_out_of_scope` or
+`rows_productos_store_unlisted` counts as zero.
 
 ### Rejected rows
 

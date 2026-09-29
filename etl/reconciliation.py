@@ -62,7 +62,8 @@ def record_product_reconciliation(
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT rows_productos_raw, rows_productos_source, rows_productos_out_of_scope
+            SELECT rows_productos_raw, rows_productos_source,
+                   rows_productos_out_of_scope, rows_productos_store_unlisted
             FROM ingestion_runs
             WHERE id = %s
             """,
@@ -71,7 +72,7 @@ def record_product_reconciliation(
         row = cur.fetchone()
         if row is None:
             raise ValueError(f"Ingestion run {run_id} does not exist.")
-        rows_raw, rows_source, rows_out_of_scope = row
+        rows_raw, rows_source, rows_out_of_scope, rows_store_unlisted = row
         if rows_raw is not None and rows_raw != counts.rows_valid + counts.rows_rejected:
             raise ValueError(
                 f"Run {run_id} raw product rows ({rows_raw}) do not reconcile with "
@@ -80,11 +81,14 @@ def record_product_reconciliation(
         # A full run stages every source row except those the regional scope
         # left out; development bounds drop rows on purpose, so skip them.
         if not counts.is_partial and rows_raw is not None and rows_source is not None:
-            rows_staged = (rows_out_of_scope or 0) + rows_raw
-            if rows_source != rows_staged:
+            rows_accounted = (
+                (rows_out_of_scope or 0) + (rows_store_unlisted or 0) + rows_raw
+            )
+            if rows_source != rows_accounted:
                 raise ValueError(
                     f"Run {run_id} source product rows ({rows_source}) do not "
-                    f"reconcile with out of scope + raw ({rows_staged})."
+                    f"reconcile with out of scope + store unlisted + raw "
+                    f"({rows_accounted})."
                 )
         _check_rejection_counts(cur, run_id, counts)
         cur.execute(

@@ -523,6 +523,7 @@ def test_airflow_reserves_the_date_before_loading_staging(pg_conn, dag_module, m
         "chain_keys": [],
         "max_product_rows": None,
     }
+    assert ti.pushed["regional_scope"] == {"name": None}
     with pg_conn.cursor() as cur:
         cur.execute("SELECT owner FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
         assert cur.fetchone()[0] == "airflow:manual__lock"
@@ -531,6 +532,22 @@ def test_airflow_reserves_the_date_before_loading_staging(pg_conn, dag_module, m
     with pg_conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM ingestion_locks WHERE fecha_datos = %s", (_RUN_DATE,))
         assert cur.fetchone()[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("selected", "environment", "expected"),
+    [("amba", "", "amba"), (None, "amba", None)],
+    ids=["scope-removed-later", "scope-added-later"],
+)
+def test_staging_uses_the_scope_selected_with_the_lock(
+    dag_module, monkeypatch, selected, environment, expected
+):
+    monkeypatch.setenv("SEPA_REGIONAL_SCOPE", environment)
+    ti = _TaskInstance({"check_file_changed": {"regional_scope": {"name": selected}}})
+
+    scope = dag_module._regional_scope_from_xcom(ti)
+
+    assert (scope.name if scope else None) == expected
 
 
 def test_cli_cannot_start_while_airflow_owns_the_same_date(

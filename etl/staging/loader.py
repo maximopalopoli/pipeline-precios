@@ -109,6 +109,7 @@ class LoadResult:
     rows_sucursales_out_of_scope: int = 0
     rows_sucursales_unlocated: int = 0
     rows_productos_out_of_scope: int = 0
+    rows_productos_store_unlisted: int = 0
 
 
 # A store key as (id_comercio, id_bandera, id_sucursal) with leading zeros
@@ -121,16 +122,21 @@ class _ScopeFilter:
     """Apply a regional scope to one staging load.
 
     Each inner ZIP stages sucursales.csv before productos.csv, so the stores
-    left out are known before their product rows are read.  A product whose
-    store is not listed in sucursales.csv is kept: key resolution rejects it
-    later and it stays counted there, instead of being hidden here.
+    in scope are known before their product rows are read.  Product rows are
+    kept only for those stores.  A product whose store this file does not
+    list cannot be placed, and ``dim_sucursal`` may still hold that store from
+    an earlier, unscoped ingestion, so it is left out and counted as unlisted
+    rather than published outside the scope.
     """
 
     def __init__(self, scope: RegionalScope) -> None:
         self.scope = scope
+        self.included_stores: set[_StoreKey] = set()
         self.excluded_stores: set[_StoreKey] = set()
         self.rows_sucursales_out_of_scope = 0
         self.rows_sucursales_unlocated = 0
+        self.rows_productos_out_of_scope = 0
+        self.rows_productos_store_unlisted = 0
 
     def for_sucursales(self, header: list[str]) -> RowFilter:
         key_of = _store_key_reader(header)
@@ -143,6 +149,7 @@ class _ScopeFilter:
                 _value(row, lat_idx), _value(row, lon_idx), _value(row, provincia_idx)
             )
             if status is StoreScope.IN_SCOPE:
+                self.included_stores.add(key_of(row))
                 return True
             if status is StoreScope.UNLOCATED:
                 self.rows_sucursales_unlocated += 1
@@ -155,7 +162,20 @@ class _ScopeFilter:
 
     def for_productos(self, header: list[str]) -> RowFilter:
         key_of = _store_key_reader(header)
-        return lambda row: key_of(row) not in self.excluded_stores
+
+        def keep(row: list[str]) -> bool:
+            key = key_of(row)
+            # A store listed both in and out of scope keeps its products,
+            # because its in-scope row is staged.
+            if key in self.included_stores:
+                return True
+            if key in self.excluded_stores:
+                self.rows_productos_out_of_scope += 1
+            else:
+                self.rows_productos_store_unlisted += 1
+            return False
+
+        return keep
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -192,8 +212,9 @@ def load(
         entrypoint. Callers must pass this value deliberately; ambient
         environment settings never change a normal staging load.
     regional_scope:
-        Optional production scope. Stores outside it and their product rows
-        are not staged; they are counted in the result instead.
+        Optional production scope. Stores outside it, their product rows and
+        product rows of stores this file does not list are not staged; they
+        are counted in the result instead.
 
     Returns
     -------
@@ -221,7 +242,6 @@ def load(
     rows_productos = 0
     rows_productos_source = 0
     rows_productos_selected = 0
-    rows_productos_out_of_scope = 0
     inner_zips_invalid_count = 0
     remaining_product_rows = development_policy.max_product_rows
 
@@ -289,7 +309,7 @@ def load(
                                 elif counter_name == "productos":
                                     row_filter = scope_filter.for_productos
                             with inner_zip.open(csv_index[csv_name]) as raw:
-                                loaded_rows, source_rows, selected_rows, filtered_rows = (
+                                loaded_rows, source_rows, selected_rows = (
                                     _stream_copy_into(
                                         conn,
                                         table,
@@ -315,7 +335,6 @@ def load(
                                 rows_productos += loaded_rows
                                 rows_productos_source += source_rows
                                 rows_productos_selected += selected_rows
-                                rows_productos_out_of_scope += filtered_rows
                                 if remaining_product_rows is not None:
                                     remaining_product_rows -= loaded_rows
                 except zipfile.BadZipFile as exc:
@@ -335,7 +354,6 @@ def load(
         rows_productos_source=rows_productos_source,
         rows_productos_selected=rows_productos_selected,
         inner_zips_invalid_count=inner_zips_invalid_count,
-        rows_productos_out_of_scope=rows_productos_out_of_scope,
     )
 
     conn.commit()
@@ -355,7 +373,12 @@ def load(
         rows_sucursales_unlocated=(
             scope_filter.rows_sucursales_unlocated if scope_filter else 0
         ),
-        rows_productos_out_of_scope=rows_productos_out_of_scope,
+        rows_productos_out_of_scope=(
+            scope_filter.rows_productos_out_of_scope if scope_filter else 0
+        ),
+        rows_productos_store_unlisted=(
+            scope_filter.rows_productos_store_unlisted if scope_filter else 0
+        ),
     )
     logger.info("staging.load.done", **result.__dict__)
     return result
@@ -400,7 +423,8 @@ def register_counts(
                    regional_scope = %s,
                    rows_sucursales_out_of_scope = %s,
                    rows_sucursales_unlocated = %s,
-                   rows_productos_out_of_scope = %s
+                   rows_productos_out_of_scope = %s,
+                   rows_productos_store_unlisted = %s
              WHERE id = %s
             """,
             (
@@ -415,6 +439,7 @@ def register_counts(
                 result.rows_sucursales_out_of_scope,
                 result.rows_sucursales_unlocated,
                 result.rows_productos_out_of_scope,
+                result.rows_productos_store_unlisted,
                 run_id,
             ),
         )
@@ -530,16 +555,15 @@ def _stream_copy_into(
     max_rows: int | None = None,
     copy_chunk_rows: int = _DEFAULT_COPY_CHUNK_ROWS,
     row_filter: Callable[[list[str]], RowFilter] | None = None,
-) -> tuple[int, int, int, int]:
+) -> tuple[int, int, int]:
     """
     Stream a CSV into a staging table via chunked COPY,
     bypassing pandas to keep memory usage low even for 400+ MB CSVs.
 
-    Returns ``(loaded_rows, source_rows, selected_rows, filtered_rows)``.
-    Source rows are counted before chain bounds, selected rows after chain
-    bounds but before the regional scope and a row cap, filtered rows are
-    selected rows left out by ``row_filter`` (built from the CSV header), and
-    loaded rows are what remains after all bounds. Input order is stable
+    Returns ``(loaded_rows, source_rows, selected_rows)``. Source rows are
+    counted before chain bounds, selected rows after chain bounds but before
+    ``row_filter`` (built from the CSV header; it counts what it leaves out)
+    and a row cap, and loaded rows after all bounds. Input order is stable
     because callers process sorted inner ZIP names and this function preserves
     each CSV's source order.
     """
@@ -553,9 +577,9 @@ def _stream_copy_into(
     try:
         header = [column.replace("\x00", "").strip() for column in next(reader)]
     except StopIteration:
-        return 0, 0, 0, 0
+        return 0, 0, 0
     if not any(header):
-        return 0, 0, 0, 0
+        return 0, 0, 0
 
     col_indices: list[int | None] = []
     missing = []
@@ -575,7 +599,6 @@ def _stream_copy_into(
     row_count = 0
     source_row_count = 0
     selected_row_count = 0
-    filtered_row_count = 0
     keep = row_filter(header) if row_filter is not None else None
 
     def _flush_chunk(buf: io.StringIO) -> None:
@@ -607,7 +630,6 @@ def _stream_copy_into(
             continue
         selected_row_count += 1
         if keep is not None and not keep(parsed):
-            filtered_row_count += 1
             continue
         if max_rows is not None and row_count >= max_rows:
             continue
@@ -629,7 +651,7 @@ def _stream_copy_into(
         _flush_chunk(buf)
     del buf
 
-    return row_count, source_row_count, selected_row_count, filtered_row_count
+    return row_count, source_row_count, selected_row_count
 
 
 def _column_index(header: list[str], column: str) -> int | None:
