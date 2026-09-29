@@ -13,8 +13,17 @@ import io
 import zipfile
 
 
+import pytest
+
 from etl.development_ingestion import DevelopmentIngestionPolicy
-from etl.staging.loader import _PRODUCTOS_COLS, LoadResult, load, register_counts
+from etl.regional_scope import AMBA
+from etl.staging.loader import (
+    _PRODUCTOS_COLS,
+    _SUCURSALES_COLS,
+    LoadResult,
+    load,
+    register_counts,
+)
 
 # ── Expected counts from sample.zip ───────────────────────────────────────────
 
@@ -296,3 +305,138 @@ def test_load_skips_an_invalid_inner_zip_and_records_its_count(
             (run_id,),
         )
         assert cur.fetchone() == (EXPECTED_INNER_ZIPS + 1, 1)
+
+
+# (id_sucursal, latitude, longitude, provincia) of a chain spanning the scope
+_SCOPED_STORES = [
+    ("001", "", "", "AR-C"),                    # CABA without coordinates: in
+    ("2", "-34.9214", "-57.9545", "AR-B"),      # La Plata: in
+    ("3", "-34.5703", "-59.1050", "AR-B"),      # Luján: out of scope
+    ("4", "", "", "AR-B"),                      # Buenos Aires, no coordinates: unlocated
+    ("5", "-31.4201", "-64.1888", "AR-X"),      # Córdoba: out of scope
+]
+# Store ids of product rows; leading zeros differ from sucursales.csv, and
+# store 9 is not listed there at all.
+_SCOPED_PRODUCT_STORES = ["1", "02", "3", "003", "004", "5", "9"]
+
+
+def _scoped_archive(tmp_path):
+    sucursales = io.StringIO()
+    writer = csv.writer(sucursales, delimiter="|", lineterminator="\n")
+    writer.writerow(_SUCURSALES_COLS)
+    for id_sucursal, latitude, longitude, provincia in _SCOPED_STORES:
+        row = dict.fromkeys(_SUCURSALES_COLS, "")
+        row.update(
+            id_comercio="1",
+            id_bandera="1",
+            id_sucursal=id_sucursal,
+            sucursales_latitud=latitude,
+            sucursales_longitud=longitude,
+            sucursales_provincia=provincia,
+        )
+        writer.writerow(row[column] for column in _SUCURSALES_COLS)
+
+    productos = io.StringIO()
+    writer = csv.writer(productos, delimiter="|", lineterminator="\n")
+    writer.writerow(_PRODUCTOS_COLS)
+    for position, id_sucursal in enumerate(_SCOPED_PRODUCT_STORES):
+        row = dict.fromkeys(_PRODUCTOS_COLS, "")
+        row.update(
+            id_comercio="1",
+            id_bandera="1",
+            id_sucursal=id_sucursal,
+            id_producto=f"sku-{position}",
+            productos_precio_lista="10",
+        )
+        writer.writerow(row[column] for column in _PRODUCTOS_COLS)
+
+    inner = io.BytesIO()
+    with zipfile.ZipFile(inner, "w") as inner_zip:
+        inner_zip.writestr("sucursales.csv", sucursales.getvalue())
+        inner_zip.writestr("productos.csv", productos.getvalue())
+    archive_path = tmp_path / "scoped.zip"
+    with zipfile.ZipFile(archive_path, "w") as outer_zip:
+        outer_zip.writestr("sepa_1_comercio-sepa-1_test.zip", inner.getvalue())
+    return archive_path
+
+
+def test_a_regional_scope_stages_only_its_stores_and_counts_the_rest(
+    pg_conn, tmp_path
+):
+    run_id = _insert_run(pg_conn, raw_file_id=_insert_raw_file(pg_conn))
+
+    result = load(pg_conn, _scoped_archive(tmp_path), run_id, regional_scope=AMBA)
+
+    assert result == LoadResult(
+        inner_zips_count=1,
+        rows_comercios=0,
+        rows_sucursales=2,
+        rows_productos=3,
+        rows_productos_source=7,
+        rows_productos_selected=7,
+        regional_scope="amba",
+        rows_sucursales_out_of_scope=2,
+        rows_sucursales_unlocated=1,
+        rows_productos_out_of_scope=4,
+    )
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT id_sucursal FROM stg_sucursales WHERE run_id = %s ORDER BY 1",
+            (run_id,),
+        )
+        assert cur.fetchall() == [("001",), ("2",)]
+        cur.execute(
+            "SELECT id_sucursal FROM stg_productos WHERE run_id = %s ORDER BY 1",
+            (run_id,),
+        )
+        # Store 9 is kept for key resolution to reject, never hidden here
+        assert cur.fetchall() == [("02",), ("1",), ("9",)]
+
+
+def test_without_a_scope_every_store_is_staged(pg_conn, tmp_path):
+    run_id = _insert_run(pg_conn, raw_file_id=_insert_raw_file(pg_conn))
+
+    result = load(pg_conn, _scoped_archive(tmp_path), run_id)
+
+    assert (result.rows_sucursales, result.rows_productos) == (5, 7)
+    assert result.regional_scope is None
+    assert result.rows_productos_out_of_scope == 0
+
+
+@pytest.mark.parametrize("max_product_rows", [1, 2])
+def test_the_scope_applies_before_the_development_row_cap(
+    pg_conn, tmp_path, max_product_rows
+):
+    run_id = _insert_run(pg_conn, raw_file_id=_insert_raw_file(pg_conn))
+
+    result = load(
+        pg_conn,
+        _scoped_archive(tmp_path),
+        run_id,
+        development_policy=DevelopmentIngestionPolicy(max_product_rows=max_product_rows),
+        regional_scope=AMBA,
+    )
+
+    assert result.rows_productos == max_product_rows
+    assert result.rows_productos_selected == 7
+    assert result.rows_productos_out_of_scope == 4
+
+
+def test_register_counts_records_the_scope_and_its_counts(pg_conn, tmp_path):
+    run_id = _insert_run(pg_conn, raw_file_id=_insert_raw_file(pg_conn))
+
+    result = load(pg_conn, _scoped_archive(tmp_path), run_id, regional_scope=AMBA)
+    register_counts(pg_conn, run_id, result)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT regional_scope, rows_sucursales, rows_sucursales_out_of_scope,
+                   rows_sucursales_unlocated, rows_productos_source,
+                   rows_productos_out_of_scope, rows_productos_raw
+              FROM ingestion_runs
+             WHERE id = %s
+            """,
+            (run_id,),
+        )
+        assert cur.fetchone() == ("amba", 2, 2, 1, 7, 4, 3)

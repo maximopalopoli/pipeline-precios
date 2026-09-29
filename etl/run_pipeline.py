@@ -78,6 +78,7 @@ from etl.raw_archive import (
     register_archived_zip,
 )
 from etl.raw_retention import apply_raw_retention
+from etl.regional_scope import scope_from_environment
 from etl.retention_policy import from_environment
 from etl.staging_retention import apply_staging_retention
 from etl.staging import loader as staging_loader
@@ -172,6 +173,7 @@ def run(
     raw_dir.mkdir(parents=True, exist_ok=True)
     retention_policy = from_environment()
     development_policy = development_policy or development_policy_from_environment()
+    regional_scope = scope_from_environment()
     fact_chunk_size = fact_chunk_size_with_cli_override(chunk_size=fact_chunk_size)
     if source_archive is not None and fecha is None:
         raise ValueError("fecha is required when replaying a local source archive")
@@ -294,6 +296,7 @@ def run(
             run_id,
             heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
             development_policy=development_policy,
+            regional_scope=regional_scope,
         )
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
@@ -306,6 +309,10 @@ def run(
             rows_productos=stg.rows_productos,
             rows_productos_source=stg.rows_productos_source,
             rows_productos_selected=stg.rows_productos_selected,
+            regional_scope=stg.regional_scope,
+            rows_sucursales_out_of_scope=stg.rows_sucursales_out_of_scope,
+            rows_sucursales_unlocated=stg.rows_sucursales_unlocated,
+            rows_productos_out_of_scope=stg.rows_productos_out_of_scope,
         )
         logger.info(
             "pipeline.storage_footprint",

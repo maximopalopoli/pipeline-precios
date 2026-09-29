@@ -250,6 +250,7 @@ def load_staging(**kwargs):
     """Open ingestion run + load staging tables from ZIP."""
     from etl.ingestion_run import open_ingestion_run, record_source_date
     from etl.fact_chunking import from_environment as fact_chunk_size_from_environment
+    from etl.regional_scope import scope_from_environment
     from etl.staging import loader as staging_loader
     from etl.storage_metrics import collect_storage_footprint
     from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
@@ -258,6 +259,7 @@ def load_staging(**kwargs):
     dl_info = ti.xcom_pull(task_ids="download_zip")
     development_policy = _development_policy_from_xcom(ti)
     fact_chunk_size = fact_chunk_size_from_environment()
+    regional_scope = scope_from_environment()
 
     conn = _db_connect()
     run_id: int | None = None
@@ -297,6 +299,7 @@ def load_staging(**kwargs):
             run_id,
             heartbeat=lambda: _renew_ingestion_lock(conn, ti),
             development_policy=development_policy,
+            regional_scope=regional_scope,
         )
         staging_loader.register_counts(conn, run_id, stg)
         conn.commit()
@@ -308,6 +311,10 @@ def load_staging(**kwargs):
             rows_productos=stg.rows_productos,
             rows_productos_source=stg.rows_productos_source,
             rows_productos_selected=stg.rows_productos_selected,
+            regional_scope=stg.regional_scope,
+            rows_sucursales_out_of_scope=stg.rows_sucursales_out_of_scope,
+            rows_sucursales_unlocated=stg.rows_sucursales_unlocated,
+            rows_productos_out_of_scope=stg.rows_productos_out_of_scope,
         )
         log.info(
             "airflow.storage_footprint",
@@ -324,6 +331,7 @@ def load_staging(**kwargs):
             "rows_productos": stg.rows_productos,
             "rows_productos_source": stg.rows_productos_source,
             "rows_productos_selected": stg.rows_productos_selected,
+            "rows_productos_out_of_scope": stg.rows_productos_out_of_scope,
         }
     except Exception as exc:
         _fail_active_timer(timer, exc)
