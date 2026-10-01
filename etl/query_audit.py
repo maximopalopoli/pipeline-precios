@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from api.kpi_metrics import WEEKLY_VARIATION_SQL
-
 
 @dataclass(frozen=True)
 class AuditQuery:
@@ -33,7 +31,7 @@ class QueryPlanSummary:
 
 
 def representative_queries(conn: Any, *, fecha_id: int | None = None) -> list[AuditQuery]:
-    """Build KPI and product-offer audits using a real published fact sample."""
+    """Build product-offer audits using a real published fact sample."""
     sample = _latest_product_day(conn, fecha_id=fecha_id)
     if sample is None:
         raise ValueError(
@@ -41,7 +39,6 @@ def representative_queries(conn: Any, *, fecha_id: int | None = None) -> list[Au
         )
     selected_fecha_id, producto_sk = sample
     return [
-        AuditQuery("weekly_variation", "GET /api/kpis", WEEKLY_VARIATION_SQL),
         AuditQuery(
             "product_offer_lookup", "GET /api/buscador",
             """

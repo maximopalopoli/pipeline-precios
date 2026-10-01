@@ -7,7 +7,6 @@ from time import perf_counter
 
 import structlog
 
-from etl.load.aggregator import aggregate
 from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation, record_product_reconciliation
 from etl.publication_metrics import record_publication_metrics
@@ -20,7 +19,6 @@ class PublicationResult:
     run_id: int
     fecha_id: int
     rows_fact: int
-    rows_aggregated: int
     rows_carried_forward: int = 0
 
 
@@ -33,7 +31,7 @@ def complete_partial_run(
     """Complete a bounded run without exposing its pending facts.
 
     Pending facts stay scoped to the run for local inspection. No visible facts
-    or aggregates are changed, and the reconciliation records zero published
+    are changed, and the reconciliation records zero published
     facts so the audit trail cannot present this as a full snapshot.
     """
     if not reconciliation.is_partial:
@@ -69,7 +67,7 @@ def complete_partial_run(
         if cur.rowcount != 1:
             raise ValueError(f"Cannot complete full ingestion run {run_id} as partial")
     result = PublicationResult(
-        run_id=run_id, fecha_id=0, rows_fact=0, rows_aggregated=0
+        run_id=run_id, fecha_id=0, rows_fact=0
     )
     log.info("publisher.partial_run_completed", **result.__dict__)
     return result
@@ -82,11 +80,11 @@ def publish_pending_facts(
     fecha_id: int,
     reconciliation: ProductReconciliation,
 ) -> PublicationResult:
-    """Replace one day's visible facts and aggregates from a pending run.
+    """Replace one day's visible facts from a pending run.
 
     The caller owns the transaction.  It must commit this function as one unit
     or roll it back if any statement fails.  Pending rows are only deleted once
-    they have been copied into ``fact_precios`` and their aggregates rebuilt.
+    they have been copied into ``fact_precios``.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT is_partial FROM ingestion_runs WHERE id = %s", (run_id,))
@@ -134,8 +132,6 @@ def publish_pending_facts(
 
     rows_fact = rows_source + rows_carried
 
-    agg = aggregate(conn, fecha_id)
-
     record_product_reconciliation(conn, run_id, reconciliation)
 
     with conn.cursor() as cur:
@@ -163,8 +159,6 @@ def publish_pending_facts(
         run_id=run_id,
         delete_existing_seconds=0,
         insert_facts_seconds=insert_facts_seconds,
-        aggregate_delete_seconds=agg.delete_seconds,
-        aggregate_insert_seconds=agg.insert_seconds,
         cleanup_seconds=cleanup_seconds,
         partition_swap_seconds=partition_swap_seconds,
     )
@@ -173,7 +167,6 @@ def publish_pending_facts(
         run_id=run_id,
         fecha_id=fecha_id,
         rows_fact=rows_fact,
-        rows_aggregated=agg.rows_upserted,
         rows_carried_forward=rows_carried,
     )
     log.info(
@@ -181,8 +174,6 @@ def publish_pending_facts(
         **result.__dict__,
         partition_swap_seconds=round(partition_swap_seconds, 3),
         insert_facts_seconds=round(insert_facts_seconds, 3),
-        aggregate_delete_seconds=round(agg.delete_seconds, 3),
-        aggregate_insert_seconds=round(agg.insert_seconds, 3),
         cleanup_seconds=round(cleanup_seconds, 3),
     )
     return result

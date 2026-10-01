@@ -512,7 +512,7 @@ def load_pending_fact_precios(**kwargs):
 
 
 def publish_daily_snapshot(**kwargs):
-    """Atomically publish facts, aggregates and the completed run state."""
+    """Atomically publish facts and the completed run state."""
     from etl.fact_retention import apply_fact_retention
     from etl.ingestion_lock import release_ingestion_lock
     from etl.ingestion_run import is_partial_run
@@ -565,7 +565,6 @@ def publish_daily_snapshot(**kwargs):
         conn.commit()
         timer.finish(
             rows_fact=publication.rows_fact,
-            rows_aggregated=publication.rows_aggregated,
             is_partial=is_partial,
             rows_fact_pending=reconciliation.rows_fact_pending,
             rows_fact_published=reconciliation.rows_fact_published,
@@ -617,7 +616,6 @@ def publish_daily_snapshot(**kwargs):
                     "airflow.fact_retention.completed",
                     cutoff=str(retention_policy.fact_cutoff(fecha)),
                     partitions=retention_result.partitions,
-                    aggregate_rows_deleted=retention_result.aggregate_rows_deleted,
                 )
         except Exception:
             # The snapshot is already committed. Do not report a successful

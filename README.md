@@ -50,8 +50,8 @@ Daily ZIP (~300 MB)
           └──────┬───────┘
                  │
           ┌──────▼───────┐
-          │  Aggregate    │  etl/load/aggregator.py
-          │               │  → agg_precios_diarios, v_variacion_precios
+          │  Publish      │  etl/load/publisher.py
+          │  (Atomic)     │  → daily partition swap + carried-forward stores
           └───────────────┘
 ```
 
@@ -63,7 +63,6 @@ Daily ZIP (~300 MB)
 | **Staging** | `stg_comercios`, `stg_sucursales`, `stg_productos` |
 | **Dimensions** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
 | **Fact** | `fact_precios` (monthly parents with daily leaves; grain: product × store × day) |
-| **Aggregations** | `agg_precios_diarios`, view `v_variacion_precios` |
 | **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample) |
 
 ## Project Structure
@@ -83,7 +82,6 @@ pipeline-precios/
 │   ├── transform/fact_builder.py     # Fact DataFrame construction
 │   ├── load/warehouse_loader.py      # Bulk COPY + upserts + pending facts
 │   ├── load/publisher.py             # Atomic daily publication
-│   ├── load/aggregator.py            # Daily aggregate recalculation
 │   ├── ingestion_run.py, ingestion_lock.py, reconciliation.py  # Run records, per-date lock, counts
 │   ├── rejection_counts.py           # Rejection counts per reason + bounded samples
 │   ├── development_ingestion.py      # Bounded partial development mode
@@ -339,15 +337,15 @@ Stores are classified while `sucursales.csv` is staged:
 | `AR-C` without plausible coordinates (all of CABA lies inside the radius) | In scope |
 | `AR-B` without plausible coordinates | Unlocated: counted and left out, never guessed |
 
-Store discovery (`/api/locales`, province, chain and locality filters, and the
-store KPI) includes only stores with prices on the latest published day. Older
+Store discovery (`/api/locales` and the province, chain and locality filters)
+includes only stores with prices on the latest published day. Older
 national facts may remain under fact retention without appearing as current
 stores.
 
-The shopper-facing product-date, daily-offer and store-promotion routes read
-published facts directly. They continue to work when the analytics aggregate
-table is empty; the remaining analytics routes still use that table until
-their planned retirement.
+The product-date, daily-offer and store-promotion routes read published
+facts and run metadata directly. The analytics aggregates (weekly variation
+KPI, Evolución, Variaciones) were retired in migration 035; price history
+lives in the archived source ZIPs.
 
 When a store has no valid price rows in a later file, publication carries its
 last prices from the newest available snapshot of the same regional scope.
@@ -552,7 +550,7 @@ make etl-baseline RUN_ID=5
 # Compare only completed replays that share source ZIP and bounded policy.
 make compare-etl-baselines RUN_ID=5
 
-# Representative /api/kpis, /api/buscador and /api/ofertas plans.
+# Representative /api/buscador and /api/ofertas plans.
 # Requires at least one full published snapshot; bounded runs publish no facts.
 make audit-queries FECHA_ID=20260922
 ```
@@ -574,8 +572,8 @@ The local bounded-ingestion mode is opt-in and uses `SEPA_DEV_CHAIN_KEYS`
 `SEPA_DEV_MAX_PRODUCT_ROWS` (a positive integer). Both settings are validated
 strictly and are disabled when unset. When either is set, CLI and Airflow mark
 the run as partial, retain
-its staging and pending facts only for local inspection, and publish zero facts
-and aggregates. They may add dimension keys required by their pending facts but
+its staging and pending facts only for local inspection, and publish zero
+facts. They may add dimension keys required by their pending facts but
 never overwrite attributes already visible from a full run. Partial runs skip
 retention and never make the source look fully ingested, so a later full
 ingestion of the same ZIP remains eligible. Their audit records retain both
@@ -680,7 +678,7 @@ All variables have development defaults. Set them in `.env` (see
 | `AIRFLOW_SECRET_KEY` | Airflow secret key |
 | `SEPA_FACT_CHUNK_SIZE` | Staged product rows per fact batch (default 300000) |
 | `SEPA_PENDING_FACT_COMMIT_EVERY_CHUNKS` | Pending-fact chunks written per commit (default 5) |
-| `SEPA_FACT_RETENTION_DAYS` | Opt-in; keeps the ingested date plus the previous N days of facts and drops older daily partitions and their daily aggregates. Use at least 7 while the weekly KPI, Variaciones and Evolución views exist; the first run on a long history deletes old aggregates in one transaction. Off when unset |
+| `SEPA_FACT_RETENTION_DAYS` | Opt-in; keeps the ingested date plus the previous N days of facts and drops older daily partitions (and months left empty). 3 covers rectifications and rollback. Off when unset |
 | `SEPA_STAGING_RETENTION_DAYS` | Opt-in; removes staging rows of terminal runs older than N days. Off when unset |
 | `SEPA_RAW_RETENTION_DAYS` | Opt-in; removes local ZIPs older than N days only when a verified archived copy exists. Frees space only when the archive is on another disk. Off when unset |
 | `SEPA_ARCHIVE_DIR` | Source ZIP archive folder (default: `archive` inside the raw directory) |
@@ -699,15 +697,14 @@ failure before Airflow retries or marks the task as failed.
 ### Web app
 
 Pages: Home, Buscador (price finder with map), BuscadorEAN (lookup by barcode),
-Lista (shopping list), Ofertas (daily promotions), Locales (nearby store
-locator), Evolución and Variaciones. The last two, along with the KPIs on Home,
-are analytics views being retired: detailed price history is out of scope for
-the comparator. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
+Lista (shopping list), Ofertas (daily promotions) and Locales (nearby store
+locator). Home shows the latest publication and the quality of the last
+ingestion. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
 TanStack Table/Query for data.
 
 ## Technical Decisions
 
-- **Idempotency:** SHA-256 plus a completed ingestion to skip duplicate downloads; failed runs remain retryable; `ON CONFLICT DO UPDATE` on dimensions and facts; re-runs recalculate aggregates
+- **Idempotency:** SHA-256 plus a completed ingestion to skip duplicate downloads; failed runs remain retryable; `ON CONFLICT DO UPDATE` on dimensions; a rectified day replaces its whole daily partition atomically
 - **Untyped staging:** all VARCHAR to preserve raw data and simplify quality check debugging
 - **SCD Type 1:** dimensions update with last-write-wins (no change history)
 - **Daily fact leaves:** `fact_precios` uses monthly parents with daily leaves, so a prepared day can be atomically replaced and retention can drop whole expired days (and fully expired months) without row-by-row deletes.
@@ -727,6 +724,8 @@ TanStack Table/Query for data.
 | Storage: current snapshot in PostgreSQL, history in archived ZIPs | Next |
 | AMBA regional scope | Done |
 | Carry-forward of missing stores and price date on offers | Done; full replay pending |
+| Shopper price routes independent of analytics aggregates | Done |
+| Analytics route and aggregate retirement | Done |
 | Canonical product catalog and shopping-list comparison UI | Planned |
 | Promotions and discounts beyond SEPA's list/promo prices | Later |
 

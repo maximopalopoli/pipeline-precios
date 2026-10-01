@@ -1,4 +1,4 @@
-"""Shopping routes read published facts even when analytics aggregates are empty."""
+"""Shopping routes read published facts and run metadata only."""
 
 import asyncio
 import re
@@ -9,7 +9,7 @@ from api.routes import buscador, locales, ofertas
 from etl.load.warehouse_loader import _ensure_partition
 
 
-def test_shopper_dates_and_promotions_do_not_require_aggregates(pg_conn, monkeypatch):
+def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch):
     value = date(2026, 3, 17)
     fecha_id = 20260317
     with pg_conn.cursor() as cur:
@@ -87,8 +87,6 @@ def test_shopper_dates_and_promotions_do_not_require_aggregates(pg_conn, monkeyp
             """,
             (producto_sk, sucursal_sk, fecha_id, run_id, fecha_id),
         )
-        cur.execute("SELECT COUNT(*) FROM agg_precios_diarios")
-        assert cur.fetchone()[0] == 0
         cur.execute(
             """
             INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)

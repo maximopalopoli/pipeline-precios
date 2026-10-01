@@ -174,19 +174,7 @@ def _published_snapshot(conn, run_id: int):
             """,
             (run_id,),
         )
-        facts = cur.fetchall()
-        cur.execute(
-            """
-            SELECT producto_sk, provincia_sk, cantidad_obs, precio_lista_avg,
-                   precio_lista_min, precio_lista_max, cantidad_con_promo
-            FROM agg_precios_diarios
-            WHERE fecha_id = %s
-            ORDER BY producto_sk, provincia_sk
-            """,
-            (int(_RUN_DATE.strftime("%Y%m%d")),),
-        )
-        aggregates = cur.fetchall()
-    return facts, aggregates
+        return cur.fetchall()
 
 
 def test_airflow_tasks_stream_and_publish_staged_products(
@@ -645,7 +633,6 @@ def test_airflow_applies_enabled_retention_after_publication(
             run_id=kwargs["run_id"],
             fecha_id=kwargs["fecha_id"],
             rows_fact=0,
-            rows_aggregated=0,
         ),
     )
     ti = _TaskInstance(

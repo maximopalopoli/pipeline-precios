@@ -9,7 +9,6 @@ from pathlib import Path
 import pytest
 
 import etl.load.publisher as publisher
-from etl.load.aggregator import aggregate
 from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation
 from api.price_date import PRICE_DATE_SQL
@@ -129,7 +128,6 @@ def _seed_published_day(pg_conn, seed_data) -> int:
         sucursal_sk=seed_data["sucursal_sk"],
         price=Decimal("200.00"),
     )
-    aggregate(pg_conn, FECHA_ID)
     pg_conn.commit()
     return run_id
 
@@ -155,7 +153,6 @@ def test_publish_replaces_the_full_daily_snapshot(pg_conn, seed_data):
     pg_conn.commit()
 
     assert result.rows_fact == 1
-    assert result.rows_aggregated == 1
     with pg_conn.cursor() as cur:
         cur.execute(
             "SELECT COUNT(*), MAX(precio_lista) FROM fact_precios WHERE fecha_id = %s",
@@ -164,11 +161,6 @@ def test_publish_replaces_the_full_daily_snapshot(pg_conn, seed_data):
         rows, price = cur.fetchone()
         assert rows == 1
         assert price == Decimal("125.00")
-        cur.execute(
-            "SELECT COUNT(*) FROM agg_precios_diarios WHERE fecha_id = %s",
-            (FECHA_ID,),
-        )
-        assert cur.fetchone()[0] == 1
         cur.execute(
             "SELECT status, rows_valid FROM ingestion_runs WHERE id = %s",
             (pending_run_id,),
@@ -191,8 +183,7 @@ def test_publish_replaces_the_full_daily_snapshot(pg_conn, seed_data):
         cur.execute(
             """
             SELECT delete_existing_seconds, insert_facts_seconds,
-                   aggregate_delete_seconds, aggregate_insert_seconds, cleanup_seconds
-                   , partition_swap_seconds
+                   cleanup_seconds, partition_swap_seconds
             FROM ingestion_publication_metrics WHERE run_id = %s
             """,
             (pending_run_id,),
@@ -354,7 +345,6 @@ def test_partial_completion_keeps_the_visible_snapshot_unchanged(pg_conn, seed_d
     pg_conn.commit()
 
     assert result.rows_fact == 0
-    assert result.rows_aggregated == 0
     with pg_conn.cursor() as cur:
         cur.execute(
             "SELECT COUNT(*), MAX(precio_lista) FROM fact_precios WHERE fecha_id = %s",
@@ -390,12 +380,13 @@ def test_failed_publication_keeps_the_previous_snapshot(
     )
     pg_conn.commit()
 
-    def fail_aggregation(conn, fecha_id):
-        raise RuntimeError("aggregation failed")
+    def fail_reconciliation(conn, run_id, reconciliation):
+        raise RuntimeError("reconciliation failed")
 
-    monkeypatch.setattr(publisher, "aggregate", fail_aggregation)
+    # Fails after the partition swap, inside the caller's transaction.
+    monkeypatch.setattr(publisher, "record_product_reconciliation", fail_reconciliation)
 
-    with pytest.raises(RuntimeError, match="aggregation failed"):
+    with pytest.raises(RuntimeError, match="reconciliation failed"):
         publisher.publish_pending_facts(
             pg_conn,
             run_id=pending_run_id,
@@ -410,11 +401,6 @@ def test_failed_publication_keeps_the_previous_snapshot(
             (FECHA_ID,),
         )
         assert cur.fetchone() == (2, Decimal("100.00"), Decimal("200.00"))
-        cur.execute(
-            "SELECT COUNT(*) FROM agg_precios_diarios WHERE fecha_id = %s",
-            (FECHA_ID,),
-        )
-        assert cur.fetchone()[0] == 2
         cur.execute(
             "SELECT status FROM ingestion_runs WHERE id = %s", (pending_run_id,)
         )

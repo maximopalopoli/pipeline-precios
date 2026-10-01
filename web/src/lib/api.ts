@@ -7,8 +7,6 @@ export const fetchProvinces = () => api.get<string[]>('/filters/provinces').then
 export const fetchChains = () => api.get<string[]>('/filters/chains').then(r => r.data);
 export const fetchLocalities = (province: string) =>
   api.get<string[]>('/filters/localities', { params: { province } }).then(r => r.data);
-export const fetchDateRange = () =>
-  api.get<{ min_fecha: string | null; max_fecha: string | null }>('/filters/date-range').then(r => r.data);
 
 // ── Products ──
 export interface Product {
@@ -40,28 +38,6 @@ export interface HealthData {
   } | null;
 }
 export const fetchHealth = () => api.get<HealthData>('/health').then(r => r.data);
-
-// ── KPIs ──
-export interface WeeklyVariation {
-  valor: number | null;
-  fecha_inicio: string | null;
-  fecha_fin: string | null;
-  series_comparadas: number;
-  metodologia: string;
-}
-
-export interface KpiData {
-  /** @deprecated Use variacion_semanal.valor instead. */
-  inflacion_semanal: number | null;
-  variacion_semanal: WeeklyVariation;
-  total_productos: number;
-  total_sucursales: number;
-  pct_promo: number | null;
-  top_subas: { producto: string; provincia: string; variacion: number }[];
-  top_bajas: { producto: string; provincia: string; variacion: number }[];
-  best_chain: { cadena: string; pct_promo: number } | null;
-}
-export const fetchKpis = () => api.get<KpiData>('/kpis').then(r => r.data);
 
 // ── Buscador ──
 export interface BuscadorDate {
@@ -170,36 +146,6 @@ export const fetchBuscadorEan = (params: {
   lon?: number;
   radius?: number;
 }) => api.get<EanStorePrice[]>('/buscador/ean', { params }).then(r => r.data);
-
-// ── Evolucion ──
-export interface PricePoint {
-  fecha: string;
-  precio_lista: number | null;
-  precio_promo: number | null;
-  observaciones: number;
-}
-export const fetchEvolucion = (params: { producto_sk: number; provincia?: string }) =>
-  api.get<PricePoint[]>('/evolucion', { params }).then(r => r.data);
-
-// ── Variaciones ──
-export interface VariacionItem {
-  productos_descripcion: string;
-  productos_marca: string | null;
-  provincia: string;
-  precio_anterior: number | null;
-  precio_actual: number | null;
-  variacion: number | null;
-}
-export interface VariacionesResponse {
-  min_fecha: string | null;
-  max_fecha: string | null;
-  items: VariacionItem[];
-}
-export const fetchVariaciones = (params: {
-  mode: 'lista' | 'promo';
-  provincia?: string;
-  cadenas?: string[];
-}) => api.get<VariacionesResponse>('/variaciones', { params }).then(r => r.data);
 
 // ── Ofertas ──
 export interface OfertaItem {

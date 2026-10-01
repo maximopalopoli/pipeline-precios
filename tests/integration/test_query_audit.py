@@ -66,22 +66,11 @@ def test_audit_queries_executes_representative_plans_against_published_facts(pg_
             """,
             (producto_sk, sucursal_sk, run_id),
         )
-        cur.execute(
-            """
-            INSERT INTO agg_precios_diarios (
-                producto_sk, fecha_id, provincia_sk, precio_lista_avg,
-                precio_lista_min, precio_lista_max, precio_lista_median,
-                precio_promo_avg, cantidad_obs, cantidad_con_promo
-            ) VALUES (%s, 20260317, %s, 100, 100, 100, 100, 80, 1, 1)
-            """,
-            (producto_sk, provincia_sk),
-        )
     pg_conn.commit()
 
     summaries = audit_queries(pg_conn, representative_queries(pg_conn))
 
     assert [summary.name for summary in summaries] == [
-        "weekly_variation",
         "product_offer_lookup",
         "daily_promotion_scan",
     ]

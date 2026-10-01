@@ -3,8 +3,6 @@ import { NavLink, Outlet } from 'react-router-dom';
 const NAV_ITEMS = [
   { to: '/', label: 'Inicio', icon: '📊' },
   { to: '/buscador', label: 'Buscador', icon: '🔍' },
-  { to: '/evolucion', label: 'Evolucion', icon: '📈' },
-  { to: '/variaciones', label: 'Variaciones', icon: '🔀' },
   { to: '/ofertas', label: 'Ofertas', icon: '🏷️' },
   { to: '/locales', label: 'Locales', icon: '📍' },
   { to: '/lista', label: 'Lista de Compras', icon: '🛒' },

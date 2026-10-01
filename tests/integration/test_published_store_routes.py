@@ -4,7 +4,7 @@ import asyncio
 import re
 from datetime import date
 
-from api.routes import filters, kpis, locales
+from api.routes import filters, locales
 from etl.load.warehouse_loader import _ensure_partition
 
 
@@ -134,10 +134,6 @@ def test_store_routes_exclude_stores_only_in_retained_older_day(pg_conn, monkeyp
     async def fetch(sql, *params):
         return _fetch(pg_conn, sql, *params)
 
-    async def fetchrow(sql, *params):
-        rows = _fetch(pg_conn, sql, *params)
-        return rows[0] if rows else None
-
     monkeypatch.setattr(filters, "fetch", fetch)
     monkeypatch.setattr(locales, "fetch", fetch)
 
@@ -150,15 +146,3 @@ def test_store_routes_exclude_stores_only_in_retained_older_day(pg_conn, monkeyp
         locales.get_locales(-34.6037, -58.3816, radius=5, cadenas=None)
     )
     assert [store["sucursal_sk"] for store in stores] == [current_store]
-
-    async def kpi_fetchrow(sql, *params):
-        if "COUNT(*) AS n FROM dim_sucursal" in sql:
-            return await fetchrow(sql, *params)
-        return None
-
-    async def no_rows(sql, *params):
-        return []
-
-    monkeypatch.setattr(kpis, "fetchrow", kpi_fetchrow)
-    monkeypatch.setattr(kpis, "fetch", no_rows)
-    assert asyncio.run(kpis.get_kpis())["total_sucursales"] == 1

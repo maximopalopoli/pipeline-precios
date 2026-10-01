@@ -19,15 +19,13 @@ _DAILY_PARTITION_NAME = re.compile(r"^fact_precios_(\d{4})(\d{2})(\d{2})$")
 
 @dataclass(frozen=True)
 class FactRetentionResult:
-    """Partitions selected for retention and what was actually deleted.
+    """Partitions selected for retention and whether they were dropped.
 
-    ``partitions_dropped`` is false for a dry run or when no partition expired;
-    expired daily aggregates can still be deleted in the latter case.
+    ``partitions_dropped`` is false for a dry run or when no partition expired.
     """
 
     partitions: tuple[str, ...]
     partitions_dropped: bool
-    aggregate_rows_deleted: int = 0
 
 
 def apply_fact_retention(
@@ -94,17 +92,12 @@ def purge_expired_fact_partitions(
 ) -> FactRetentionResult:
     """Optionally drop the expired daily and monthly partitions before ``cutoff``.
 
-    Daily aggregates for the same dates are deleted too, so no API route offers
-    a date whose facts are gone.  ``dry_run`` defaults to true so callers must
-    explicitly opt into a destructive operation.  The caller owns the
-    transaction and must commit after a non-dry run.
+    ``dry_run`` defaults to true so callers must explicitly opt into a
+    destructive operation.  The caller owns the transaction and must commit
+    after a non-dry run.
     """
     partitions = find_expired_fact_partitions(conn, cutoff=cutoff)
-    if dry_run:
-        return FactRetentionResult(partitions=partitions, partitions_dropped=False)
-
-    aggregate_rows_deleted = _delete_expired_aggregates(conn, cutoff=cutoff)
-    if not partitions and not aggregate_rows_deleted:
+    if dry_run or not partitions:
         return FactRetentionResult(partitions=partitions, partitions_dropped=False)
 
     with conn.cursor() as cur:
@@ -126,20 +119,10 @@ def purge_expired_fact_partitions(
     )
     result = FactRetentionResult(
         partitions=partitions,
-        partitions_dropped=bool(partitions),
-        aggregate_rows_deleted=aggregate_rows_deleted,
+        partitions_dropped=True,
     )
     log.info("retention.fact_data_deleted", cutoff=str(cutoff), **result.__dict__)
     return result
-
-
-def _delete_expired_aggregates(conn, *, cutoff: date) -> int:
-    with conn.cursor() as cur:
-        cur.execute(
-            "DELETE FROM agg_precios_diarios WHERE fecha_id < %s",
-            (int(cutoff.strftime("%Y%m%d")),),
-        )
-        return cur.rowcount
 
 
 def _daily_partition_end(partition: str) -> date:
