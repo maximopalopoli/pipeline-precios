@@ -421,6 +421,14 @@ has `status = 'failed'`, `finished_at`, and an error message. The same raw file
 remains eligible for a later retry until a run completes successfully. Critical
 quality failures retain their structured check details in the error message.
 
+`GET /api/health` also reports `ultima_publicacion`, the newest day that still
+has visible facts from a completed full ingestion. `aviso_ingesta` identifies a
+later full ingestion that failed or is still running; bounded development runs
+do not replace the publication or hide that warning. The home page shows the
+published date and the later attempt separately. Every offer displays its own
+observation date, and dates more than three Argentine calendar days old are
+marked as outdated.
+
 ### Product-row reconciliation
 
 Completed runs created by the current pipeline account for every staged product

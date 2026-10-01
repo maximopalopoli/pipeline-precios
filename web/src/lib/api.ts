@@ -25,6 +25,8 @@ export interface HealthData {
   status: string;
   started_at: string | null;
   fecha_datos: string | null;
+  ultima_publicacion: { fecha_datos: string; finished_at: string } | null;
+  aviso_ingesta: { status: 'failed' | 'running'; fecha_datos: string; started_at: string } | null;
   reconciliacion: {
     rows_productos_raw: number | null;
     rows_productos_valid: number | null;

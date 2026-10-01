@@ -42,6 +42,23 @@ def test_health_exposes_the_persisted_reconciliation_counts():
     assert health._reconciliation_response(row) == row
 
 
+def test_ingestion_notice_covers_running_attempt_without_a_publication():
+    attempt = {
+        "status": "running",
+        "started_at": datetime(2026, 3, 18, 12, 30),
+        "fecha_datos": date(2026, 3, 18),
+    }
+
+    assert health._ingestion_notice(attempt, None) == {
+        "status": "running",
+        "started_at": "2026-03-18T12:30:00",
+        "fecha_datos": "2026-03-18",
+    }
+    assert health._ingestion_notice(
+        attempt, {"finished_at": datetime(2026, 3, 18, 12, 45)}
+    ) is None
+
+
 def test_health_returns_no_reconciliation_when_no_ingestion_exists(monkeypatch):
     async def fake_fetchrow(sql: str):
         return None
@@ -55,6 +72,8 @@ def test_health_returns_no_reconciliation_when_no_ingestion_exists(monkeypatch):
         "is_partial": None,
         "regional_scope": None,
         "reconciliacion": None,
+        "ultima_publicacion": None,
+        "aviso_ingesta": None,
     }
 
 
@@ -81,9 +100,15 @@ def test_health_returns_reconciliation_for_the_latest_ingestion(monkeypatch):
         "rows_fact_snapshot": 10,
     }
 
+    responses = iter([
+        row,
+        {"fecha_datos": date(2026, 3, 17), "finished_at": datetime(2026, 3, 18, 12, 40)},
+        {"status": "completed", "started_at": datetime(2026, 3, 18, 12, 30), "fecha_datos": date(2026, 3, 17)},
+    ])
+
     async def fake_fetchrow(sql: str):
-        captured["sql"] = sql
-        return row
+        captured.setdefault("sql", sql)
+        return next(responses)
 
     monkeypatch.setattr(health, "fetchrow", fake_fetchrow)
 
@@ -98,6 +123,11 @@ def test_health_returns_reconciliation_for_the_latest_ingestion(monkeypatch):
             for key, value in row.items()
             if key.startswith("rows_")
         },
+        "ultima_publicacion": {
+            "fecha_datos": "2026-03-17",
+            "finished_at": "2026-03-18T12:40:00",
+        },
+        "aviso_ingesta": None,
     }
     assert "ir.rows_productos_rejected" in captured["sql"]
     assert "ir.rows_productos_source" in captured["sql"]

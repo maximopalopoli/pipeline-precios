@@ -3,12 +3,7 @@ import { Link } from 'react-router-dom';
 import { fetchHealth, fetchKpis } from '../lib/api';
 import { KpiCard } from '../components/layout/KpiCard';
 import { COLORS } from '../lib/constants';
-
-const STATUS_ICON: Record<string, string> = {
-  completed: '🟢',
-  running: '🟡',
-  failed: '🔴',
-};
+import { formatPriceDate } from '../lib/priceDate';
 
 const NAV_CARDS = [
   { to: '/buscador', icon: '🔍', label: 'Buscador de Precios', desc: 'Busca un producto y compara precios entre locales.' },
@@ -23,7 +18,9 @@ function formatCount(value: number | null) {
 }
 
 export function Home() {
-  const { data: health } = useQuery({ queryKey: ['health'], queryFn: fetchHealth });
+  const { data: health } = useQuery({
+    queryKey: ['health'], queryFn: fetchHealth, refetchInterval: 60_000,
+  });
   const { data: kpis, isLoading } = useQuery({ queryKey: ['kpis'], queryFn: fetchKpis });
   const weeklyVariation = kpis?.variacion_semanal;
   const weeklyPeriod = weeklyVariation?.fecha_inicio && weeklyVariation.fecha_fin
@@ -41,9 +38,19 @@ export function Home() {
         <p className="text-slate-500">
           Comparador de precios minoristas del sistema SEPA de transparencia de precios de Argentina.
         </p>
-        {health && health.status !== 'no_data' && (
-          <p className="mt-1 text-sm text-slate-400">
-            {STATUS_ICON[health.status] || '⚪'} Datos al: {health.fecha_datos} — actualizado: {health.started_at?.slice(0, 16).replace('T', ' ')}
+        {health?.ultima_publicacion ? (
+          <p className="mt-1 text-sm text-slate-600">
+            Últimos precios publicados: {formatPriceDate(health.ultima_publicacion.fecha_datos)}
+            {' · '}Ingesta completada: {new Date(health.ultima_publicacion.finished_at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
+          </p>
+        ) : health ? (
+          <p className="mt-1 text-sm text-slate-500">Todavía no hay precios publicados.</p>
+        ) : null}
+        {health?.aviso_ingesta && (
+          <p className={`mt-2 rounded-md border px-3 py-2 text-sm ${health.aviso_ingesta.status === 'failed' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+            La ingesta del {formatPriceDate(health.aviso_ingesta.fecha_datos)}{' '}
+            {health.aviso_ingesta.status === 'failed' ? 'falló' : 'está en curso'}.
+            {health.ultima_publicacion && ' Se siguen mostrando los últimos precios publicados.'}
           </p>
         )}
       </div>
