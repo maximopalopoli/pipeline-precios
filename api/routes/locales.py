@@ -7,6 +7,7 @@ from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from geopy.geocoders import Nominatim
 
 from api.db import fetch, fetchrow
+from api.published_stores import STORE_HAS_PUBLISHED_PRICE
 from api.pricing import (
     discount_promo_label_sql,
     discount_promo_price_sql,
@@ -52,6 +53,7 @@ async def get_locales(
     lon_range = radius / 85.0
 
     conditions = [
+        STORE_HAS_PUBLISHED_PRICE,
         "s.sucursales_latitud IS NOT NULL",
         "s.sucursales_longitud IS NOT NULL",
         "s.sucursales_latitud BETWEEN $1 AND $2",

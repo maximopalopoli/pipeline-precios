@@ -339,6 +339,11 @@ Stores are classified while `sucursales.csv` is staged:
 | `AR-C` without plausible coordinates (all of CABA lies inside the radius) | In scope |
 | `AR-B` without plausible coordinates | Unlocated: counted and left out, never guessed |
 
+Store discovery (`/api/locales`, province, chain and locality filters, and the
+store KPI) includes only stores with prices on the latest published day. Older
+national facts may remain under fact retention without appearing as current
+stores.
+
 Coordinates are plausible when both parse as dot-decimal numbers inside
 Argentina's bounding box. Product rows are then kept only when the same file
 placed their store in scope. The store key is `id_comercio`, `id_bandera` and

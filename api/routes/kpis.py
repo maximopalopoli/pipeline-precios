@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from api.db import fetch, fetchrow
 from api.kpi_metrics import WEEKLY_VARIATION_SQL
+from api.published_stores import STORE_HAS_PUBLISHED_PRICE
 
 router = APIRouter()
 
@@ -39,7 +40,9 @@ async def get_kpis():
     products = await fetchrow("SELECT COUNT(*) AS n FROM dim_producto")
 
     # 3. Total stores
-    stores = await fetchrow("SELECT COUNT(*) AS n FROM dim_sucursal")
+    stores = await fetchrow(
+        f"SELECT COUNT(*) AS n FROM dim_sucursal s WHERE {STORE_HAS_PUBLISHED_PRICE}"
+    )
 
     # 4. Promo coverage today
     promo = await fetchrow("""
