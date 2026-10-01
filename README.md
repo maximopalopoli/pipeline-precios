@@ -723,7 +723,7 @@ TanStack Table/Query for data.
 | Source measurements (price change rate, AMBA share, coverage) | Done |
 | Storage: current snapshot in PostgreSQL, history in archived ZIPs | Next |
 | AMBA regional scope | Done |
-| Carry-forward of missing stores and price date on offers | Done; full replay pending |
+| Carry-forward of missing stores and price date on offers | Done; full replay with an absent chain pending |
 | Shopper price routes independent of analytics aggregates | Done |
 | Analytics route and aggregate retirement | Done |
 | Canonical product catalog and shopping-list comparison UI | Planned |
