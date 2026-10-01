@@ -30,7 +30,8 @@ def complete_partial_run(
 ) -> PublicationResult:
     """Complete a bounded run without exposing its pending facts.
 
-    Pending facts stay scoped to the run for local inspection. No visible facts
+    Pending facts stay scoped to the run for local inspection until a later
+    partial run completes and another run opens. No visible facts
     are changed, and the reconciliation records zero published
     facts so the audit trail cannot present this as a full snapshot.
     """

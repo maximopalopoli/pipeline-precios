@@ -469,9 +469,11 @@ rows_productos_without_keys = SUM(rejection_counts.row_count) for fact_key_resol
 ```
 
 For an explicit partial development run, `rows_fact_published` is zero and its
-pending rows remain isolated for local inspection, and its bounds leave source
-rows out on purpose; those are the intended exceptions to the full-run
-invariants. A missing `rows_productos_out_of_scope` or
+bounds leave source rows out on purpose; those are the intended exceptions to
+the full-run invariants. Its pending rows remain isolated for local inspection.
+Only the newest completed partial run keeps them: opening any run deletes the
+pending rows of older completed partial runs
+(`ingestion_run.partial_pending_deleted`). Running and failed runs keep theirs. A missing `rows_productos_out_of_scope` or
 `rows_productos_store_unlisted` counts as zero.
 
 ### Rejected rows
