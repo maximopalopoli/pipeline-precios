@@ -10,16 +10,19 @@ from api.db import fetch, fetchrow
 from api.price_date import PRICE_DATE_SQL
 from api.published_stores import LATEST_PUBLISHED_FECHA_ID, STORE_HAS_PUBLISHED_PRICE
 from api.pricing import (
-    discount_promo_label_sql,
-    discount_promo_price_sql,
-    effective_price_sql,
+    ANY_SLOT,
+    PROMO_JOINS,
+    promo_condition_sql,
+    promo_label_sql,
+    promo_price_sql,
 )
 
 router = APIRouter()
 
-BEST_PRICE = effective_price_sql()
-DISCOUNT_PROMO_PRICE = discount_promo_price_sql()
-DISCOUNT_PROMO_LABEL = discount_promo_label_sql()
+# Every promotion in force, conditional or not, labelled with its requirement.
+PROMO_PRICE = promo_price_sql(ANY_SLOT)
+PROMO_LABEL = promo_label_sql(ANY_SLOT)
+PROMO_CONDITION = promo_condition_sql(ANY_SLOT)
 
 
 @lru_cache(maxsize=256)
@@ -123,18 +126,20 @@ async def get_store_promos(sucursal_sk: int):
             p.productos_marca       AS marca,
             f.precio_lista,
             {PRICE_DATE_SQL} AS fecha_precio,
-            {DISCOUNT_PROMO_PRICE}  AS precio_promo,
-            {DISCOUNT_PROMO_LABEL}  AS leyenda_promo,
+            {PROMO_PRICE}  AS precio_promo,
+            {PROMO_LABEL}  AS leyenda_promo,
+            {PROMO_CONDITION} AS condicion,
             ROUND(
-                (f.precio_lista - {DISCOUNT_PROMO_PRICE})
+                (f.precio_lista - {PROMO_PRICE})
                 / NULLIF(f.precio_lista, 0) * 100, 1
             ) AS descuento_pct
         FROM fact_precios f
         JOIN dim_producto p ON f.producto_sk = p.producto_sk
+        {PROMO_JOINS}
         WHERE f.sucursal_sk = $1
           AND f.fecha_id = $2
           AND f.tiene_promo = TRUE
-          AND {DISCOUNT_PROMO_PRICE} IS NOT NULL
+          AND {ANY_SLOT} IS NOT NULL
         ORDER BY descuento_pct DESC
         LIMIT 10
         """,

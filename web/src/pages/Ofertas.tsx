@@ -20,7 +20,14 @@ const columns = [
   col.accessor('fecha_precio', { header: 'Fecha', cell: (info) => <PriceDate value={info.getValue()} /> }),
   col.accessor('leyenda_promo', {
     header: 'Condiciones',
-    cell: (info) => <PromotionDetails tieneDescuento leyendaPromo={info.getValue()} compact />,
+    cell: (info) => (
+      <PromotionDetails
+        tieneDescuento
+        leyendaPromo={info.getValue()}
+        condicion={info.row.original.condicion}
+        compact
+      />
+    ),
   }),
   col.accessor('descuento_pct', { header: 'Descuento %', cell: (info) => formatPercent(info.getValue()) }),
 ];

@@ -364,6 +364,9 @@ export function BuscadorEAN() {
                                   <PromotionDetails
                                     tieneDescuento={item.tiene_descuento}
                                     leyendaPromo={item.leyenda_promo}
+                                    precioCondicional={item.precio_condicional}
+                                    leyendaCondicional={item.leyenda_condicional}
+                                    condicionAparte={item.condicion}
                                     compact
                                   />
                                 </div>

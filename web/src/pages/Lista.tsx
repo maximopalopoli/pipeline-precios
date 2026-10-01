@@ -419,6 +419,14 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
                                 {formatCurrency(item.precio_lista)}
                               </span>
                             )}
+                            {item.precio_condicional != null && (
+                              <div
+                                className="text-xs text-amber-700"
+                                title={item.leyenda_condicional ?? undefined}
+                              >
+                                {formatCurrency(item.precio_condicional)} con condiciones
+                              </div>
+                            )}
                             <div><PriceDate value={item.fecha_precio} /></div>
                           </div>
                           <button

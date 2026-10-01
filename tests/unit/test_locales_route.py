@@ -22,7 +22,5 @@ def test_store_promos_only_requests_effective_discounts(monkeypatch):
     assert (
         "AS leyenda_promo" in captured["sql"]
     )
-    assert (
-        "AND pipeline_discount_promo_price(f.precio_lista, "
-        "f.precio_promo1, f.precio_promo2) IS NOT NULL" in captured["sql"]
-    )
+    assert "AS condicion" in captured["sql"]
+    assert "AND ps.cualquiera IS NOT NULL" in captured["sql"]

@@ -557,6 +557,42 @@ def test_missing_store_prices_are_carried_until_the_store_returns(
         assert cur.fetchone() == (Decimal("230.00"), 20260318)
 
 
+def test_publication_registers_promotion_legends(pg_conn, seed_data):
+    run_id = _create_run(pg_conn, "promotions.zip")
+    _insert_pending_fact(
+        pg_conn, run_id=run_id, producto_sk=seed_data["productos"]["AAA"],
+        sucursal_sk=seed_data["sucursal_sk"], price=Decimal("100"),
+    )
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE pending_fact_precios
+            SET precio_promo1 = 60, leyenda_promo1 = '3X2 JUGOS',
+                precio_promo2 = 80, leyenda_promo2 = 'DEL 01/03/2026 AL 31/03/2026',
+                tiene_promo = TRUE
+            WHERE run_id = %s
+            """,
+            (run_id,),
+        )
+    pg_conn.commit()
+    publisher.publish_pending_facts(
+        pg_conn, run_id=run_id, fecha_id=FECHA_ID,
+        reconciliation=ProductReconciliation(1, 0, 0, 0, 1, 1),
+    )
+    pg_conn.commit()
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT leyenda, condicion, vigencia_desde, vigencia_hasta
+            FROM promo_leyendas ORDER BY leyenda
+            """
+        )
+        assert cur.fetchall() == [
+            ("3X2 JUGOS", "cantidad", None, None),
+            ("DEL 01/03/2026 AL 31/03/2026", None, date(2026, 3, 1), date(2026, 3, 31)),
+        ]
+
+
 def test_first_scoped_day_does_not_carry_national_stores(pg_conn, seed_data):
     store = seed_data["sucursal_sk"]
     product_a = seed_data["productos"]["AAA"]

@@ -47,6 +47,9 @@ export interface BuscadorDate {
 export const fetchBuscadorDates = (producto_sk: number) =>
   api.get<BuscadorDate[]>('/buscador/dates', { params: { producto_sk } }).then(r => r.data);
 
+/** Requirement read from a promotion legend (migration 037). */
+export type PromoCondition = 'cantidad' | 'medio_pago' | 'programa' | 'horario';
+
 export interface StorePrice {
   cadena: string;
   tipo: string;
@@ -61,6 +64,10 @@ export interface StorePrice {
   /** Source-provided promotion conditions; null means they were not supplied. */
   leyenda_promo: string | null;
   tiene_descuento: boolean;
+  /** Lower promotion that requires a condition; never part of mejor_precio. */
+  precio_condicional: number | null;
+  leyenda_condicional: string | null;
+  condicion: PromoCondition | null;
   lat: number | null;
   lon: number | null;
   sucursal: string;
@@ -91,6 +98,10 @@ export interface GenericStorePrice {
   precio_promo: number | null;
   leyenda_promo: string | null;
   tiene_descuento: boolean;
+  /** Lower promotion that requires a condition; never part of mejor_precio. */
+  precio_condicional: number | null;
+  leyenda_condicional: string | null;
+  condicion: PromoCondition | null;
   lat: number | null;
   lon: number | null;
 }
@@ -130,6 +141,10 @@ export interface EanStorePrice {
   precio_promo: number | null;
   leyenda_promo: string | null;
   tiene_descuento: boolean;
+  /** Lower promotion that requires a condition; never part of mejor_precio. */
+  precio_condicional: number | null;
+  leyenda_condicional: string | null;
+  condicion: PromoCondition | null;
   lat: number | null;
   lon: number | null;
 }
@@ -157,6 +172,8 @@ export interface OfertaItem {
   precio_lista: number;
   fecha_precio: string;
   precio_promo: number;
+  /** Requirement of this promotion; null when it states none. */
+  condicion: PromoCondition | null;
   descuento_pct: number;
 }
 export interface OfertasResponse {
@@ -196,6 +213,8 @@ export interface StorePromo {
   precio_lista: number;
   fecha_precio: string;
   precio_promo: number;
+  /** Requirement of this promotion; null when it states none. */
+  condicion: PromoCondition | null;
   leyenda_promo: string | null;
   descuento_pct: number;
 }

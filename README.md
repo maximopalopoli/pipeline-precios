@@ -253,7 +253,9 @@ Measured over the files for 2026-03-17, 03-19, 03-20, 03-23, 03-24 and 09-22:
   2 or more chains cover 67% of all rows. Fresh products are largely absent or
   use internal codes.
 - Promo 1 appears on 3% of rows and promo 2 on 0.9%; legends are store
-  discounts, not bank or wallet promotions.
+  discounts, not bank or wallet promotions. Legends carry the promotion's
+  validity dates and sometimes a requirement (mostly several units); the API
+  keeps conditional promotions out of the store price (migration 037).
 - About 3,160 physical stores with prices per day, nearly all with plausible
   coordinates. AMBA (CABA + Buenos Aires province within 60 km of the Obelisco)
   is 1,834 stores and 52% of the rows.

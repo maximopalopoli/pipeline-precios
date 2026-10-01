@@ -82,8 +82,9 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
             INSERT INTO fact_precios (
                 producto_sk, sucursal_sk, fecha_id, run_id,
                 precio_lista, precio_promo1, leyenda_promo1,
-                tiene_promo, fecha_observada_id
-            ) VALUES (%s, %s, %s, %s, 100, 80, '20%% de descuento', TRUE, %s)
+                precio_promo2, leyenda_promo2, tiene_promo, fecha_observada_id
+            ) VALUES (%s, %s, %s, %s, 100, 80, '20%% de descuento',
+                      60, '3X2 LECHES', TRUE, %s)
             """,
             (producto_sk, sucursal_sk, fecha_id, run_id, fecha_id),
         )
@@ -124,15 +125,30 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
     assert asyncio.run(buscador.get_product_dates(producto_sk)) == [
         {"fecha_id": fecha_id, "fecha": "2026-03-17"}
     ]
+    store_offers = asyncio.run(
+        buscador.get_buscador(
+            producto_sk=producto_sk, fecha_id=fecha_id,
+            provincia=None, localidad=None, cadenas=None,
+            lat=None, lon=None, radius=5,
+        )
+    )
+    assert len(store_offers) == 1
+    assert store_offers[0]["mejor_precio"] == Decimal("80.00")
+    assert store_offers[0]["leyenda_promo"] == "20% de descuento"
+    assert store_offers[0]["precio_condicional"] == Decimal("60.00")
+    assert store_offers[0]["leyenda_condicional"] == "3X2 LECHES"
+    assert store_offers[0]["condicion"] == "cantidad"
     offers = asyncio.run(
         ofertas.get_ofertas(provincia=None, localidad=None, cadenas=None)
     )
     assert offers["fecha"] == "2026-03-17"
     assert len(offers["items"]) == 1
-    assert offers["items"][0]["precio_promo"] == Decimal("80.00")
+    assert offers["items"][0]["precio_promo"] == Decimal("60.00")
+    assert offers["items"][0]["condicion"] == "cantidad"
     assert offers["items"][0]["fecha_precio"] == "2026-03-17"
 
     promos = asyncio.run(locales.get_store_promos(sucursal_sk))
     assert len(promos) == 1
     assert promos[0]["producto"] == "Leche entera 1 l"
     assert promos[0]["fecha_precio"] == "2026-03-17"
+    assert promos[0]["condicion"] == "cantidad"

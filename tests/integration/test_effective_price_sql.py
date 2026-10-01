@@ -1,48 +1,42 @@
 from decimal import Decimal
 
-from api.pricing import (
-    discount_promo_label_sql,
-    discount_promo_price_sql,
-    effective_price_sql,
-)
 from tests.price_cases import PRICE_CASES
 
 
-def _select(pg_conn, expressions, rows):
-    values = ", ".join(["(%s::numeric, %s::numeric, %s::numeric, %s, %s)"] * len(rows))
-    params = [value for row in rows for value in row]
+def test_sql_price_functions_follow_the_shared_rule(pg_conn):
+    rows = [(lista, p1, p2) for _, lista, p1, p2, _, _ in PRICE_CASES]
+    values = ", ".join(["(%s::numeric, %s::numeric, %s::numeric)"] * len(rows))
     with pg_conn.cursor() as cur:
         cur.execute(
             f"""
-            SELECT {", ".join(expressions)}
-            FROM (VALUES {values}) AS price(
-                precio_lista, precio_promo1, precio_promo2,
-                leyenda_promo1, leyenda_promo2
-            )
+            SELECT
+                pipeline_discount_promo_price(lista, promo1, promo2),
+                pipeline_effective_price(lista, promo1, promo2)
+            FROM (VALUES {values}) AS price(lista, promo1, promo2)
             """,
-            params,
+            [value for row in rows for value in row],
         )
-        return cur.fetchall()
-
-
-def test_sql_price_functions_follow_the_shared_rule(pg_conn):
-    rows = [(lista, p1, p2, None, None) for _, lista, p1, p2, _, _ in PRICE_CASES]
-    result = _select(
-        pg_conn, [discount_promo_price_sql("price"), effective_price_sql("price")], rows
-    )
+        result = cur.fetchall()
     assert result == [
         (discount, effective) for _, _, _, _, discount, effective in PRICE_CASES
     ]
 
 
-def test_discount_label_belongs_to_the_selected_promotion(pg_conn):
-    D = Decimal
-    rows = [
-        (D("100"), D("80"), D("80"), "promo 1", "promo 2"),
-        (D("100"), D("120"), D("90"), "promo 1", "promo 2"),
-        (D("100"), D("90"), D("80"), "promo 1", "promo 2"),
-        (D("100"), None, None, "promo 1", "promo 2"),
-        (D("100"), D("0"), None, "promo 1", "promo 2"),
-    ]
-    result = _select(pg_conn, [discount_promo_label_sql("price")], rows)
-    assert result == [("promo 1",), ("promo 2",), ("promo 2",), (None,), (None,)]
+def test_store_price_without_promotion_terms_matches_the_effective_price(pg_conn):
+    """Legends without requirements or dates leave migration 036's rule intact."""
+    rows = [(lista, p1, p2) for _, lista, p1, p2, _, _ in PRICE_CASES]
+    values = ", ".join(["(%s::numeric, %s::numeric, %s::numeric)"] * len(rows))
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT pipeline_store_price(
+                lista, promo1, NULL::promo_leyendas, promo2, NULL::promo_leyendas,
+                DATE '2026-03-24'
+            )
+            FROM (VALUES {values}) AS price(lista, promo1, promo2)
+            """,
+            [value for row in rows for value in row],
+        )
+        result = [row[0] for row in cur.fetchall()]
+    assert result == [effective for *_, effective in PRICE_CASES]
+    assert Decimal("80") in result

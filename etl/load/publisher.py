@@ -132,6 +132,7 @@ def publish_pending_facts(
         )
 
     rows_fact = rows_source + rows_carried
+    promo_legends_registered = _register_promo_legends(conn, fecha_id=fecha_id)
 
     record_product_reconciliation(conn, run_id, reconciliation)
 
@@ -173,11 +174,43 @@ def publish_pending_facts(
     log.info(
         "publisher.pending_facts_published",
         **result.__dict__,
+        promo_legends_registered=promo_legends_registered,
         partition_swap_seconds=round(partition_swap_seconds, 3),
         insert_facts_seconds=round(insert_facts_seconds, 3),
         cleanup_seconds=round(cleanup_seconds, 3),
     )
     return result
+
+
+def _register_promo_legends(conn, *, fecha_id: int) -> int:
+    """Store the reading of each new promotion legend of the published day.
+
+    The API reads a promotion's requirement and validity from
+    ``promo_leyendas``; a day has few distinct legends, so reading each once
+    here keeps those regular expressions out of every price query.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO promo_leyendas (leyenda, condicion, vigencia_desde, vigencia_hasta)
+            SELECT
+                leyenda,
+                pipeline_promo_condition(leyenda),
+                pipeline_promo_valid_from(leyenda),
+                pipeline_promo_valid_until(leyenda)
+            FROM (
+                SELECT leyenda_promo1 FROM fact_precios
+                WHERE fecha_id = %s AND tiene_promo
+                UNION
+                SELECT leyenda_promo2 FROM fact_precios
+                WHERE fecha_id = %s AND tiene_promo
+            ) AS legends(leyenda)
+            WHERE leyenda IS NOT NULL
+            ON CONFLICT (leyenda) DO NOTHING
+            """,
+            (fecha_id, fecha_id),
+        )
+        return cur.rowcount
 
 
 def _find_carry_source(conn, *, run_id: int, fecha_id: int) -> int | None:
