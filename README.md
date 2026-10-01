@@ -344,6 +344,11 @@ store KPI) includes only stores with prices on the latest published day. Older
 national facts may remain under fact retention without appearing as current
 stores.
 
+The shopper-facing product-date, daily-offer and store-promotion routes read
+published facts directly. They continue to work when the analytics aggregate
+table is empty; the remaining analytics routes still use that table until
+their planned retirement.
+
 When a store has no valid price rows in a later file, publication carries its
 last prices from the newest available snapshot of the same regional scope.
 The fact's `fecha_id` is the snapshot day; `fecha_observada_id` is the day the

@@ -8,7 +8,7 @@ from geopy.geocoders import Nominatim
 
 from api.db import fetch, fetchrow
 from api.price_date import PRICE_DATE_SQL
-from api.published_stores import STORE_HAS_PUBLISHED_PRICE
+from api.published_stores import LATEST_PUBLISHED_FECHA_ID, STORE_HAS_PUBLISHED_PRICE
 from api.pricing import (
     discount_promo_label_sql,
     discount_promo_price_sql,
@@ -112,12 +112,7 @@ async def get_locales(
 
 @router.get("/locales/{sucursal_sk}/promos")
 async def get_store_promos(sucursal_sk: int):
-    # Get latest fecha_id
-    fecha = await fetchrow("""
-        SELECT MAX(fe.fecha_id) AS fecha_id
-        FROM dim_fecha fe
-        JOIN agg_precios_diarios a ON a.fecha_id = fe.fecha_id
-    """)
+    fecha = await fetchrow(f"SELECT {LATEST_PUBLISHED_FECHA_ID} AS fecha_id")
     if not fecha or fecha["fecha_id"] is None:
         return []
 

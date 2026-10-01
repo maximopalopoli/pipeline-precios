@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query
 from api.db import fetch, fetchrow
 from api.price_date import PRICE_DATE_SQL
 from api.pricing import discount_promo_label_sql, discount_promo_price_sql
+from api.published_stores import LATEST_PUBLISHED_FECHA_ID
 
 router = APIRouter()
 
@@ -18,11 +19,10 @@ async def get_ofertas(
     localidad: str | None = Query(None),
     cadenas: list[str] | None = Query(None),
 ):
-    # Get latest date
-    latest = await fetchrow("""
-        SELECT MAX(fecha) AS max_fecha
-        FROM dim_fecha
-        JOIN agg_precios_diarios USING (fecha_id)
+    latest = await fetchrow(f"""
+        SELECT fe.fecha AS max_fecha
+        FROM dim_fecha fe
+        WHERE fe.fecha_id = {LATEST_PUBLISHED_FECHA_ID}
     """)
     if not latest or latest["max_fecha"] is None:
         return {"fecha": None, "items": []}

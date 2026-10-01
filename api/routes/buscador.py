@@ -27,10 +27,10 @@ def _distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 async def get_product_dates(producto_sk: int = Query(...)):
     rows = await fetch(
         """
-        SELECT DISTINCT a.fecha_id, fe.fecha
-        FROM agg_precios_diarios a
-        JOIN dim_fecha fe ON a.fecha_id = fe.fecha_id
-        WHERE a.producto_sk = $1
+        SELECT DISTINCT f.fecha_id, fe.fecha
+        FROM fact_precios f
+        JOIN dim_fecha fe ON f.fecha_id = fe.fecha_id
+        WHERE f.producto_sk = $1
         ORDER BY fe.fecha DESC
         """,
         producto_sk,
