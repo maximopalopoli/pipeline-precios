@@ -23,6 +23,6 @@ def test_store_promos_only_requests_effective_discounts(monkeypatch):
         "AS leyenda_promo" in captured["sql"]
     )
     assert (
-        "AND LEAST(CASE WHEN f.precio_promo1 > 0 "
-        "AND f.precio_promo1 < f.precio_lista " in captured["sql"]
+        "AND pipeline_discount_promo_price(f.precio_lista, "
+        "f.precio_promo1, f.precio_promo2) IS NOT NULL" in captured["sql"]
     )

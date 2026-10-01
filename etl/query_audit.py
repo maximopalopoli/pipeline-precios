@@ -49,10 +49,8 @@ def representative_queries(conn: Any, *, fecha_id: int | None = None) -> list[Au
                 JOIN dim_sucursal AS s ON s.sucursal_sk = f.sucursal_sk
                 JOIN dim_comercio AS c ON c.comercio_sk = s.comercio_sk
                 WHERE f.producto_sk = %s AND f.fecha_id = %s
-                ORDER BY LEAST(
-                    f.precio_lista,
-                    COALESCE(NULLIF(f.precio_promo1, 0), f.precio_lista),
-                    COALESCE(NULLIF(f.precio_promo2, 0), f.precio_lista)
+                ORDER BY pipeline_effective_price(
+                    f.precio_lista, f.precio_promo1, f.precio_promo2
                 ) ASC
                 LIMIT 200
             """,

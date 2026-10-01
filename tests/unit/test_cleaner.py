@@ -3,12 +3,14 @@
 from decimal import Decimal
 
 import pandas as pd
+import pytest
 
 from etl.transform.cleaner import (
     clean_comercios,
     clean_productos,
     clean_sucursales,
 )
+from tests.price_cases import PRICE_CASES
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -228,3 +230,24 @@ class TestCleanProductos:
     def test_promo_leyenda_optional(self):
         r = clean_productos(_df(_producto(productos_leyenda_promo1="")))
         assert r.clean.iloc[0]["productos_leyenda_promo1"] is None
+
+
+def _text(value):
+    return "" if value is None else str(value)
+
+
+@pytest.mark.parametrize(
+    "lista, promo1, promo2, discount",
+    [
+        pytest.param(lista, promo1, promo2, discount, id=case_id)
+        for case_id, lista, promo1, promo2, discount, _ in PRICE_CASES
+        if lista is not None and lista > 0
+    ],
+)
+def test_tiene_promo_matches_the_shared_discount_rule(lista, promo1, promo2, discount):
+    r = clean_productos(_df(_producto(
+        productos_precio_lista=_text(lista),
+        productos_precio_unitario_promo1=_text(promo1),
+        productos_precio_unitario_promo2=_text(promo2),
+    )))
+    assert bool(r.clean.iloc[0]["tiene_promo"]) == (discount is not None)

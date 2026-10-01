@@ -1,49 +1,47 @@
-from decimal import Decimal
+import pytest
 
 from api.pricing import (
     discount_promo_label_sql,
+    discount_promo_price,
     discount_promo_price_sql,
     effective_price,
     effective_price_sql,
 )
+from tests.price_cases import PRICE_CASES
+
+CASES = [pytest.param(*case[1:], id=case[0]) for case in PRICE_CASES]
 
 
-def test_effective_price_uses_the_list_price_without_promotions():
-    assert effective_price(Decimal("100"), None, None) == Decimal("100")
+@pytest.mark.parametrize("lista, promo1, promo2, discount, effective", CASES)
+def test_discount_promo_price_follows_the_shared_rule(
+    lista, promo1, promo2, discount, effective
+):
+    assert discount_promo_price(lista, promo1, promo2) == discount
 
 
-def test_effective_price_uses_the_lowest_positive_price():
-    assert effective_price(Decimal("100"), Decimal("80"), Decimal("90")) == Decimal("80")
+@pytest.mark.parametrize("lista, promo1, promo2, discount, effective", CASES)
+def test_effective_price_follows_the_shared_rule(
+    lista, promo1, promo2, discount, effective
+):
+    assert effective_price(lista, promo1, promo2) == effective
 
 
-def test_effective_price_ignores_zero_and_promotion_higher_than_list_price():
-    assert effective_price(Decimal("100"), Decimal("0"), Decimal("200")) == Decimal("100")
-
-
-def test_effective_price_returns_none_when_no_positive_price_exists():
-    assert effective_price(None, Decimal("0"), None) is None
-
-
-def test_effective_price_sql_uses_the_same_three_fact_columns():
+def test_effective_price_sql_calls_the_shared_function():
     assert effective_price_sql("price") == (
         "pipeline_effective_price(price.precio_lista, "
         "price.precio_promo1, price.precio_promo2)"
     )
 
 
-def test_discount_promotion_sql_only_selects_prices_below_the_list_price():
+def test_discount_promotion_sql_calls_the_shared_function():
     assert discount_promo_price_sql("price") == (
-        "LEAST(CASE WHEN price.precio_promo1 > 0 "
-        "AND price.precio_promo1 < price.precio_lista "
-        "THEN price.precio_promo1 END, "
-        "CASE WHEN price.precio_promo2 > 0 "
-        "AND price.precio_promo2 < price.precio_lista "
-        "THEN price.precio_promo2 END)"
+        "pipeline_discount_promo_price(price.precio_lista, "
+        "price.precio_promo1, price.precio_promo2)"
     )
 
 
-def test_discount_promotion_label_sql_keeps_the_source_label_for_the_selected_price():
+def test_discount_promotion_label_sql_compares_with_the_selected_price():
     expression = discount_promo_label_sql("price")
-    assert "THEN price.leyenda_promo1" in expression
-    assert "THEN price.leyenda_promo2" in expression
-    assert "price.precio_promo1 <= price.precio_promo2" in expression
+    discount = discount_promo_price_sql("price")
+    assert f"WHEN price.precio_promo1 = {discount} THEN price.leyenda_promo1" in expression
+    assert f"WHEN price.precio_promo2 = {discount} THEN price.leyenda_promo2" in expression
