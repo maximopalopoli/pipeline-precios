@@ -9,6 +9,7 @@ import structlog
 
 from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation, record_product_reconciliation
+from etl.quality_thresholds import check_rejection_thresholds
 from etl.publication_metrics import record_publication_metrics
 
 log = structlog.get_logger(__name__)
@@ -119,6 +120,9 @@ def publish_pending_facts(
             f"Cannot publish run {run_id}: expected {reconciliation.rows_fact_pending} "
             f"pending facts, found {total_rows}"
         )
+
+    # Before the partition swap, so a rejected file costs nothing to publish.
+    check_rejection_thresholds(conn, run_id, reconciliation)
 
     source_fecha_id = _find_carry_source(conn, run_id=run_id, fecha_id=fecha_id)
     partition_swap_seconds, insert_facts_seconds, rows_source, rows_carried = _swap_daily_partition(

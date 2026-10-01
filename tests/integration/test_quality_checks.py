@@ -392,6 +392,41 @@ def test_check_row_count_drift_fails_beyond_threshold(pg_conn, sample_zip_path):
     assert result.details["drift"] > 0.20
 
 
+def test_check_row_count_drift_compares_runs_of_the_same_scope(pg_conn, sample_zip_path):
+    national = _load_sample(pg_conn, sample_zip_path)
+    scoped = _load_sample(pg_conn, sample_zip_path)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ingestion_runs SET status='completed', rows_productos_raw=1000 WHERE id=%s",
+            (national,),
+        )
+        cur.execute(
+            """UPDATE ingestion_runs
+               SET status='completed', rows_productos_raw=7, regional_scope='amba'
+               WHERE id=%s""",
+            (scoped,),
+        )
+    pg_conn.commit()
+
+    run_id = _load_sample(pg_conn, sample_zip_path)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "UPDATE ingestion_runs SET regional_scope='amba' WHERE id=%s", (run_id,)
+        )
+    pg_conn.commit()
+    result = check_row_count_drift(pg_conn, run_id, max_drift=0.20)
+    assert result.passed
+    assert result.details["previous_rows"] == 7
+
+
+def test_run_all_reads_limits_from_the_environment(pg_conn, sample_zip_path, monkeypatch):
+    run_id = _load_sample(pg_conn, sample_zip_path)
+    monkeypatch.setenv("SEPA_MIN_PRODUCT_ROWS", "8")
+    with pytest.raises(QualityCheckError) as exc_info:
+        run_all(pg_conn, run_id)
+    assert [failure.name for failure in exc_info.value.failures] == ["min_row_count"]
+
+
 # ── Required nulls ─────────────────────────────────────────────────────────────
 
 

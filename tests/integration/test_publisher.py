@@ -11,6 +11,11 @@ import pytest
 import etl.load.publisher as publisher
 from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation
+from etl.quality_thresholds import (
+    QualityThresholds,
+    RejectionThresholdError,
+    check_rejection_thresholds,
+)
 from api.price_date import PRICE_DATE_SQL
 from api.routes import buscador
 
@@ -410,6 +415,76 @@ def test_failed_publication_keeps_the_previous_snapshot(
             (pending_run_id,),
         )
         assert cur.fetchone()[0] == 1
+
+
+def test_publication_stops_when_a_run_rejects_too_many_rows(
+    pg_conn, seed_data, monkeypatch
+):
+    _seed_published_day(pg_conn, seed_data)
+    run_id = _create_run(pg_conn, "mostly-rejected.zip")
+    _insert_pending_fact(
+        pg_conn, run_id=run_id, producto_sk=seed_data["productos"]["AAA"],
+        sucursal_sk=seed_data["sucursal_sk"], price=Decimal("125.00"),
+    )
+    pg_conn.commit()
+    monkeypatch.setenv("SEPA_MAX_REJECTED_SHARE", "0.5")
+
+    with pytest.raises(RejectionThresholdError, match="rejected"):
+        publisher.publish_pending_facts(
+            pg_conn, run_id=run_id, fecha_id=FECHA_ID,
+            reconciliation=ProductReconciliation(1, 3, 0, 0, 1, 1),
+        )
+    pg_conn.rollback()
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*), MAX(precio_lista) FROM fact_precios WHERE fecha_id = %s",
+            (FECHA_ID,),
+        )
+        assert cur.fetchone() == (2, Decimal("200.00"))
+
+
+@pytest.mark.parametrize(
+    "counts, raw, unlisted, exceeded",
+    [
+        pytest.param((990, 10, 0, 0, 990, 990), 1000, 0, None, id="at every limit"),
+        pytest.param((989, 11, 0, 0, 989, 989), 1000, 0, "rejected", id="rejected"),
+        pytest.param((1000, 0, 11, 0, 989, 989), 1000, 0, "without_keys",
+                     id="without keys"),
+        pytest.param((1000, 0, 0, 0, 1000, 1000), 1000, 53, "store_unlisted",
+                     id="store unlisted"),
+    ],
+)
+def test_rejection_limits_measure_each_loss(pg_conn, counts, raw, unlisted, exceeded):
+    run_id = _create_run(pg_conn, "limits.zip")
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE ingestion_runs
+            SET rows_productos_raw = %s, rows_productos_store_unlisted = %s
+            WHERE id = %s
+            """,
+            (raw, unlisted, run_id),
+        )
+    limits = QualityThresholds(
+        max_rejected_share=0.01, max_without_keys_share=0.01,
+        max_store_unlisted_share=0.05,
+    )
+    reconciliation = ProductReconciliation(*counts)
+    if exceeded is None:
+        shares = check_rejection_thresholds(pg_conn, run_id, reconciliation, limits)
+        assert shares["rejected"] == 0.01
+    else:
+        with pytest.raises(RejectionThresholdError, match=exceeded):
+            check_rejection_thresholds(pg_conn, run_id, reconciliation, limits)
+
+
+def test_partial_runs_are_not_held_to_rejection_limits(pg_conn):
+    run_id = _create_run(pg_conn, "partial-limits.zip")
+    reconciliation = ProductReconciliation(1, 99, 0, 0, 1, 0, is_partial=True)
+    assert check_rejection_thresholds(
+        pg_conn, run_id, reconciliation, QualityThresholds(max_rejected_share=0)
+    ) == {}
 
 
 def _add_day(pg_conn, fecha_id: int) -> None:

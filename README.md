@@ -478,6 +478,26 @@ pending rows of older completed partial runs
 (`ingestion_run.partial_pending_deleted`). Running and failed runs keep theirs. A missing `rows_productos_out_of_scope` or
 `rows_productos_store_unlisted` counts as zero.
 
+### Quality limits
+
+Reconciliation proves that every row is accounted for; configurable limits
+decide whether the losses are acceptable. Before the partition swap, a full
+run fails (and the previous snapshot stays visible) when any share exceeds its
+limit:
+
+| Share | Limit (default) |
+|-------|-----------------|
+| `rows_productos_rejected / rows_productos_raw` | `SEPA_MAX_REJECTED_SHARE` (0.01) |
+| `rows_productos_without_keys / rows_productos_valid` | `SEPA_MAX_WITHOUT_KEYS_SHARE` (0.01) |
+| `rows_productos_store_unlisted / (rows_productos_store_unlisted + rows_productos_raw)` | `SEPA_MAX_STORE_UNLISTED_SHARE` (0.05) |
+
+The 2026-03-23 and 03-24 AMBA replays measured 0.03%, 0% and 0.75%. The error
+message names each exceeded share; the event `quality.rejection_thresholds_checked`
+logs all three. Partial development runs are not checked. Staging quality
+checks also read `SEPA_MIN_PRODUCT_ROWS` (critical, default 100) and
+`SEPA_MAX_ROW_COUNT_DRIFT` (warning, default 0.20 against the previous full run
+of the same regional scope).
+
 ### Rejected rows
 
 Every rejection is counted in `rejection_counts` by run, source (a staging
@@ -687,6 +707,8 @@ All variables have development defaults. Set them in `.env` (see
 | `SEPA_RAW_RETENTION_DAYS` | Opt-in; removes local ZIPs older than N days only when a verified archived copy exists. Frees space only when the archive is on another disk. Off when unset |
 | `SEPA_ARCHIVE_DIR` | Source ZIP archive folder (default: `archive` inside the raw directory) |
 | `SEPA_REJECTED_SAMPLE_ROWS` | Rejected rows kept in `rejected_rows` per run, source and reason (default 100; 0 keeps only counts) |
+| `SEPA_MAX_REJECTED_SHARE`, `SEPA_MAX_WITHOUT_KEYS_SHARE`, `SEPA_MAX_STORE_UNLISTED_SHARE` | Largest share of rejected, keyless and unlisted-store product rows a full run may lose before publication fails (defaults 0.01, 0.01, 0.05; see Quality limits) |
+| `SEPA_MIN_PRODUCT_ROWS`, `SEPA_MAX_ROW_COUNT_DRIFT` | Critical minimum of staged product rows (default 100) and warning drift against the previous full run of the same scope (default 0.20) |
 | `SEPA_REGIONAL_SCOPE` | Opt-in regional scope of a published ingestion; `amba` is the only value. Changing it re-ingests the current file. Off when unset |
 | `SEPA_DEV_CHAIN_KEYS`, `SEPA_DEV_MAX_PRODUCT_ROWS` | Bounded development ingestion (see above) |
 
