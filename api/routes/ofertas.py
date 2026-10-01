@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Query
 
 from api.db import fetch, fetchrow
+from api.price_date import PRICE_DATE_SQL
 from api.pricing import discount_promo_label_sql, discount_promo_price_sql
 
 router = APIRouter()
@@ -57,6 +58,7 @@ async def get_ofertas(
             c.comercio_bandera_nombre AS cadena,
             {DISCOUNT_PROMO_LABEL}  AS leyenda_promo,
             ROUND(AVG(f.precio_lista)::numeric, 2) AS precio_lista,
+            {PRICE_DATE_SQL} AS fecha_precio,
             ROUND(AVG({DISCOUNT_PROMO_PRICE})::numeric, 2) AS precio_promo,
             ROUND(AVG(
                 (f.precio_lista - {DISCOUNT_PROMO_PRICE})
@@ -70,7 +72,7 @@ async def get_ofertas(
         JOIN dim_provincia pr ON s.provincia_sk  = pr.provincia_sk
         WHERE {where}
         GROUP BY p.productos_descripcion, p.productos_marca,
-                 c.comercio_bandera_nombre, {DISCOUNT_PROMO_LABEL}
+                 c.comercio_bandera_nombre, {DISCOUNT_PROMO_LABEL}, {PRICE_DATE_SQL}
         ORDER BY descuento_pct DESC
         LIMIT 50
         """,

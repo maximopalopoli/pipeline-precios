@@ -21,6 +21,7 @@ class PublicationResult:
     fecha_id: int
     rows_fact: int
     rows_aggregated: int
+    rows_carried_forward: int = 0
 
 
 def complete_partial_run(
@@ -120,15 +121,18 @@ def publish_pending_facts(
             f"pending facts, found {total_rows}"
         )
 
-    partition_swap_seconds, insert_facts_seconds, rows_fact = _swap_daily_partition(
-        conn, run_id=run_id, fecha_id=fecha_id
+    source_fecha_id = _find_carry_source(conn, run_id=run_id, fecha_id=fecha_id)
+    partition_swap_seconds, insert_facts_seconds, rows_source, rows_carried = _swap_daily_partition(
+        conn, run_id=run_id, fecha_id=fecha_id, source_fecha_id=source_fecha_id
     )
 
-    if rows_fact != reconciliation.rows_fact_published:
+    if rows_source != reconciliation.rows_fact_published:
         raise ValueError(
             f"Cannot publish run {run_id}: expected {reconciliation.rows_fact_published} "
-            f"published facts, inserted {rows_fact}"
+            f"source facts, inserted {rows_source}"
         )
+
+    rows_fact = rows_source + rows_carried
 
     agg = aggregate(conn, fecha_id)
 
@@ -142,10 +146,12 @@ def publish_pending_facts(
                SET status = 'completed',
                    finished_at = clock_timestamp(),
                    rows_valid = %s,
+                   rows_fact_carried_forward = %s,
+                   rows_fact_snapshot = %s,
                    error_message = NULL
              WHERE id = %s
             """,
-            (reconciliation.rows_valid, run_id),
+            (reconciliation.rows_valid, rows_carried, rows_fact, run_id),
         )
         if cur.rowcount != 1:
             raise ValueError(f"Cannot publish unknown ingestion run {run_id}")
@@ -168,6 +174,7 @@ def publish_pending_facts(
         fecha_id=fecha_id,
         rows_fact=rows_fact,
         rows_aggregated=agg.rows_upserted,
+        rows_carried_forward=rows_carried,
     )
     log.info(
         "publisher.pending_facts_published",
@@ -181,7 +188,38 @@ def publish_pending_facts(
     return result
 
 
-def _swap_daily_partition(conn, *, run_id: int, fecha_id: int) -> tuple[float, float, int]:
+def _find_carry_source(conn, *, run_id: int, fecha_id: int) -> int | None:
+    """Find the newest available snapshot at or before this date in the same scope."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT TO_CHAR(rf.fecha_datos, 'YYYYMMDD')::int
+            FROM ingestion_runs previous
+            JOIN raw_files rf ON rf.id = previous.raw_file_id
+            WHERE previous.id <> %s
+              AND previous.status = 'completed'
+              AND previous.rows_fact_published > 0
+              AND previous.regional_scope IS NOT DISTINCT FROM (
+                  SELECT regional_scope FROM ingestion_runs WHERE id = %s
+              )
+              AND rf.fecha_datos <= TO_DATE(%s::text, 'YYYYMMDD')
+              AND EXISTS (
+                  SELECT 1 FROM fact_precios f
+                  WHERE f.run_id = previous.id
+                    AND f.fecha_id = TO_CHAR(rf.fecha_datos, 'YYYYMMDD')::int
+              )
+            ORDER BY rf.fecha_datos DESC, previous.id DESC
+            LIMIT 1
+            """,
+            (run_id, run_id, fecha_id),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def _swap_daily_partition(
+    conn, *, run_id: int, fecha_id: int, source_fecha_id: int | None
+) -> tuple[float, float, int, int]:
     """Build a detached daily leaf, then replace the visible leaf atomically."""
     current_partition = _ensure_partition(conn, fecha_id)
     canonical_partition = f"fact_precios_{fecha_id}"
@@ -203,18 +241,46 @@ def _swap_daily_partition(conn, *, run_id: int, fecha_id: int) -> tuple[float, f
             INSERT INTO {candidate} (
                 producto_sk, sucursal_sk, fecha_id, run_id,
                 precio_lista, precio_referencia, precio_promo1, precio_promo2,
-                leyenda_promo1, leyenda_promo2, tiene_promo
+                leyenda_promo1, leyenda_promo2, tiene_promo, fecha_observada_id
             )
             SELECT
                 producto_sk, sucursal_sk, fecha_id, run_id,
                 precio_lista, precio_referencia, precio_promo1, precio_promo2,
-                leyenda_promo1, leyenda_promo2, tiene_promo
+                leyenda_promo1, leyenda_promo2, tiene_promo, fecha_id
             FROM pending_fact_precios
             WHERE run_id = %s AND fecha_id = %s
             """,
             (run_id, fecha_id),
         )
-        rows_fact = cur.rowcount
+        rows_source = cur.rowcount
+        rows_carried = 0
+        if source_fecha_id is not None:
+            cur.execute(
+                f"""
+                WITH present_stores AS MATERIALIZED (
+                    SELECT DISTINCT sucursal_sk
+                    FROM pending_fact_precios
+                    WHERE run_id = %s
+                )
+                INSERT INTO {candidate} (
+                    producto_sk, sucursal_sk, fecha_id, run_id,
+                    precio_lista, precio_referencia, precio_promo1, precio_promo2,
+                    leyenda_promo1, leyenda_promo2, tiene_promo, fecha_observada_id
+                )
+                SELECT
+                    old.producto_sk, old.sucursal_sk, %s, %s,
+                    old.precio_lista, old.precio_referencia,
+                    NULL, NULL, NULL, NULL, FALSE,
+                    COALESCE(old.fecha_observada_id, old.fecha_id)
+                FROM fact_precios old
+                LEFT JOIN present_stores present
+                  ON present.sucursal_sk = old.sucursal_sk
+                WHERE old.fecha_id = %s
+                  AND present.sucursal_sk IS NULL
+                """,
+                (run_id, fecha_id, run_id, source_fecha_id),
+            )
+            rows_carried = cur.rowcount
         insert_facts_seconds = perf_counter() - started_at
 
         started_at = perf_counter()
@@ -227,4 +293,4 @@ def _swap_daily_partition(conn, *, run_id: int, fecha_id: int) -> tuple[float, f
         )
         cur.execute(f"DROP TABLE {retired_partition}")
         partition_swap_seconds = perf_counter() - started_at
-    return partition_swap_seconds, insert_facts_seconds, rows_fact
+    return partition_swap_seconds, insert_facts_seconds, rows_source, rows_carried

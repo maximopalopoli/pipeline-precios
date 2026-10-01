@@ -35,6 +35,8 @@ def test_health_exposes_the_persisted_reconciliation_counts():
         "rows_productos_deduplicated": 2,
         "rows_fact_pending": 7,
         "rows_fact_published": 7,
+        "rows_fact_carried_forward": 3,
+        "rows_fact_snapshot": 10,
     }
 
     assert health._reconciliation_response(row) == row
@@ -75,6 +77,8 @@ def test_health_returns_reconciliation_for_the_latest_ingestion(monkeypatch):
         "rows_productos_deduplicated": 2,
         "rows_fact_pending": 7,
         "rows_fact_published": 7,
+        "rows_fact_carried_forward": 3,
+        "rows_fact_snapshot": 10,
     }
 
     async def fake_fetchrow(sql: str):

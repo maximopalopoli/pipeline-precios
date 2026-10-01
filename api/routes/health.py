@@ -20,10 +20,12 @@ def _reconciliation_response(row: dict) -> dict | None:
         "rows_productos_deduplicated",
         "rows_fact_pending",
         "rows_fact_published",
+        "rows_fact_carried_forward",
+        "rows_fact_snapshot",
     )
-    if all(row[field] is None for field in fields):
+    if all(row.get(field) is None for field in fields):
         return None
-    return {field: row[field] for field in fields}
+    return {field: row.get(field) for field in fields}
 
 
 @router.get("/health")
@@ -45,7 +47,9 @@ async def get_health():
             ir.rows_productos_without_keys,
             ir.rows_productos_deduplicated,
             ir.rows_fact_pending,
-            ir.rows_fact_published
+            ir.rows_fact_published,
+            ir.rows_fact_carried_forward,
+            ir.rows_fact_snapshot
         FROM ingestion_runs ir
         JOIN raw_files rf ON ir.raw_file_id = rf.id
         ORDER BY ir.started_at DESC

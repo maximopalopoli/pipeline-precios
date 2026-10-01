@@ -1,6 +1,9 @@
 """Integration tests for atomic publication of a daily ingestion run."""
 
+import asyncio
+import re
 from decimal import Decimal
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -9,6 +12,8 @@ import etl.load.publisher as publisher
 from etl.load.aggregator import aggregate
 from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation
+from api.price_date import PRICE_DATE_SQL
+from api.routes import buscador
 
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds" / "seed_provincias.sql"
 FECHA_ID = 20260315
@@ -56,20 +61,24 @@ def seed_data(pg_conn):
     return {"sucursal_sk": sucursal_sk, "productos": productos}
 
 
-def _create_run(pg_conn, filename: str) -> int:
+def _create_run(
+    pg_conn, filename: str, *, fecha_id: int = FECHA_ID, scope: str | None = None
+) -> int:
+    fecha = date(fecha_id // 10000, (fecha_id // 100) % 100, fecha_id % 100)
     with pg_conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
-            VALUES (%s, 'http://example.test/data.zip', %s, 1, '2026-03-15')
+            VALUES (%s, 'http://example.test/data.zip', %s, 1, %s)
             RETURNING id
             """,
-            (filename, filename),
+            (filename, filename, fecha),
         )
         raw_file_id = cur.fetchone()[0]
         cur.execute(
-            "INSERT INTO ingestion_runs (raw_file_id) VALUES (%s) RETURNING id",
-            (raw_file_id,),
+            """INSERT INTO ingestion_runs (raw_file_id, regional_scope)
+               VALUES (%s, %s) RETURNING id""",
+            (raw_file_id, scope),
         )
         return cur.fetchone()[0]
 
@@ -90,7 +99,8 @@ def _insert_fact(
 
 
 def _insert_pending_fact(
-    pg_conn, *, run_id: int, producto_sk: int, sucursal_sk: int, price: Decimal
+    pg_conn, *, run_id: int, producto_sk: int, sucursal_sk: int, price: Decimal,
+    fecha_id: int = FECHA_ID,
 ) -> None:
     with pg_conn.cursor() as cur:
         cur.execute(
@@ -99,7 +109,7 @@ def _insert_pending_fact(
                 run_id, producto_sk, sucursal_sk, fecha_id, precio_lista, tiene_promo
             ) VALUES (%s, %s, %s, %s, %s, FALSE)
             """,
-            (run_id, producto_sk, sucursal_sk, FECHA_ID, price),
+            (run_id, producto_sk, sucursal_sk, fecha_id, price),
         )
 
 
@@ -414,3 +424,205 @@ def test_failed_publication_keeps_the_previous_snapshot(
             (pending_run_id,),
         )
         assert cur.fetchone()[0] == 1
+
+
+def _add_day(pg_conn, fecha_id: int) -> None:
+    value = date(fecha_id // 10000, (fecha_id // 100) % 100, fecha_id % 100)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dim_fecha (
+                fecha_id, fecha, anio, mes, trimestre, semana_iso, dia_semana, es_fin_semana
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                fecha_id, value, value.year, value.month,
+                (value.month - 1) // 3 + 1, value.isocalendar().week,
+                value.isoweekday(), value.isoweekday() >= 6,
+            ),
+        )
+
+
+def _publish_day(
+    pg_conn, *, fecha_id: int, scope: str | None, stores: list[tuple],
+    label: str = "published",
+) -> tuple:
+    run_id = _create_run(
+        pg_conn, f"{label}-{fecha_id}-{scope}.zip", fecha_id=fecha_id, scope=scope
+    )
+    for sucursal_sk, producto_sk, price in stores:
+        _insert_pending_fact(
+            pg_conn, run_id=run_id, sucursal_sk=sucursal_sk,
+            producto_sk=producto_sk, price=Decimal(price), fecha_id=fecha_id,
+        )
+    pg_conn.commit()
+    result = publisher.publish_pending_facts(
+        pg_conn,
+        run_id=run_id,
+        fecha_id=fecha_id,
+        reconciliation=ProductReconciliation(len(stores), 0, 0, 0, len(stores), len(stores)),
+    )
+    pg_conn.commit()
+    return run_id, result
+
+
+def test_missing_store_prices_are_carried_until_the_store_returns(
+    pg_conn, seed_data, monkeypatch
+):
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO dim_comercio (id_comercio, id_bandera) VALUES (2, 1) RETURNING comercio_sk"
+        )
+        comercio_sk = cur.fetchone()[0]
+        cur.execute(
+            """
+            INSERT INTO dim_sucursal (
+                id_comercio, id_bandera, id_sucursal, comercio_sk, provincia_sk
+            ) VALUES (
+                2, 1, 1, %s,
+                (SELECT provincia_sk FROM dim_provincia WHERE codigo_iso = 'AR-C')
+            ) RETURNING sucursal_sk
+            """,
+            (comercio_sk,),
+        )
+        missing_store = cur.fetchone()[0]
+    first_store = seed_data["sucursal_sk"]
+    product_a = seed_data["productos"]["AAA"]
+    product_b = seed_data["productos"]["BBB"]
+    initial = [(first_store, product_a, "100"), (missing_store, product_b, "200")]
+    _publish_day(pg_conn, fecha_id=FECHA_ID, scope="amba", stores=initial)
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE fact_precios
+            SET precio_promo1 = 150, leyenda_promo1 = 'Old promotion', tiene_promo = TRUE
+            WHERE fecha_id = %s AND sucursal_sk = %s
+            """,
+            (FECHA_ID, missing_store),
+        )
+    pg_conn.commit()
+
+    for fecha_id in (20260316, 20260317):
+        _add_day(pg_conn, fecha_id)
+        run_id, result = _publish_day(
+            pg_conn, fecha_id=fecha_id, scope="amba",
+            stores=[(first_store, product_a, "110")],
+        )
+        assert result.rows_fact == 2
+        assert result.rows_carried_forward == 1
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT sucursal_sk, precio_lista, fecha_observada_id,
+                       precio_promo1, tiene_promo, {price_date} AS fecha_precio
+                FROM fact_precios f WHERE fecha_id = %s ORDER BY sucursal_sk
+                """.format(price_date=PRICE_DATE_SQL),
+                (fecha_id,),
+            )
+            assert cur.fetchall() == [
+                (first_store, Decimal("110.00"), fecha_id, None, False,
+                 f"{fecha_id // 10000:04d}-{(fecha_id // 100) % 100:02d}-{fecha_id % 100:02d}"),
+                (missing_store, Decimal("200.00"), FECHA_ID, None, False,
+                 "2026-03-15"),
+            ]
+            cur.execute(
+                """
+                SELECT rows_fact_pending, rows_fact_published,
+                       rows_fact_carried_forward, rows_fact_snapshot
+                FROM ingestion_runs WHERE id = %s
+                """,
+                (run_id,),
+            )
+            assert cur.fetchone() == (1, 1, 1, 2)
+
+        if fecha_id == 20260316:
+            async def fetch_prices(sql, *params):
+                with pg_conn.cursor() as cur:
+                    cur.execute(re.sub(r"\$\d+", "%s", sql), params)
+                    columns = [column.name for column in cur.description]
+                    return [dict(zip(columns, row)) for row in cur.fetchall()]
+
+            monkeypatch.setattr(buscador, "fetch", fetch_prices)
+            offers = asyncio.run(
+                buscador.get_buscador(
+                    producto_sk=product_b, fecha_id=fecha_id,
+                    provincia=None, localidad=None, cadenas=None,
+                    lat=None, lon=None, radius=5,
+                )
+            )
+            assert len(offers) == 1
+            assert offers[0]["fecha_precio"] == "2026-03-15"
+
+    _add_day(pg_conn, 20260318)
+    _, result = _publish_day(
+        pg_conn, fecha_id=20260318, scope="amba",
+        stores=[(first_store, product_a, "120"), (missing_store, product_b, "230")],
+    )
+    assert result.rows_carried_forward == 0
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT precio_lista, fecha_observada_id
+            FROM fact_precios
+            WHERE fecha_id = 20260318 AND sucursal_sk = %s
+            """,
+            (missing_store,),
+        )
+        assert cur.fetchone() == (Decimal("230.00"), 20260318)
+
+
+def test_first_scoped_day_does_not_carry_national_stores(pg_conn, seed_data):
+    store = seed_data["sucursal_sk"]
+    product_a = seed_data["productos"]["AAA"]
+    product_b = seed_data["productos"]["BBB"]
+    _publish_day(
+        pg_conn, fecha_id=FECHA_ID, scope=None,
+        stores=[(store, product_a, "100"), (store, product_b, "200")],
+    )
+    _add_day(pg_conn, 20260316)
+    _, result = _publish_day(
+        pg_conn, fecha_id=20260316, scope="amba",
+        stores=[(store, product_a, "110")],
+    )
+    assert result.rows_fact == 1
+    assert result.rows_carried_forward == 0
+
+
+def test_same_day_rectification_keeps_an_unreported_store(pg_conn, seed_data):
+    store = seed_data["sucursal_sk"]
+    product_a = seed_data["productos"]["AAA"]
+    product_b = seed_data["productos"]["BBB"]
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dim_sucursal (
+                id_comercio, id_bandera, id_sucursal, comercio_sk, provincia_sk
+            ) SELECT 1, 1, 2, comercio_sk, provincia_sk
+              FROM dim_sucursal WHERE sucursal_sk = %s
+            RETURNING sucursal_sk
+            """,
+            (store,),
+        )
+        other_store = cur.fetchone()[0]
+
+    _publish_day(
+        pg_conn, fecha_id=FECHA_ID, scope="amba",
+        stores=[(store, product_a, "100"), (other_store, product_b, "200")],
+    )
+    _, result = _publish_day(
+        pg_conn, fecha_id=FECHA_ID, scope="amba", label="rectified",
+        stores=[(store, product_a, "110")],
+    )
+    assert result.rows_carried_forward == 1
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT sucursal_sk, precio_lista, fecha_observada_id
+            FROM fact_precios WHERE fecha_id = %s ORDER BY sucursal_sk
+            """,
+            (FECHA_ID,),
+        )
+        assert cur.fetchall() == [
+            (store, Decimal("110.00"), FECHA_ID),
+            (other_store, Decimal("200.00"), FECHA_ID),
+        ]

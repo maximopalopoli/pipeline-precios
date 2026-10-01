@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Query
 
 from api.db import fetch
+from api.price_date import PRICE_DATE_SQL
 from api.pricing import (
     discount_promo_label_sql,
     discount_promo_price_sql,
@@ -109,6 +110,7 @@ async def get_buscador_ean(
             s.sucursales_localidad    AS localidad,
             pr.nombre                 AS provincia,
             f.precio_lista,
+            {PRICE_DATE_SQL}          AS fecha_precio,
             {BEST_PRICE}              AS mejor_precio,
             {DISCOUNT_PROMO_PRICE}    AS precio_promo,
             {DISCOUNT_PROMO_LABEL}    AS leyenda_promo,

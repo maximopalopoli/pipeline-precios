@@ -1,6 +1,7 @@
 import { MapContainer, TileLayer, CircleMarker, Popup, Tooltip } from 'react-leaflet';
 import type { StorePrice } from '../../lib/api';
 import { formatCurrency } from '../../lib/constants';
+import { PriceDate } from '../pricing/PriceDate';
 
 interface PriceMapProps {
   stores: StorePrice[];
@@ -54,11 +55,15 @@ export function PriceMap({ stores }: PriceMapProps) {
             fillOpacity: 0.8,
           }}
         >
-          <Tooltip>{store.cadena} — {formatCurrency(store.mejor_precio)}</Tooltip>
+          <Tooltip>
+            {store.cadena} — {formatCurrency(store.mejor_precio)}<br />
+            <PriceDate value={store.fecha_precio} />
+          </Tooltip>
           <Popup>
             <strong>{store.cadena}</strong> — {store.sucursal}<br />
             {store.localidad}<br />
             Precio: <strong>{formatCurrency(store.mejor_precio)}</strong><br />
+            <PriceDate value={store.fecha_precio} /><br />
             Tipo: {store.tipo}
           </Popup>
         </CircleMarker>

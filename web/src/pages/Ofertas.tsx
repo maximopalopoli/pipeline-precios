@@ -7,6 +7,7 @@ import { DataTable } from '../components/tables/DataTable';
 import { VariationBarChart } from '../components/charts/VariationBarChart';
 import { KpiCard } from '../components/layout/KpiCard';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
+import { PriceDate } from '../components/pricing/PriceDate';
 import { formatCurrency, formatPercent } from '../lib/constants';
 
 const col = createColumnHelper<OfertaItem>();
@@ -16,6 +17,7 @@ const columns = [
   col.accessor('cadena', { header: 'Cadena' }),
   col.accessor('precio_lista', { header: 'Precio lista', cell: (info) => formatCurrency(info.getValue()) }),
   col.accessor('precio_promo', { header: 'Precio promo', cell: (info) => formatCurrency(info.getValue()) }),
+  col.accessor('fecha_precio', { header: 'Fecha', cell: (info) => <PriceDate value={info.getValue()} /> }),
   col.accessor('leyenda_promo', {
     header: 'Condiciones',
     cell: (info) => <PromotionDetails tieneDescuento leyendaPromo={info.getValue()} compact />,

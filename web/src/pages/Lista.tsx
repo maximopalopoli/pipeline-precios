@@ -8,6 +8,7 @@ import {
 } from '../lib/api';
 import { useShoppingList } from '../hooks/useShoppingList';
 import { formatCurrency } from '../lib/constants';
+import { PriceDate } from '../components/pricing/PriceDate';
 
 // ── Step 0: Build shopping list ──
 
@@ -337,6 +338,7 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
             {currentSelection.marca ? ` — ${currentSelection.marca}` : ''}{' '}
             en {currentSelection.cadena} ({currentSelection.sucursal}) —{' '}
             <span className="font-medium">{formatCurrency(currentSelection.mejor_precio)}</span>
+            {' '}<PriceDate value={currentSelection.fecha_precio} />
             <button
               onClick={() => useShoppingList.getState().clearSelection(itemIndex)}
               className="ml-2 text-blue-500 hover:text-blue-700 underline"
@@ -417,6 +419,7 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
                                 {formatCurrency(item.precio_lista)}
                               </span>
                             )}
+                            <div><PriceDate value={item.fecha_precio} /></div>
                           </div>
                           <button
                             onClick={() => handleSelect(item)}
@@ -592,6 +595,7 @@ function Summary() {
                           {formatCurrency(item.product.precio_lista)}
                         </span>
                       )}
+                      <div><PriceDate value={item.product.fecha_precio} /></div>
                     </div>
                   </div>
                 ))}

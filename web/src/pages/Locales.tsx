@@ -8,6 +8,7 @@ import { DataTable } from '../components/tables/DataTable';
 import { StoreLocatorMap } from '../components/maps/StoreLocator';
 import { formatCurrency, formatPercent } from '../lib/constants';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
+import { PriceDate } from '../components/pricing/PriceDate';
 
 const storeCol = createColumnHelper<NearbyStore>();
 const storeColumns = [
@@ -24,6 +25,7 @@ const promoColumns = [
   promoCol.accessor('marca', { header: 'Marca' }),
   promoCol.accessor('precio_lista', { header: 'Precio lista', cell: (info) => formatCurrency(info.getValue()) }),
   promoCol.accessor('precio_promo', { header: 'Precio promo', cell: (info) => formatCurrency(info.getValue()) }),
+  promoCol.accessor('fecha_precio', { header: 'Fecha', cell: (info) => <PriceDate value={info.getValue()} /> }),
   promoCol.accessor('leyenda_promo', {
     header: 'Condiciones',
     cell: (info) => (

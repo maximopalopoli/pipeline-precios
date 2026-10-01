@@ -18,6 +18,7 @@ import { DataTable } from '../components/tables/DataTable';
 import { PriceMap } from '../components/maps/PriceMap';
 import { KpiCard } from '../components/layout/KpiCard';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
+import { PriceDate } from '../components/pricing/PriceDate';
 import { formatCurrency } from '../lib/constants';
 
 // ── Single-product table columns ──
@@ -29,6 +30,7 @@ const columns = [
   col.accessor('provincia', { header: 'Provincia' }),
   col.accessor('precio_lista', { header: 'Precio lista', cell: (info) => formatCurrency(info.getValue()) }),
   col.accessor('mejor_precio', { header: 'Mejor precio', cell: (info) => formatCurrency(info.getValue()) }),
+  col.accessor('fecha_precio', { header: 'Fecha', cell: (info) => <PriceDate value={info.getValue()} /> }),
   col.accessor('ahorro', { header: 'Ahorro', cell: (info) => formatCurrency(info.getValue()) }),
   col.display({
     id: 'promocion',
@@ -323,6 +325,7 @@ export function Buscador() {
                   tieneDescuento={cheapest.tiene_descuento}
                   leyendaPromo={cheapest.leyenda_promo}
                 />
+                <PriceDate value={cheapest.fecha_precio} />
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -368,6 +371,7 @@ export function Buscador() {
                   <p className="text-sm text-emerald-700">
                     {genericCheapest.producto} {genericCheapest.marca ? `— ${genericCheapest.marca}` : ''}
                   </p>
+                  <PriceDate value={genericCheapest.fecha_precio} />
                 </div>
               )}
 
@@ -439,6 +443,7 @@ export function Buscador() {
                                   compact
                                 />
                               </div>
+                              <PriceDate value={item.fecha_precio} />
                             </div>
                           </div>
                         ))}

@@ -7,6 +7,7 @@ from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from geopy.geocoders import Nominatim
 
 from api.db import fetch, fetchrow
+from api.price_date import PRICE_DATE_SQL
 from api.published_stores import STORE_HAS_PUBLISHED_PRICE
 from api.pricing import (
     discount_promo_label_sql,
@@ -126,6 +127,7 @@ async def get_store_promos(sucursal_sk: int):
             p.productos_descripcion AS producto,
             p.productos_marca       AS marca,
             f.precio_lista,
+            {PRICE_DATE_SQL} AS fecha_precio,
             {DISCOUNT_PROMO_PRICE}  AS precio_promo,
             {DISCOUNT_PROMO_LABEL}  AS leyenda_promo,
             ROUND(

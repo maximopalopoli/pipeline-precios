@@ -33,6 +33,8 @@ export interface HealthData {
     rows_productos_deduplicated: number | null;
     rows_fact_pending: number | null;
     rows_fact_published: number | null;
+    rows_fact_carried_forward: number | null;
+    rows_fact_snapshot: number | null;
   } | null;
 }
 export const fetchHealth = () => api.get<HealthData>('/health').then(r => r.data);
@@ -73,6 +75,7 @@ export interface StorePrice {
   localidad: string;
   provincia: string;
   precio_lista: number;
+  fecha_precio: string;
   mejor_precio: number;
   ahorro: number;
   /** Promotional price only when it is lower than the list price. */
@@ -105,6 +108,7 @@ export interface GenericStorePrice {
   localidad: string;
   provincia: string;
   precio_lista: number;
+  fecha_precio: string;
   mejor_precio: number;
   precio_promo: number | null;
   leyenda_promo: string | null;
@@ -143,6 +147,7 @@ export interface EanStorePrice {
   localidad: string;
   provincia: string;
   precio_lista: number;
+  fecha_precio: string;
   mejor_precio: number;
   precio_promo: number | null;
   leyenda_promo: string | null;
@@ -202,6 +207,7 @@ export interface OfertaItem {
   /** Source-provided promotion conditions; null means they were not supplied. */
   leyenda_promo: string | null;
   precio_lista: number;
+  fecha_precio: string;
   precio_promo: number;
   descuento_pct: number;
 }
@@ -240,6 +246,7 @@ export interface StorePromo {
   producto: string;
   marca: string | null;
   precio_lista: number;
+  fecha_precio: string;
   precio_promo: number;
   leyenda_promo: string | null;
   descuento_pct: number;

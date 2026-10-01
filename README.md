@@ -344,6 +344,16 @@ store KPI) includes only stores with prices on the latest published day. Older
 national facts may remain under fact retention without appearing as current
 stores.
 
+When a store has no valid price rows in a later file, publication carries its
+last prices from the newest available snapshot of the same regional scope.
+The fact's `fecha_id` is the snapshot day; `fecha_observada_id` is the day the
+price was actually reported. API offers include `fecha_precio`, and the web
+client labels each price with that date. Carried prices keep the list and
+reference prices, while unverified older promotions are removed. A store with
+new price rows replaces its previous offers in full; individual product rows
+missing from an otherwise present store are not carried. Retained facts from a
+different scope are never used as a carry source.
+
 Coordinates are plausible when both parse as dot-decimal numbers inside
 Argentina's bounding box. Product rows are then kept only when the same file
 placed their store in scope. The store key is `id_comercio`, `id_bandera` and
@@ -428,7 +438,9 @@ row through publication. The product-specific counters on `ingestion_runs` are:
 | `rows_productos_without_keys` | Valid rows that could not resolve the dimensions required for a fact, counted per reason in `rejection_counts` (source `fact_key_resolution`). |
 | `rows_productos_deduplicated` | Valid rows superseded by another row at the product × store fact grain. |
 | `rows_fact_pending` | Unique facts held in the provisional set before publication. |
-| `rows_fact_published` | Facts made visible by the completed atomic publication. |
+| `rows_fact_published` | New source facts made visible by the completed atomic publication; equals pending facts. |
+| `rows_fact_carried_forward` | Earlier offers copied into the visible day because their store had no new prices. |
+| `rows_fact_snapshot` | Total visible facts for the day: published source facts plus carried facts. |
 | `inner_zips_invalid_count` | Nested SEPA ZIPs that were malformed and skipped; these contain no product rows to reconcile. |
 | `rows_sucursales_out_of_scope`, `rows_sucursales_unlocated` | Store rows left out by the regional scope, by reason; diagnostic, not terms of the product equations. |
 
@@ -440,6 +452,7 @@ rows_productos_source = rows_productos_out_of_scope + rows_productos_store_unlis
 rows_productos_raw = rows_productos_valid + rows_productos_rejected
 rows_productos_valid = rows_productos_without_keys + rows_productos_deduplicated + rows_fact_pending
 rows_fact_pending = rows_fact_published  # full runs only
+rows_fact_snapshot = rows_fact_published + rows_fact_carried_forward  # new full runs
 rows_productos_rejected = SUM(rejection_counts.row_count) for clean_productos
 rows_productos_without_keys = SUM(rejection_counts.row_count) for fact_key_resolution
 ```
@@ -700,7 +713,7 @@ TanStack Table/Query for data.
 | Source measurements (price change rate, AMBA share, coverage) | Done |
 | Storage: current snapshot in PostgreSQL, history in archived ZIPs | Next |
 | AMBA regional scope | Done |
-| Carry-forward of missing chains, price date on every offer | Next |
+| Carry-forward of missing stores and price date on offers | Done; full replay pending |
 | Canonical product catalog and shopping-list comparison UI | Planned |
 | Promotions and discounts beyond SEPA's list/promo prices | Later |
 
