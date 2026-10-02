@@ -63,7 +63,7 @@ Daily ZIP (~300 MB)
 | **Staging** | `stg_comercios`, `stg_sucursales`, `stg_productos` |
 | **Dimensions** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
 | **Fact** | `fact_precios` (monthly parents with daily leaves; grain: product × store × day) |
-| **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample) |
+| **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample), `producto_conflictos` (brand and size disagreements between chains) |
 
 ## Project Structure
 
@@ -202,6 +202,14 @@ Data rules the pipeline relies on:
 - **Product identity.** A product is `ean:<id>` only when the source flags it as
   an EAN and it passes the EAN-8/13 checksum; otherwise it is scoped to its
   chain. Products are never merged by name similarity.
+- **Product attributes.** Chains spell a shared EAN differently ("20 gr",
+  "0.02 KG", "1 UNI"). Each attribute is chosen by a vote of chains, one vote
+  per chain whatever its store count: the description with most chains, then
+  the longest text; the brand with most chains, then most rows; and the size
+  normalized to grams, millilitres or units (`contenido`, `contenido_unidad`),
+  preferring a measured size over a unit count. Unknown units stay empty. Full
+  runs record products whose chains disagree on brand or measured size in
+  `producto_conflictos` for review.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.
