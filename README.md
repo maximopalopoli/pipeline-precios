@@ -246,6 +246,10 @@ Data rules the pipeline relies on:
   accents. An exact EAN comes first, then products of the type the query
   names, then those listed by more chains. Optional `tipo`, `marca`,
   `contenido` and `unidad` (`g`, `ml`, `u`) filters narrow the results.
+  Each result carries `precio_desde`, its lowest store price (unconditional
+  promotions in force only), the observation date of that price, and
+  `sucursales`, how many stores carry it. With `lat`, `lon` and `radius` (km,
+  default 1), only nearby stores count; the order stays the same.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.

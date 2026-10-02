@@ -4,12 +4,10 @@ import { createColumnHelper } from '@tanstack/react-table';
 import {
   fetchBuscador,
   fetchBuscadorDates,
-  fetchBuscadorGeneric,
-  fetchBuscadorGenericDates,
   geocode,
+  searchProducts,
   type Product,
   type StorePrice,
-  type GenericStorePrice,
 } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
 import { FilterPanel } from '../components/filters/FilterPanel';
@@ -48,43 +46,15 @@ const columns = [
   }),
 ];
 
-// ── Helpers for generic mode ──
-interface ChainGroup {
-  cadena: string;
-  count: number;
-  min_precio: number;
-  avg_precio: number;
-  items: GenericStorePrice[];
-}
-
-function groupByChain(rows: GenericStorePrice[]): ChainGroup[] {
-  const map = new Map<string, GenericStorePrice[]>();
-  for (const row of rows) {
-    const arr = map.get(row.cadena) || [];
-    arr.push(row);
-    map.set(row.cadena, arr);
-  }
-  return Array.from(map.entries())
-    .map(([cadena, items]) => ({
-      cadena,
-      count: items.length,
-      min_precio: Math.min(...items.map((i) => i.mejor_precio)),
-      avg_precio: items.reduce((s, i) => s + i.mejor_precio, 0) / items.length,
-      items: items.sort((a, b) => a.mejor_precio - b.mejor_precio),
-    }))
-    .sort((a, b) => a.min_precio - b.min_precio);
-}
-
 export function Buscador() {
   const { provincia, localidad, cadenas } = useFilters();
 
-  // Two mutually exclusive modes
+  // Two mutually exclusive modes: one product, or the cards of a search
   const [product, setProduct] = useState<Product | null>(null);
   const [genericQuery, setGenericQuery] = useState<string | null>(null);
 
   const [fechaId, setFechaId] = useState<number | null>(null);
   const [showMap, setShowMap] = useState(false);
-  const [expandedChains, setExpandedChains] = useState<Set<string>>(new Set());
 
   // ── Location filter ──
   const [address, setAddress] = useState('');
@@ -117,29 +87,12 @@ export function Buscador() {
     setProduct(p);
     setGenericQuery(null);
     setFechaId(null);
-    setExpandedChains(new Set());
   };
 
   const handleSearchAll = (q: string) => {
-    if (!q) {
-      setGenericQuery(null);
-      setFechaId(null);
-      setExpandedChains(new Set());
-      return;
-    }
-    setGenericQuery(q);
+    setGenericQuery(q || null);
     setProduct(null);
     setFechaId(null);
-    setExpandedChains(new Set());
-  };
-
-  const toggleChain = (cadena: string) => {
-    setExpandedChains((prev) => {
-      const next = new Set(prev);
-      if (next.has(cadena)) next.delete(cadena);
-      else next.add(cadena);
-      return next;
-    });
   };
 
   // ── Dates ──
@@ -149,13 +102,7 @@ export function Buscador() {
     enabled: !!product,
   });
 
-  const { data: genericDates = [] } = useQuery({
-    queryKey: ['buscador-generic-dates', genericQuery],
-    queryFn: () => fetchBuscadorGenericDates(genericQuery!),
-    enabled: !!genericQuery,
-  });
-
-  const activeDates = genericQuery ? genericDates : dates;
+  const activeDates = product ? dates : [];
   const selectedFechaId = fechaId ?? (activeDates.length > 0 ? activeDates[0].fecha_id : null);
 
   // ── Location params for API ──
@@ -177,28 +124,17 @@ export function Buscador() {
     enabled: !!product && !!selectedFechaId,
   });
 
-  // ── Generic results ──
-  const { data: genericRows = [], isLoading: isLoadingGeneric } = useQuery({
-    queryKey: ['buscador-generic', genericQuery, selectedFechaId, provincia, localidad, cadenas, userLat, userLon, radius],
-    queryFn: () =>
-      fetchBuscadorGeneric({
-        q: genericQuery!,
-        fecha_id: selectedFechaId!,
-        provincia: provincia || undefined,
-        localidad: localidad || undefined,
-        cadenas: cadenas.length > 0 ? cadenas : undefined,
-        ...locationParams,
-      }),
-    enabled: !!genericQuery && !!selectedFechaId,
+  // ── Product cards of a search (latest published day) ──
+  const { data: cards = [], isLoading: isLoadingCards } = useQuery({
+    queryKey: ['product-cards', genericQuery, userLat, userLon, radius],
+    queryFn: () => searchProducts({ q: genericQuery!, ...locationParams }),
+    enabled: !!genericQuery,
   });
 
-  const isLoading = isLoadingSingle || isLoadingGeneric;
+  const isLoading = isLoadingSingle || isLoadingCards;
   const isGenericMode = !!genericQuery;
-  const chainGroups = isGenericMode ? groupByChain(genericRows) : [];
+  const nearby = userLat != null && userLon != null;
   const cheapest = !isGenericMode && stores.length > 0 ? stores[0] : null;
-  const genericCheapest = isGenericMode && genericRows.length > 0
-    ? genericRows.reduce((best, r) => (r.mejor_precio < best.mejor_precio ? r : best), genericRows[0])
-    : null;
 
   return (
     <div className="space-y-6">
@@ -303,7 +239,8 @@ export function Buscador() {
           {locationEnabled && userLat != null && (product || genericQuery) && !isLoading && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
               Mostrando resultados a menos de {radius} km de tu ubicacion
-              {((isGenericMode && genericRows.length === 0) || (!isGenericMode && stores.length === 0)) && selectedFechaId && (
+              {((isGenericMode && cards.length > 0 && cards.every((c) => c.sucursales === 0))
+                || (!isGenericMode && stores.length === 0 && selectedFechaId)) && (
                 <span> — no hay locales cerca. Intenta aumentar el radio.</span>
               )}
             </div>
@@ -363,108 +300,42 @@ export function Buscador() {
             </>
           )}
 
-          {/* ── Generic mode results ── */}
-          {isGenericMode && genericRows.length > 0 && (
-            <>
-              {genericCheapest && (
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                  <p className="text-sm text-emerald-800">
-                    <strong>Mejor precio:</strong> {genericCheapest.cadena} — {genericCheapest.sucursal} ({genericCheapest.localidad})
+          {/* ── Product cards ── */}
+          {isGenericMode && cards.length > 0 && (
+            <div className="grid sm:grid-cols-2 gap-3">
+              {cards.map((card) => (
+                <button
+                  key={card.producto_sk}
+                  onClick={() => handleSelectProduct(card)}
+                  className="rounded-lg border border-slate-200 bg-white p-4 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+                >
+                  <p className="font-medium text-slate-900">{card.nombre}</p>
+                  <p className="text-xs text-slate-400">
+                    {card.nombre !== card.descripcion && `${card.descripcion} · `}{card.id_producto}
                   </p>
-                  <p className="text-lg font-bold text-emerald-900">
-                    {formatCurrency(genericCheapest.mejor_precio)}
-                  </p>
-                  <p className="text-sm text-emerald-700">
-                    {genericCheapest.producto} {genericCheapest.marca ? `— ${genericCheapest.marca}` : ''}
-                  </p>
-                  <PriceDate value={genericCheapest.fecha_precio} />
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <KpiCard label="Productos" value={String(genericRows.length)} />
-                <KpiCard label="Cadenas" value={String(chainGroups.length)} />
-                <KpiCard label="Precio min." value={formatCurrency(Math.min(...genericRows.map((r) => r.mejor_precio)))} />
-                <KpiCard
-                  label="Precio prom."
-                  value={formatCurrency(genericRows.reduce((s, r) => s + r.mejor_precio, 0) / genericRows.length)}
-                />
-              </div>
-
-              {genericRows.length >= 1000 && (
-                <p className="text-xs text-amber-600">
-                  Mostrando los primeros 1000 resultados. Intenta una busqueda mas especifica.
-                </p>
-              )}
-
-              <div className="space-y-2">
-                <h2 className="text-lg font-semibold text-slate-800">Resultados por cadena</h2>
-                {chainGroups.map((group) => (
-                  <div key={group.cadena} className="rounded-lg border border-slate-200 overflow-hidden">
-                    <button
-                      onClick={() => toggleChain(group.cadena)}
-                      className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
-                    >
-                      <div>
-                        <span className="font-medium text-slate-900">{group.cadena}</span>
-                        <span className="ml-2 text-sm text-slate-500">
-                          ({group.count} {group.count === 1 ? 'producto' : 'productos'})
+                  {card.precio_desde != null && card.fecha_precio_desde ? (
+                    <>
+                      <p className="mt-2 text-sm text-slate-600">
+                        desde{' '}
+                        <span className="text-lg font-bold text-emerald-700">
+                          {formatCurrency(card.precio_desde)}
                         </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-medium text-emerald-700">
-                          desde {formatCurrency(group.min_precio)}
-                        </span>
-                        <span className="text-slate-400 text-xs">
-                          {expandedChains.has(group.cadena) ? '▲' : '▼'}
-                        </span>
-                      </div>
-                    </button>
-                    {expandedChains.has(group.cadena) && (
-                      <div className="divide-y divide-slate-100">
-                        {group.items.map((item, i) => (
-                          <div key={i} className="px-4 py-2.5 flex items-center justify-between text-sm">
-                            <div>
-                              <span className="text-slate-800">{item.producto}</span>
-                              {item.marca && (
-                                <span className="ml-1.5 text-slate-400">— {item.marca}</span>
-                              )}
-                              <span className="ml-2 text-xs text-slate-400">
-                                {item.sucursal}, {item.localidad}
-                              </span>
-                            </div>
-                            <div className="text-right whitespace-nowrap">
-                              <span className="font-medium text-slate-900">
-                                {formatCurrency(item.mejor_precio)}
-                              </span>
-                              {item.precio_lista !== item.mejor_precio && (
-                                <span className="ml-2 text-xs text-slate-400 line-through">
-                                  {formatCurrency(item.precio_lista)}
-                                </span>
-                              )}
-                              <div>
-                                <PromotionDetails
-                                  tieneDescuento={item.tiene_descuento}
-                                  leyendaPromo={item.leyenda_promo}
-                                  precioCondicional={item.precio_condicional}
-                                  leyendaCondicional={item.leyenda_condicional}
-                                  condicionAparte={item.condicion}
-                                  compact
-                                />
-                              </div>
-                              <PriceDate value={item.fecha_precio} />
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </>
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        en {card.sucursales} {card.sucursales === 1 ? 'local' : 'locales'}
+                        {nearby && ' cerca'}
+                      </p>
+                      <PriceDate value={card.fecha_precio_desde} />
+                    </>
+                  ) : (
+                    <p className="mt-2 text-sm text-slate-400">Ningún local cerca lo tiene.</p>
+                  )}
+                </button>
+              ))}
+            </div>
           )}
 
-          {isGenericMode && !isLoading && genericRows.length === 0 && selectedFechaId && (
+          {isGenericMode && !isLoading && cards.length === 0 && (
             <p className="text-sm text-slate-400">
               No se encontraron productos para "{genericQuery}".
             </p>

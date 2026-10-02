@@ -8,6 +8,8 @@ from typing import Literal
 from fastapi import APIRouter, Query
 
 from api.db import fetch
+from api.price_date import PRICE_DATE_SQL
+from api.pricing import store_priced_facts
 from api.published_stores import LATEST_PUBLISHED_FECHA_ID
 
 router = APIRouter()
@@ -18,6 +20,9 @@ MIN_WORD_LENGTH = 2
 MAX_WORDS = 8
 # pg_trgm indexes a LIKE pattern only from three letters on.
 TRIGRAM_LENGTH = 3
+# Kilometres per degree in AMBA, as the other location filters approximate.
+KM_PER_DEGREE_LAT = 111.0
+KM_PER_DEGREE_LON = 85.0
 
 
 def query_words(q: str) -> list[str]:
@@ -37,13 +42,21 @@ async def search_products(
     marca: str | None = Query(None),
     contenido: Decimal | None = Query(None, gt=0),
     unidad: Literal["g", "ml", "u"] | None = Query(None),
+    lat: float | None = Query(None, ge=-90, le=90),
+    lon: float | None = Query(None, ge=-180, le=180),
+    radius: float = Query(1, ge=0.5, le=50),
     limit: int = Query(50, ge=1, le=100),
 ):
     """Products with a price in the latest published day, ranked for reading.
 
-    An exact EAN comes first, then products of the type the query starts
-    with ("leche" before dulce de leche), then of the longest type it names
-    anywhere ("serenisima leche"), then products sold by more chains.
+    An exact EAN comes first, then products of the type the query names
+    ("leche" before dulce de leche), then of the longest type it names as
+    whole words ("serenisima leche"), then products sold by more chains.
+
+    Each product carries its lowest store price in that day, the date that
+    price was observed, and how many stores carry it; with ``lat`` and
+    ``lon``, only stores within ``radius`` km count, and a product none of
+    them carries has no "from" price.  Location does not change the order.
     """
     words = query_words(q)
     ean = q.strip() if q.strip().isdigit() else None
@@ -107,6 +120,18 @@ async def search_products(
     if unidad:
         conditions.append(f"p.contenido_unidad = {param(unidad)}")
 
+    # Each result's prices are read after ranking, for the returned page only.
+    prices_where = "f.producto_sk = r.producto_sk AND f.fecha_id = r.fecha_id"
+    prices_source = "fact_precios f"
+    if lat is not None and lon is not None:
+        prices_source += " JOIN dim_sucursal s ON s.sucursal_sk = f.sucursal_sk"
+        lat_km = f"(s.sucursales_latitud::float8 - {param(lat)}::float8) * {KM_PER_DEGREE_LAT}"
+        lon_km = f"(s.sucursales_longitud::float8 - {param(lon)}::float8) * {KM_PER_DEGREE_LON}"
+        prices_where += f" AND SQRT(POW({lat_km}, 2) + POW({lon_km}, 2)) <= {param(radius)}"
+    prices = store_priced_facts(
+        prices_source, prices_where, f"{PRICE_DATE_SQL} AS fecha_precio"
+    )
+
     # Materialized so that the text checks run on the candidates only; inlined,
     # the planner applied them to every product (about 700 ms).
     rows = await fetch(
@@ -115,25 +140,42 @@ async def search_products(
             SELECT p.*
             FROM v_producto p
             WHERE p.producto_sk IN ({" UNION ".join(candidates)})
+        ),
+        resultados AS (
+            SELECT p.producto_sk, p.id_producto, p.es_ean, p.nombre,
+                   p.productos_descripcion, p.productos_marca, p.tipo, p.variante,
+                   p.contenido, p.contenido_unidad,
+                   {LATEST_PUBLISHED_FECHA_ID} AS fecha_id,
+                   ROW_NUMBER() OVER (
+                       ORDER BY p.producto_identity = 'ean:' || $2 IS TRUE DESC,
+                                COALESCE(p.tipo = pipeline_product_type($1), FALSE) DESC,
+                                CASE
+                                    WHEN POSITION(
+                                        ' ' || pipeline_normalize_text(p.tipo) || ' '
+                                        IN ' ' || pipeline_normalize_text($1) || ' '
+                                    ) > 0 THEN LENGTH(p.tipo)
+                                    ELSE 0
+                                END DESC,
+                                p.cadenas_fuente DESC NULLS LAST,
+                                p.nombre,
+                                p.producto_sk
+                   ) AS orden
+            FROM candidatos p
+            WHERE {" AND ".join(conditions)}
+            ORDER BY orden
+            LIMIT {param(limit)}
         )
-        SELECT p.producto_sk, p.id_producto, p.es_ean, p.nombre,
-               p.productos_descripcion, p.productos_marca, p.tipo, p.variante,
-               p.contenido, p.contenido_unidad
-        FROM candidatos p
-        WHERE {" AND ".join(conditions)}
-        ORDER BY p.producto_identity = 'ean:' || $2 IS TRUE DESC,
-                 COALESCE(p.tipo = pipeline_product_type($1), FALSE) DESC,
-                 CASE
-                     WHEN POSITION(
-                         ' ' || pipeline_normalize_text(p.tipo) || ' '
-                         IN ' ' || pipeline_normalize_text($1) || ' '
-                     ) > 0 THEN LENGTH(p.tipo)
-                     ELSE 0
-                 END DESC,
-                 p.cadenas_fuente DESC NULLS LAST,
-                 p.nombre,
-                 p.producto_sk
-        LIMIT {param(limit)}
+        SELECT r.*, precios.*
+        FROM resultados r
+        CROSS JOIN LATERAL (
+            SELECT MIN(o.precio) AS precio_desde,
+                   (ARRAY_AGG(o.fecha_precio ORDER BY o.precio, o.fecha_precio DESC)
+                       FILTER (WHERE o.precio IS NOT NULL))[1] AS fecha_precio_desde,
+                   -- One fact per product, store and day.
+                   COUNT(o.precio) AS sucursales
+            FROM ({prices}) o
+        ) precios
+        ORDER BY r.orden
         """,
         *params,
     )
@@ -149,6 +191,9 @@ async def search_products(
             "variante": r["variante"],
             "contenido": r["contenido"],
             "contenido_unidad": r["contenido_unidad"],
+            "precio_desde": r["precio_desde"],
+            "fecha_precio_desde": r["fecha_precio_desde"],
+            "sucursales": r["sucursales"],
         }
         for r in rows
     ]

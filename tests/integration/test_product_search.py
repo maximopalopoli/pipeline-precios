@@ -2,6 +2,7 @@
 
 import asyncio
 import re
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -37,11 +38,42 @@ PRODUCTS = {
     "ean:7790000000059": ("TE GREEN HILLS X 50", "GREEN HILLS", "té", None, 50, "u", 3, True),
     "12:1:2045": ("PROD SIN TIPO X", "COTO", None, None, None, None, 1, True),
 }
+LECHE = "ean:7790000000011"
+
+# A store at the Obelisco and another about 33 km south of it.
+OBELISCO = (-34.6037, -58.3816)
+STORES = {1: OBELISCO, 2: (-34.9, -58.3816)}
+
+
+@dataclass
+class Catalog:
+    conn: object
+    run_id: int
+    products: dict[str, int]
+    stores: dict[int, int]
+
+    def price(self, identity, store, lista, observada=FECHA_ID, promos=()):
+        """Publish a price; ``promos`` holds up to two (price, legend) pairs."""
+        (promo1, leyenda1), (promo2, leyenda2) = [*promos, *[(None, None)] * 2][:2]
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO fact_precios (
+                    producto_sk, sucursal_sk, fecha_id, run_id, precio_lista,
+                    precio_promo1, leyenda_promo1, precio_promo2, leyenda_promo2,
+                    tiene_promo, fecha_observada_id
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    self.products[identity], self.stores[store], FECHA_ID, self.run_id, lista,
+                    promo1, leyenda1, promo2, leyenda2, bool(promos), observada,
+                ),
+            )
 
 
 @pytest.fixture()
 def catalog(pg_conn, monkeypatch):
-    """A published day with the products above; returns their keys by identity."""
+    """A published day with the products above, each at 100 in store 1."""
     value = date(2026, 3, 17)
     with pg_conn.cursor() as cur:
         cur.executemany(
@@ -79,14 +111,18 @@ def catalog(pg_conn, monkeypatch):
             """
         )
         comercio_sk = cur.fetchone()[0]
-        cur.execute(
-            """
-            INSERT INTO dim_sucursal (id_comercio, id_bandera, id_sucursal, comercio_sk)
-            VALUES (12, 1, 1, %s) RETURNING sucursal_sk
-            """,
-            (comercio_sk,),
-        )
-        sucursal_sk = cur.fetchone()[0]
+        stores = {}
+        for store, (lat, lon) in STORES.items():
+            cur.execute(
+                """
+                INSERT INTO dim_sucursal (
+                    id_comercio, id_bandera, id_sucursal, comercio_sk,
+                    sucursales_latitud, sucursales_longitud
+                ) VALUES (12, 1, %s, %s, %s, %s) RETURNING sucursal_sk
+                """,
+                (store, comercio_sk, lat, lon),
+            )
+            stores[store] = cur.fetchone()[0]
         keys = {}
         for identity, (desc, brand, tipo, variant, size, unit, chains, _) in PRODUCTS.items():
             cur.execute(
@@ -105,18 +141,10 @@ def catalog(pg_conn, monkeypatch):
             )
             keys[identity] = cur.fetchone()[0]
     _ensure_partition(pg_conn, FECHA_ID)
-    with pg_conn.cursor() as cur:
-        for identity, row in PRODUCTS.items():
-            if row[-1]:
-                cur.execute(
-                    """
-                    INSERT INTO fact_precios (
-                        producto_sk, sucursal_sk, fecha_id, run_id, precio_lista,
-                        fecha_observada_id
-                    ) VALUES (%s, %s, %s, %s, 100, %s)
-                    """,
-                    (keys[identity], sucursal_sk, FECHA_ID, run_id, FECHA_ID),
-                )
+    catalog = Catalog(pg_conn, run_id, keys, stores)
+    for identity, row in PRODUCTS.items():
+        if row[-1]:
+            catalog.price(identity, 1, 100)
 
     async def fetch(sql: str, *params):
         with pg_conn.cursor() as cur:
@@ -129,12 +157,14 @@ def catalog(pg_conn, monkeypatch):
             return [dict(zip(columns, row)) for row in cur.fetchall()]
 
     monkeypatch.setattr(products, "fetch", fetch)
-    return keys
+    return catalog
 
 
 def _search(q, **filters):
-    filters = {"tipo": None, "marca": None, "contenido": None, "unidad": None, "limit": 50,
-               **filters}
+    filters = {
+        "tipo": None, "marca": None, "contenido": None, "unidad": None,
+        "lat": None, "lon": None, "radius": 1, "limit": 50, **filters,
+    }
     return asyncio.run(products.search_products(q, **filters))
 
 
@@ -232,3 +262,41 @@ def test_search_reads_the_corrected_attributes(pg_conn, catalog):
 
     assert found["nombre"] == "Galletitas Terrabusi vainilla 145 g"
     assert found["marca"] == "TERRABUSI"
+
+
+def _offer(q, **filters):
+    [row] = [row for row in _search(q, **filters) if row["nombre"].startswith("Leche")]
+    return row["precio_desde"], row["fecha_precio_desde"], row["sucursales"]
+
+
+def test_a_product_is_offered_from_its_lowest_store_price(catalog):
+    # A conditional promotion (3x2) does not set the store price; the
+    # unconditional one does, and its date is the day it was observed.
+    catalog.price(
+        LECHE, 2, 120, observada=20260316,
+        promos=[(Decimal("80"), "3X2 JUGOS"), (Decimal("95"), "20% de descuento")],
+    )
+
+    assert _offer("leche") == (Decimal("95"), "2026-03-16", 2)
+
+
+def test_a_store_with_a_promotion_above_its_list_price_offers_the_list_price(catalog):
+    catalog.price(LECHE, 2, 90, promos=[(Decimal("130"), "20% de descuento")])
+
+    assert _offer("leche") == (Decimal("90"), "2026-03-17", 2)
+
+
+def test_only_nearby_stores_count_with_a_location(catalog):
+    catalog.price(LECHE, 2, 90)
+    lat, lon = OBELISCO
+
+    assert _offer("leche") == (Decimal("90"), "2026-03-17", 2)
+    assert _offer("leche", lat=lat, lon=lon, radius=5) == (Decimal("100"), "2026-03-17", 1)
+
+
+def test_a_product_carried_by_no_nearby_store_has_no_from_price(catalog):
+    lat, lon = STORES[2]
+
+    # Still listed, in the same order.
+    assert _names("leche", lat=lat, lon=lon) == _names("leche")
+    assert _offer("leche", lat=lat, lon=lon) == (None, None, 0)

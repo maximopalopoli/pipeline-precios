@@ -22,9 +22,20 @@ export interface Product {
   variante: string | null;
   contenido: number | null;
   contenido_unidad: 'g' | 'ml' | 'u' | null;
+  /** Lowest store price in the latest published day; null when no nearby store carries it. */
+  precio_desde: number | null;
+  /** Observation date (YYYY-MM-DD) of that price. */
+  fecha_precio_desde: string | null;
+  /** Stores carrying it, only nearby ones with a location. */
+  sucursales: number;
 }
-export const searchProducts = (q: string) =>
-  api.get<Product[]>('/products/search', { params: { q } }).then(r => r.data);
+export const searchProducts = (params: {
+  q: string;
+  lat?: number;
+  lon?: number;
+  radius?: number;
+  limit?: number;
+}) => api.get<Product[]>('/products/search', { params }).then(r => r.data);
 
 // ── Health ──
 export interface HealthData {
