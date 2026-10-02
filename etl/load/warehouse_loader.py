@@ -43,6 +43,8 @@ _PRODUCT_VOTE_TABLES = (
     "tmp_producto_votos",
     "tmp_producto_marcas",
     "tmp_producto_presentaciones",
+    "tmp_producto_tipos",
+    "tmp_producto_variantes",
 )
 
 _PENDING_FACT_COLUMNS = [
@@ -350,7 +352,7 @@ def _load_dim_producto(
                 productos_descripcion, productos_marca,
                 productos_cantidad_presentacion, productos_unidad_medida_presentacion,
                 productos_cantidad_referencia,   productos_unidad_medida_referencia,
-                contenido, contenido_unidad, tipo
+                contenido, contenido_unidad, tipo, variante
             )
             SELECT
                 producto_identity, source_id_comercio, source_id_bandera,
@@ -363,13 +365,17 @@ def _load_dim_producto(
                     WHEN size.contenido IS NOT NULL
                         THEN pipeline_size_unit(productos_unidad_medida_presentacion)
                 END,
-                pipeline_product_type(productos_descripcion)
+                kind.tipo,
+                pipeline_product_variant(productos_descripcion, kind.tipo)
             FROM tmp_dim_producto
             CROSS JOIN LATERAL (
                 SELECT pipeline_size_amount(
                     productos_cantidad_presentacion, productos_unidad_medida_presentacion
                 ) AS contenido
             ) AS size
+            CROSS JOIN LATERAL (
+                SELECT pipeline_product_type(productos_descripcion) AS tipo
+            ) AS kind
             ON CONFLICT (producto_identity) DO UPDATE SET
                 es_ean                               = EXCLUDED.es_ean,
                 productos_descripcion                = EXCLUDED.productos_descripcion,
@@ -381,6 +387,7 @@ def _load_dim_producto(
                 contenido                            = EXCLUDED.contenido,
                 contenido_unidad                     = EXCLUDED.contenido_unidad,
                 tipo                                 = EXCLUDED.tipo,
+                variante                             = EXCLUDED.variante,
                 updated_at                           = NOW()
             WHERE %s
             """
@@ -728,7 +735,11 @@ def load_dim_produto_from_staging(
     unit; spellings of the same size ("20 gr", "0.02 KG") count together.
     Type: each chain's description is classified with the curated term
     dictionary (``producto_tipo_terminos``) and the type with most chains
-    wins; a product no description classifies keeps an empty type.  Full runs also replace the recorded brand and size conflicts of the
+    wins; a product no description classifies keeps an empty type.
+    Variant: the values each chain's description names in the curated
+    variant dictionary (``producto_variante_terminos``), without the product's
+    type; a named variant beats none, then most chains, then most values (the
+    least abbreviated text).  Full runs also replace the recorded brand and size conflicts of the
     products they load.
     """
     with conn.cursor() as cur:
@@ -846,6 +857,73 @@ def load_dim_produto_from_staging(
             GROUP BY producto_identity, contenido, contenido_unidad, clave
             """
         )
+        # Type and variant are classified in their own statements, over
+        # analyzed vote tables: without statistics the planner joined
+        # descriptions in a nested loop and doubled the load time.
+        cur.execute("ANALYZE tmp_producto_votos")
+        cur.execute(
+            """
+            CREATE TEMP TABLE tmp_producto_tipos ON COMMIT DROP AS
+            WITH clasificadas AS (
+                SELECT DISTINCT ON (textos.descripcion) textos.descripcion, m.tipo
+                FROM (SELECT DISTINCT descripcion FROM tmp_producto_votos) AS textos
+                CROSS JOIN LATERAL pipeline_product_type_matches(textos.descripcion) AS m
+                ORDER BY textos.descripcion, m.inicio, m.largo DESC
+            )
+            SELECT DISTINCT ON (producto_identity) producto_identity, tipo
+            FROM (
+                SELECT
+                    v.producto_identity,
+                    c.tipo,
+                    COUNT(DISTINCT v.cadena) AS cadenas,
+                    SUM(v.filas) AS filas
+                FROM tmp_producto_votos v
+                JOIN clasificadas c USING (descripcion)
+                GROUP BY v.producto_identity, c.tipo
+            ) AS votos
+            ORDER BY producto_identity, cadenas DESC, filas DESC, tipo
+            """
+        )
+        cur.execute("ANALYZE tmp_producto_tipos")
+        cur.execute(
+            """
+            CREATE TEMP TABLE tmp_producto_variantes ON COMMIT DROP AS
+            WITH variantes_por_texto AS (
+                SELECT textos.descripcion, m.variante
+                FROM (SELECT DISTINCT descripcion FROM tmp_producto_votos) AS textos
+                CROSS JOIN LATERAL pipeline_product_variant_matches(textos.descripcion) AS m
+            )
+            SELECT DISTINCT ON (producto_identity) producto_identity, valor
+            FROM (
+                SELECT
+                    producto_identity,
+                    valor,
+                    MAX(valores) AS valores,
+                    COUNT(DISTINCT cadena) AS cadenas,
+                    SUM(filas) AS filas
+                FROM (
+                    -- pipeline_product_variant(descripcion, tipo), set-based.
+                    SELECT
+                        v.producto_identity,
+                        v.cadena,
+                        v.filas,
+                        STRING_AGG(vt.variante, ', ' ORDER BY vt.variante) AS valor,
+                        COUNT(*) AS valores
+                    FROM (
+                        SELECT producto_identity, cadena, descripcion, SUM(filas) AS filas
+                        FROM tmp_producto_votos
+                        GROUP BY producto_identity, cadena, descripcion
+                    ) AS v
+                    JOIN variantes_por_texto vt USING (descripcion)
+                    LEFT JOIN tmp_producto_tipos t USING (producto_identity)
+                    WHERE vt.variante IS DISTINCT FROM t.tipo
+                    GROUP BY v.producto_identity, v.cadena, v.descripcion, v.filas
+                ) AS por_texto
+                GROUP BY producto_identity, valor
+            ) AS votos
+            ORDER BY producto_identity, cadenas DESC, valores DESC, filas DESC, valor
+            """
+        )
         cur.execute(
             """
             INSERT INTO dim_producto (
@@ -854,7 +932,7 @@ def load_dim_produto_from_staging(
                 productos_descripcion, productos_marca,
                 productos_cantidad_presentacion, productos_unidad_medida_presentacion,
                 productos_cantidad_referencia,   productos_unidad_medida_referencia,
-                contenido, contenido_unidad, cadenas_fuente, tipo
+                contenido, contenido_unidad, cadenas_fuente, tipo, variante
             )
             WITH productos AS (
                 SELECT
@@ -908,26 +986,6 @@ def load_dim_produto_from_staging(
                     COUNT(DISTINCT cadena) DESC,
                     SUM(filas) DESC,
                     UPPER(COALESCE(cantidad_ref, '') || ' ' || COALESCE(unidad_ref, ''))
-            ),
-            clasificadas AS (
-                SELECT DISTINCT ON (textos.descripcion) textos.descripcion, m.tipo
-                FROM (SELECT DISTINCT descripcion FROM tmp_producto_votos) AS textos
-                CROSS JOIN LATERAL pipeline_product_type_matches(textos.descripcion) AS m
-                ORDER BY textos.descripcion, m.inicio, m.largo DESC
-            ),
-            tipos AS (
-                SELECT DISTINCT ON (producto_identity) producto_identity, tipo
-                FROM (
-                    SELECT
-                        v.producto_identity,
-                        c.tipo,
-                        COUNT(DISTINCT v.cadena) AS cadenas,
-                        SUM(v.filas) AS filas
-                    FROM tmp_producto_votos v
-                    JOIN clasificadas c USING (descripcion)
-                    GROUP BY v.producto_identity, c.tipo
-                ) AS votos
-                ORDER BY producto_identity, cadenas DESC, filas DESC, tipo
             )
             SELECT
                 p.producto_identity, p.source_id_comercio, p.source_id_bandera,
@@ -935,13 +993,14 @@ def load_dim_produto_from_staging(
                 d.valor, COALESCE(m.valor, ''),
                 s.cantidad, s.unidad,
                 r.cantidad, r.unidad,
-                s.contenido, s.contenido_unidad, p.cadenas, t.tipo
+                s.contenido, s.contenido_unidad, p.cadenas, t.tipo, va.valor
             FROM productos p
             JOIN descripciones d USING (producto_identity)
             JOIN presentaciones s USING (producto_identity)
             JOIN referencias r USING (producto_identity)
             LEFT JOIN marcas m USING (producto_identity)
-            LEFT JOIN tipos t USING (producto_identity)
+            LEFT JOIN tmp_producto_tipos t USING (producto_identity)
+            LEFT JOIN tmp_producto_variantes va USING (producto_identity)
             ORDER BY p.producto_identity
             ON CONFLICT (producto_identity) DO UPDATE SET
                 es_ean                               = EXCLUDED.es_ean,
@@ -955,6 +1014,7 @@ def load_dim_produto_from_staging(
                 contenido_unidad                     = EXCLUDED.contenido_unidad,
                 cadenas_fuente                       = EXCLUDED.cadenas_fuente,
                 tipo                                 = EXCLUDED.tipo,
+                variante                             = EXCLUDED.variante,
                 updated_at                           = NOW()
             WHERE %s
               AND (
@@ -968,7 +1028,8 @@ def load_dim_produto_from_staging(
                   dim_producto.contenido,
                   dim_producto.contenido_unidad,
                   dim_producto.cadenas_fuente,
-                  dim_producto.tipo
+                  dim_producto.tipo,
+                  dim_producto.variante
               ) IS DISTINCT FROM (
                   EXCLUDED.es_ean,
                   EXCLUDED.productos_descripcion,
@@ -980,7 +1041,8 @@ def load_dim_produto_from_staging(
                   EXCLUDED.contenido,
                   EXCLUDED.contenido_unidad,
                   EXCLUDED.cadenas_fuente,
-                  EXCLUDED.tipo
+                  EXCLUDED.tipo,
+                  EXCLUDED.variante
               )
             """,
             (update_existing,),
