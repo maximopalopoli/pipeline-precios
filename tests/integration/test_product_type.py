@@ -199,6 +199,11 @@ def test_an_override_corrects_the_type(pg_conn, terms, run_id):
         ("PISTOLA DE AGUA", None),
         ("JUEGO DE TE", None),
         ("TAB MILKA OREO", None),
+        ("PANUELOS DESCARTABLES ELITE X 6", "pañuelos descartables"),
+        ("BIZCOCHOS DE ARROZ GALLO 100G", "galletas de arroz"),
+        ("TOALLAS FEM DONCELLA X 8", "toallas femeninas"),
+        ("JABON LIQ ROPA ALA 800CC", "jabón para ropa"),
+        ("LECHE CHOCOLATADA CINDOR 1L", "leche chocolatada"),
     ],
 )
 def test_the_seed_classifies_real_descriptions(pg_conn, descripcion, tipo):

@@ -153,11 +153,41 @@ def test_product_search_returns_the_corrected_attributes(pg_conn, product, monke
     assert (found["descripcion"], found["marca"]) == ("Leche entera 1 l", "LA SERENISIMA")
 
 
+def _load_seed(pg_conn, path):
+    with pg_conn.cursor() as cur:
+        cur.execute(path.read_text().replace("BEGIN;", "").replace("COMMIT;", ""))
+
+
 def test_the_seed_replaces_the_table(pg_conn, product):
     _override(pg_conn, marca="EDITED BY HAND")
-    seed = SEED.read_text().replace("BEGIN;", "").replace("COMMIT;", "")
+
+    _load_seed(pg_conn, SEED)
 
     with pg_conn.cursor() as cur:
-        cur.execute(seed)
-        cur.execute("SELECT COUNT(*) FROM producto_overrides")
+        cur.execute("SELECT COUNT(*) FROM producto_overrides WHERE marca = 'EDITED BY HAND'")
         assert cur.fetchone()[0] == 0
+
+
+def test_the_seed_names_valid_eans_and_dictionary_values(pg_conn):
+    _load_seed(pg_conn, SEED.with_name("seed_producto_tipos.sql"))
+    _load_seed(pg_conn, SEED.with_name("seed_producto_variantes.sql"))
+    _load_seed(pg_conn, SEED)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT producto_identity
+            FROM producto_overrides o
+            WHERE NOT (
+                    producto_identity LIKE 'ean:%'
+                    AND pipeline_is_valid_ean(SUBSTRING(producto_identity FROM 5))
+                )
+               OR (tipo IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM producto_tipo_terminos t WHERE t.tipo = o.tipo))
+               OR (variante IS NOT NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM producto_variante_terminos v WHERE v.variante = o.variante
+                   ))
+            """
+        )
+        assert cur.fetchall() == []

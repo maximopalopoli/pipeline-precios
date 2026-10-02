@@ -216,6 +216,9 @@ def _load_seed(pg_conn, name):
         ("ALFAJOR TRIPLE DULCE DE LECHE", "dulce de leche"),
         ("POWERADE FRUTAS TROPICALES PET X 500CC", None),
         ("LECHE DESC SANCOR 1L", None),
+        ("LECHE UAT PAR DESCREMADA 1L", "parcialmente descremada"),
+        ("SAL ENT/FIN CELUSAL 500G", "entrefina"),
+        ("MERMELADA DE CIRUELA ARCOR 454G", "ciruela"),
     ],
 )
 def test_the_seed_names_variants_of_real_descriptions(pg_conn, descripcion, variante):
