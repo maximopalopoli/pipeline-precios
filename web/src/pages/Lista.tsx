@@ -3,8 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import {
   fetchBuscadorGeneric,
   fetchBuscadorGenericDates,
+  fetchListTotals,
   geocode,
   type GenericStorePrice,
+  type StoreListTotal,
 } from '../lib/api';
 import { useShoppingList } from '../hooks/useShoppingList';
 import { useSearchRadius } from '../hooks/useSearchRadius';
@@ -486,37 +488,46 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
   );
 }
 
-// ── Summary: products grouped by store ──
+// ── Summary: the list's total in each nearby store ──
 
 function Summary() {
-  const { items, selections, setStep, reset } = useShoppingList();
+  const { items, selections, setStep, reset, lat, lon, radius } = useShoppingList();
+  const located = lat != null && lon != null;
+  const searchArea = useSearchRadius(lat, lon, radius);
 
-  // Group selections by store key (cadena + sucursal + localidad)
-  const storeMap = new Map<string, { cadena: string; sucursal: string; localidad: string; provincia: string; items: { searchTerm: string; product: GenericStorePrice }[] }>();
-
-  for (const [indexStr, product] of Object.entries(selections)) {
-    const index = Number(indexStr);
-    const key = `${product.cadena}|${product.sucursal}|${product.localidad}`;
-    if (!storeMap.has(key)) {
-      storeMap.set(key, {
-        cadena: product.cadena,
-        sucursal: product.sucursal,
-        localidad: product.localidad,
-        provincia: product.provincia,
-        items: [],
-      });
+  // Each chosen item stands for its product, wherever it was picked.
+  const names = new Map<number, string>();
+  items.forEach((term, i) => {
+    const product = selections[i];
+    if (product && !names.has(product.producto_sk)) {
+      names.set(
+        product.producto_sk,
+        `${term}: ${product.producto}${product.marca ? ` — ${product.marca}` : ''}`,
+      );
     }
-    storeMap.get(key)!.items.push({ searchTerm: items[index], product });
-  }
-
-  const stores = Array.from(storeMap.values()).sort((a, b) => a.cadena.localeCompare(b.cadena));
-  const grandTotal = Object.values(selections).reduce((sum, s) => sum + s.mejor_precio, 0);
+  });
+  const productIds = Array.from(names.keys());
   const selectedCount = Object.keys(selections).length;
+
+  const { data: stores = [], isLoading, isError } = useQuery({
+    queryKey: ['list-totals', productIds, lat, lon, searchArea.radius],
+    queryFn: () =>
+      fetchListTotals({ producto_sk: productIds, lat: lat!, lon: lon!, radius: searchArea.radius }),
+    enabled: located && productIds.length > 0 && searchArea.ready,
+  });
+
+  // Totals are only comparable among stores carrying the same items.
+  const groups: { cubiertos: number; stores: StoreListTotal[] }[] = [];
+  for (const store of stores) {
+    const last = groups[groups.length - 1];
+    if (last && last.cubiertos === store.cubiertos) last.stores.push(store);
+    else groups.push({ cubiertos: store.cubiertos, stores: [store] });
+  }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-slate-800">Resumen de compras</h2>
+        <h2 className="text-lg font-semibold text-slate-800">Total por local</h2>
         <div className="flex gap-2">
           <button
             onClick={() => setStep(1)}
@@ -531,17 +542,6 @@ function Summary() {
             Nueva lista
           </button>
         </div>
-      </div>
-
-      {/* Grand total */}
-      <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-        <p className="text-sm text-emerald-700">
-          {selectedCount} de {items.length} productos seleccionados en {stores.length}{' '}
-          {stores.length === 1 ? 'local' : 'locales'}
-        </p>
-        <p className="text-2xl font-bold text-emerald-900">
-          Total: {formatCurrency(grandTotal)}
-        </p>
       </div>
 
       {/* Unselected items warning */}
@@ -569,54 +569,109 @@ function Summary() {
         </div>
       )}
 
-      {/* Store cards */}
-      <div className="space-y-4">
-        {stores.map((store) => {
-          const storeTotal = store.items.reduce((sum, i) => sum + i.product.mejor_precio, 0);
-          return (
-            <div key={`${store.cadena}|${store.sucursal}|${store.localidad}`} className="rounded-lg border border-slate-200 bg-white overflow-hidden">
-              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold text-slate-900">{store.cadena}</h3>
-                  <p className="text-sm text-slate-500">
-                    {store.sucursal} — {store.localidad}, {store.provincia}
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-lg font-bold text-slate-900">{formatCurrency(storeTotal)}</p>
-                  <p className="text-xs text-slate-500">
-                    {store.items.length} {store.items.length === 1 ? 'producto' : 'productos'}
-                  </p>
-                </div>
-              </div>
-              <div className="divide-y divide-slate-100">
-                {store.items.map((item, i) => (
-                  <div key={i} className="px-4 py-2.5 flex items-center justify-between text-sm">
-                    <div>
-                      <span className="text-xs text-slate-400 mr-2">{item.searchTerm}:</span>
-                      <span className="text-slate-800">{item.product.producto}</span>
-                      {item.product.marca && (
-                        <span className="ml-1.5 text-slate-400">— {item.product.marca}</span>
-                      )}
-                    </div>
-                    <div className="whitespace-nowrap">
-                      <span className="font-medium text-slate-900">
-                        {formatCurrency(item.product.mejor_precio)}
-                      </span>
-                      {item.product.precio_lista !== item.product.mejor_precio && (
-                        <span className="ml-2 text-xs text-slate-400 line-through">
-                          {formatCurrency(item.product.precio_lista)}
-                        </span>
-                      )}
-                      <div><PriceDate value={item.product.fecha_precio} /></div>
-                    </div>
+      {!located && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          Configurá tu ubicación para comparar el total de la lista en los locales cercanos.{' '}
+          <button onClick={() => setStep(0)} className="underline hover:text-blue-900">
+            Elegir ubicación
+          </button>
+        </div>
+      )}
+
+      {located && (
+        <div className="rounded-lg border border-blue-100 bg-blue-50/50 px-4 py-2 text-sm text-blue-700">
+          {productIds.length} {productIds.length === 1 ? 'producto' : 'productos'} en locales a
+          menos de {searchArea.radius} km de tu ubicación. El total suma el precio que se paga
+          sin condiciones; las promociones condicionales se suman aparte.
+          <RadiusNotice area={searchArea.area} />
+        </div>
+      )}
+
+      {isLoading && <p className="text-sm text-slate-400">Calculando totales...</p>}
+      {isError && <p className="text-sm text-red-600">No se pudieron calcular los totales.</p>}
+      {located && !isLoading && !isError && productIds.length > 0 && stores.length === 0 && (
+        <p className="text-sm text-slate-400">
+          Ningún local cercano tiene precio para los productos elegidos.
+        </p>
+      )}
+
+      {groups.map((group, g) => (
+        <section key={group.cubiertos} className="space-y-3">
+          <h3 className="text-sm font-semibold text-slate-700">
+            {group.cubiertos === productIds.length
+              ? `Tienen los ${productIds.length} productos`
+              : `Tienen ${group.cubiertos} de ${productIds.length} productos`}
+            {g > 0 && (
+              <span className="ml-2 font-normal text-slate-500">
+                — su total no incluye los que faltan; no se compara con los de arriba
+              </span>
+            )}
+          </h3>
+          {group.stores.map((store) => (
+            <StoreTotalCard key={store.sucursal_sk} store={store} names={names} />
+          ))}
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function StoreTotalCard({ store, names }: { store: StoreListTotal; names: Map<number, string> }) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white overflow-hidden">
+      <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-start justify-between gap-4">
+        <div>
+          <h4 className="font-semibold text-slate-900">{store.cadena}</h4>
+          <p className="text-sm text-slate-500">
+            {store.sucursal}
+            {store.direccion ? ` — ${store.direccion}` : ''}, {store.localidad} ·{' '}
+            {store.distancia_km} km
+          </p>
+        </div>
+        <div className="text-right whitespace-nowrap">
+          <p className="text-lg font-bold text-slate-900">{formatCurrency(store.total)}</p>
+          <p className="text-xs text-slate-500">
+            {store.cubiertos} de {store.productos} productos
+          </p>
+          {store.total_condicional != null && (
+            <p className="text-xs text-amber-700">
+              {formatCurrency(store.total_condicional)} cumpliendo{' '}
+              {store.condicionales === 1 ? '1 condición' : `${store.condicionales} condiciones`}
+            </p>
+          )}
+        </div>
+      </div>
+      {store.faltantes.length > 0 && (
+        <p className="px-4 py-2 text-sm text-amber-800 bg-amber-50 border-b border-amber-100">
+          No tiene: {store.faltantes.map((sk) => names.get(sk) ?? `producto ${sk}`).join(', ')}
+        </p>
+      )}
+      <details>
+        <summary className="px-4 py-2 text-xs text-slate-500 cursor-pointer hover:text-slate-700">
+          Ver precios
+        </summary>
+        <div className="divide-y divide-slate-100">
+          {store.items.map((item) => (
+            <div key={item.producto_sk} className="px-4 py-2.5 flex items-center justify-between gap-4 text-sm">
+              <span className="text-slate-800">{names.get(item.producto_sk)}</span>
+              <div className="text-right whitespace-nowrap">
+                <span className="font-medium text-slate-900">{formatCurrency(item.mejor_precio)}</span>
+                {item.precio_lista !== item.mejor_precio && (
+                  <span className="ml-2 text-xs text-slate-400 line-through">
+                    {formatCurrency(item.precio_lista)}
+                  </span>
+                )}
+                {item.precio_condicional != null && (
+                  <div className="text-xs text-amber-700" title={item.leyenda_condicional ?? undefined}>
+                    {formatCurrency(item.precio_condicional)} con condiciones
                   </div>
-                ))}
+                )}
+                <div><PriceDate value={item.fecha_precio} /></div>
               </div>
             </div>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }

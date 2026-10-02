@@ -118,6 +118,7 @@ async def get_buscador_generic(
         f"""
         SELECT
             c.comercio_bandera_nombre AS cadena,
+            p.producto_sk,
             p.productos_descripcion   AS producto,
             p.productos_marca         AS marca,
             s.sucursales_nombre       AS sucursal,

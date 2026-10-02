@@ -11,6 +11,7 @@ from api.routes import (
     buscador_ean,
     filters,
     health,
+    lista,
     locales,
     ofertas,
     products,
@@ -40,3 +41,4 @@ app.include_router(buscador.router, prefix="/api")
 app.include_router(ofertas.router, prefix="/api")
 app.include_router(locales.router, prefix="/api")
 app.include_router(buscador_ean.router, prefix="/api")
+app.include_router(lista.router, prefix="/api")

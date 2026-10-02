@@ -173,6 +173,7 @@ export const fetchBuscador = (params: {
 // ── Generic Buscador (search by text across all matching products) ──
 export interface GenericStorePrice {
   cadena: string;
+  producto_sk: number;
   producto: string;
   marca: string | null;
   sucursal: string;
@@ -320,6 +321,46 @@ export interface SearchRadius {
 }
 export const fetchSearchRadius = (params: { lat: number; lon: number; radius: number }) =>
   api.get<SearchRadius>('/location/radius', { params }).then(r => r.data);
+
+// ── Shopping list totals per nearby store ──
+export interface ListItemPrice {
+  producto_sk: number;
+  precio_lista: number;
+  mejor_precio: number;
+  precio_promo: number | null;
+  leyenda_promo: string | null;
+  precio_condicional: number | null;
+  leyenda_condicional: string | null;
+  condicion: PromoCondition | null;
+  fecha_precio: string;
+}
+export interface StoreListTotal {
+  sucursal_sk: number;
+  cadena: string;
+  sucursal: string;
+  direccion: string | null;
+  localidad: string;
+  lat: number | null;
+  lon: number | null;
+  distancia_km: number;
+  /** Distinct list products the store has a price for, out of `productos`. */
+  cubiertos: number;
+  productos: number;
+  faltantes: number[];
+  /** Sum of the prices paid without meeting any condition. */
+  total: number;
+  /** Sum when every conditional promotion is met; null when there is none. */
+  total_condicional: number | null;
+  condicionales: number;
+  items: ListItemPrice[];
+}
+/** Stores ranked by how many list products they carry, then by total. */
+export const fetchListTotals = (params: {
+  producto_sk: number[];
+  lat: number;
+  lon: number;
+  radius: number;
+}) => api.get<StoreListTotal[]>('/lista/totales', { params }).then(r => r.data);
 
 export const geocode = (address: string, city: string) =>
   api.get<{ lat: number | null; lon: number | null }>('/geocode', { params: { address, city } }).then(r => r.data);

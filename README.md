@@ -410,6 +410,15 @@ shops and pharmacies do not count. Older
 national facts may remain under fact retention without appearing as current
 stores.
 
+`GET /api/lista/totales` takes the list as repeated `producto_sk` keys (up to
+50, a repeated product counts once) and a location. For each store within the
+radius with a price on the latest published day, it returns `total` (prices
+paid without any condition), `total_condicional` (meeting every conditional
+promotion, or null), `cubiertos` of `productos`, the missing `faltantes`
+and each item's price and observation date. Stores are ranked by coverage
+first, then by total, so an incomplete basket never ranks above a complete
+one; it returns at most 50.
+
 The product-date, daily-offer and store-promotion routes read published
 facts and run metadata directly. The analytics aggregates (weekly variation
 KPI, Evolución, Variaciones) were retired in migration 035; price history

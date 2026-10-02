@@ -8,7 +8,7 @@ from api.main import app
 
 LOCATED_ROUTES = [
     "/api/products/search", "/api/buscador", "/api/buscador/generic", "/api/buscador/ean",
-    "/api/locales", "/api/location/radius",
+    "/api/locales", "/api/location/radius", "/api/lista/totales",
 ]
 
 
