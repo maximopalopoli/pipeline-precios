@@ -90,7 +90,11 @@ async def get_buscador(
             {OFFER_PRICE_COLUMNS},
             s.sucursales_latitud      AS lat,
             s.sucursales_longitud     AS lon,
-            s.sucursales_nombre       AS sucursal
+            s.sucursales_nombre       AS sucursal,
+            NULLIF(CONCAT_WS(' ', s.sucursales_calle, s.sucursales_numero), '') AS direccion,
+            s.id_comercio,
+            s.id_bandera,
+            s.id_sucursal
         FROM fact_precios f
         JOIN dim_sucursal  s  ON f.sucursal_sk  = s.sucursal_sk
         JOIN dim_comercio  c  ON s.comercio_sk  = c.comercio_sk

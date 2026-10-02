@@ -59,8 +59,8 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
             """
             INSERT INTO dim_sucursal (
                 id_comercio, id_bandera, id_sucursal, comercio_sk,
-                provincia_sk, sucursales_localidad
-            ) VALUES (12, 1, 1, %s, %s, 'Palermo')
+                provincia_sk, sucursales_localidad, sucursales_calle, sucursales_numero
+            ) VALUES (12, 1, 7, %s, %s, 'Palermo', 'Av. Santa Fe', '3253')
             RETURNING sucursal_sk
             """,
             (comercio_sk, provincia_sk),
@@ -138,6 +138,11 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
     assert store_offers[0]["precio_condicional"] == Decimal("60.00")
     assert store_offers[0]["leyenda_condicional"] == "3X2 LECHES"
     assert store_offers[0]["condicion"] == "cantidad"
+    # Source codes identify the store: id_sucursal is unique only in its chain.
+    assert store_offers[0]["direccion"] == "Av. Santa Fe 3253"
+    assert (
+        store_offers[0]["id_comercio"], store_offers[0]["id_bandera"], store_offers[0]["id_sucursal"]
+    ) == (12, 1, 7)
     offers = asyncio.run(
         ofertas.get_ofertas(provincia=None, localidad=None, cadenas=None)
     )

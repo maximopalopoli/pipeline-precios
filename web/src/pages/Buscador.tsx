@@ -4,12 +4,14 @@ import { createColumnHelper } from '@tanstack/react-table';
 import {
   fetchBuscador,
   fetchBuscadorDates,
+  fetchProduct,
   fetchSearchFacets,
   geocode,
   searchProducts,
   type FacetValue,
   type Product,
   type ProductAttributeFilters,
+  type ProductDetail,
   type StorePrice,
 } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
@@ -26,6 +28,17 @@ import { formatCurrency } from '../lib/constants';
 const col = createColumnHelper<StorePrice>();
 const columns = [
   col.accessor('cadena', { header: 'Cadena' }),
+  col.accessor('sucursal', {
+    header: 'Sucursal',
+    cell: (info) => (
+      <>
+        <span>{info.getValue()}</span>
+        {info.row.original.direccion && (
+          <span className="block text-xs text-slate-400">{info.row.original.direccion}</span>
+        )}
+      </>
+    ),
+  }),
   col.accessor('tipo', { header: 'Tipo' }),
   col.accessor('localidad', { header: 'Localidad' }),
   col.accessor('provincia', { header: 'Provincia' }),
@@ -47,7 +60,56 @@ const columns = [
       />
     ),
   }),
+  col.display({
+    id: 'codigos',
+    header: 'Códigos',
+    cell: (info) => {
+      const { id_comercio, id_bandera, id_sucursal } = info.row.original;
+      return (
+        <span className="font-mono text-xs text-slate-500" title="comercio-bandera-sucursal">
+          {id_comercio}-{id_bandera}-{id_sucursal}
+        </span>
+      );
+    },
+  }),
 ];
+
+// ── Product detail header: catalog name, published text and source codes ──
+function ProductHeader({ detail }: { detail: ProductDetail }) {
+  const { publicado, codigos } = detail;
+  const publishedSize = [publicado.cantidad, publicado.unidad].filter(Boolean).join(' ');
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
+      <h2 className="text-lg font-semibold text-slate-900">{detail.nombre}</h2>
+      <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+        <dt className="text-slate-500">Publicado como</dt>
+        <dd className="text-slate-800">
+          {publicado.descripcion ?? '—'}
+          {publicado.marca && ` · ${publicado.marca}`}
+          {publishedSize && ` · ${publishedSize}`}
+          {detail.corregido && (
+            <span className="ml-2 text-xs text-amber-700">(el nombre usa una corrección del catálogo)</span>
+          )}
+        </dd>
+        <dt className="text-slate-500">{codigos.es_ean ? 'EAN' : 'Código de cadena'}</dt>
+        <dd className="font-mono text-slate-800">
+          {codigos.id_producto}
+          {!codigos.es_ean && codigos.cadena && (
+            <span className="ml-2 font-sans text-xs text-slate-500">
+              solo identifica el producto en {codigos.cadena} ({codigos.id_comercio}-{codigos.id_bandera})
+            </span>
+          )}
+        </dd>
+        {detail.cadenas_fuente != null && (
+          <>
+            <dt className="text-slate-500">Cadenas</dt>
+            <dd className="text-slate-800">{detail.cadenas_fuente}</dd>
+          </>
+        )}
+      </dl>
+    </div>
+  );
+}
 
 // ── Facet chips: one choice per facet, clicked again to clear ──
 function FacetChips<T extends FacetValue>({
@@ -141,6 +203,12 @@ export function Buscador() {
   const { data: dates = [] } = useQuery({
     queryKey: ['buscador-dates', product?.producto_sk],
     queryFn: () => fetchBuscadorDates(product!.producto_sk),
+    enabled: !!product,
+  });
+
+  const { data: detail } = useQuery({
+    queryKey: ['product', product?.producto_sk],
+    queryFn: () => fetchProduct(product!.producto_sk),
     enabled: !!product,
   });
 
@@ -310,6 +378,11 @@ export function Buscador() {
                 <span> — no hay locales cerca. Intenta aumentar el radio.</span>
               )}
             </div>
+          )}
+
+          {/* ── Single-product detail ── */}
+          {!isGenericMode && detail && detail.producto_sk === product?.producto_sk && (
+            <ProductHeader detail={detail} />
           )}
 
           {/* ── Single-product results ── */}

@@ -49,6 +49,40 @@ export const searchProducts = (params: ProductAttributeFilters & {
   limit?: number;
 }) => api.get<Product[]>('/products/search', { params }).then(r => r.data);
 
+/** A product as the catalog names it, next to what its source published. */
+export interface ProductDetail {
+  producto_sk: number;
+  nombre: string;
+  descripcion: string;
+  marca: string | null;
+  tipo: string | null;
+  variante: string | null;
+  contenido: number | null;
+  contenido_unidad: 'g' | 'ml' | 'u' | null;
+  /** Chains that list the product. */
+  cadenas_fuente: number | null;
+  /** A curated correction replaced some published attribute. */
+  corregido: boolean;
+  /** Description, brand and size as the chains wrote them. */
+  publicado: {
+    descripcion: string | null;
+    marca: string | null;
+    cantidad: string | null;
+    unidad: string | null;
+  };
+  /** Source identifiers: an EAN, or a chain code scoped by its chain. */
+  codigos: {
+    identidad: string;
+    id_producto: string;
+    es_ean: boolean;
+    id_comercio: number | null;
+    id_bandera: number | null;
+    cadena: string | null;
+  };
+}
+export const fetchProduct = (productoSk: number) =>
+  api.get<ProductDetail>(`/products/${productoSk}`).then(r => r.data);
+
 export interface FacetValue {
   valor: string;
   productos: number;
@@ -119,6 +153,11 @@ export interface StorePrice {
   lat: number | null;
   lon: number | null;
   sucursal: string;
+  direccion: string | null;
+  /** Source store codes; id_sucursal is unique only within its chain. */
+  id_comercio: number;
+  id_bandera: number;
+  id_sucursal: number;
 }
 export const fetchBuscador = (params: {
   producto_sk: number;

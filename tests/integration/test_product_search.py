@@ -391,3 +391,63 @@ def test_a_blank_brand_and_a_single_unit_are_not_choices(catalog):
 
     assert _values(facets["marcas"]) == [("Green Hills", 1)]
     assert _values(facets["tamanos"]) == [("x 50", 1)]
+
+
+def _product(producto_sk):
+    return asyncio.run(products.get_product(producto_sk))
+
+
+def test_detail_shows_the_published_description_next_to_its_correction(catalog):
+    with catalog.conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO producto_overrides (producto_identity, descripcion, nota)
+            VALUES (%s, 'LECHE ENTERA LA SERENISIMA 1L', 'abbreviation')
+            """,
+            (LECHE,),
+        )
+
+    product = _product(catalog.products[LECHE])
+
+    assert product["nombre"] == "Leche La Serenisima entera 1 l"
+    assert product["descripcion"] == "LECHE ENTERA LA SERENISIMA 1L"
+    assert product["corregido"] is True
+    assert product["publicado"]["descripcion"] == "LECHE ENT LA SERENISIMA 1L"
+    assert product["codigos"] == {
+        "identidad": LECHE, "id_producto": "7790000000011", "es_ean": True,
+        "id_comercio": None, "id_bandera": None, "cadena": None,
+    }
+
+
+def test_detail_names_the_chain_that_scopes_a_product_without_ean(catalog):
+    with catalog.conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO dim_producto (
+                producto_identity, id_producto, es_ean, productos_descripcion,
+                productos_marca, productos_cantidad_presentacion,
+                productos_unidad_medida_presentacion, source_id_comercio, source_id_bandera
+            ) VALUES ('chain:12:1:2300049', '2300049', FALSE, 'QUESO CREMOSO X KG',
+                      'COTO', '1', 'KG', 12, 1)
+            RETURNING producto_sk
+            """
+        )
+        producto_sk = cur.fetchone()[0]
+
+    product = _product(producto_sk)
+
+    assert product["corregido"] is False
+    assert product["publicado"] == {
+        "descripcion": "QUESO CREMOSO X KG", "marca": "COTO", "cantidad": "1", "unidad": "KG",
+    }
+    assert product["codigos"] == {
+        "identidad": "chain:12:1:2300049", "id_producto": "2300049", "es_ean": False,
+        "id_comercio": 12, "id_bandera": 1, "cadena": "Coto",
+    }
+
+
+def test_detail_of_an_unknown_product_is_not_found(catalog):
+    with pytest.raises(products.HTTPException) as error:
+        _product(-1)
+
+    assert error.value.status_code == 404

@@ -254,6 +254,12 @@ Data rules the pipeline relies on:
   same. `GET /products/search/facets` takes the same query and attribute
   filters and returns `tipos`, `marcas` and `tamanos` with product counts;
   each facet ignores its own filter and applies the others.
+  `GET /products/{producto_sk}` is the product detail: catalog name and
+  attributes, the description, brand and size as published (`publicado`),
+  whether a curated correction applies (`corregido`), and the source codes
+  (`codigos`: the EAN, or the chain code with its `id_comercio` and
+  `id_bandera`). Store offers from `GET /buscador` include each store's
+  address and its `id_comercio`, `id_bandera` and `id_sucursal`.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.

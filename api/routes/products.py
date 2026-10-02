@@ -1,11 +1,11 @@
-"""Product search endpoint."""
+"""Product search and product detail endpoints."""
 
 import re
 import unicodedata
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from api.db import fetch
 from api.price_date import PRICE_DATE_SQL
@@ -339,3 +339,64 @@ async def search_facets(
             value |= {"contenido": r["contenido"], "unidad": r["unidad"]}
         facets[r["faceta"]].append(value)
     return facets
+
+
+@router.get("/products/{producto_sk}")
+async def get_product(producto_sk: int):
+    """A product as the catalog names it, next to what its source published.
+
+    ``publicado`` keeps the description, brand and size as the chains wrote
+    them, before any curated correction (``corregido``).  ``codigos`` are the
+    source identifiers: the EAN, or for a product without a valid EAN the
+    chain code and the chain (``id_comercio``, ``id_bandera``) that scopes it.
+    """
+    rows = await fetch(
+        """
+        SELECT
+            v.producto_sk, v.nombre, v.productos_descripcion AS descripcion,
+            v.productos_marca AS marca, v.tipo, v.variante, v.contenido,
+            v.contenido_unidad, v.cadenas_fuente, v.corregido,
+            p.productos_descripcion AS publicado_descripcion,
+            p.productos_marca AS publicado_marca,
+            p.productos_cantidad_presentacion AS publicado_cantidad,
+            p.productos_unidad_medida_presentacion AS publicado_unidad,
+            v.producto_identity, v.id_producto, v.es_ean,
+            v.source_id_comercio, v.source_id_bandera,
+            c.comercio_bandera_nombre AS source_cadena
+        FROM v_producto v
+        JOIN dim_producto p ON p.producto_sk = v.producto_sk
+        LEFT JOIN dim_comercio c
+            ON c.id_comercio = v.source_id_comercio AND c.id_bandera = v.source_id_bandera
+        WHERE v.producto_sk = $1
+        """,
+        producto_sk,
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Producto inexistente")
+    r = rows[0]
+    return {
+        "producto_sk": r["producto_sk"],
+        "nombre": r["nombre"],
+        "descripcion": r["descripcion"],
+        "marca": r["marca"],
+        "tipo": r["tipo"],
+        "variante": r["variante"],
+        "contenido": r["contenido"],
+        "contenido_unidad": r["contenido_unidad"],
+        "cadenas_fuente": r["cadenas_fuente"],
+        "corregido": bool(r["corregido"]),
+        "publicado": {
+            "descripcion": r["publicado_descripcion"],
+            "marca": r["publicado_marca"],
+            "cantidad": r["publicado_cantidad"],
+            "unidad": r["publicado_unidad"],
+        },
+        "codigos": {
+            "identidad": r["producto_identity"],
+            "id_producto": r["id_producto"],
+            "es_ean": r["es_ean"],
+            "id_comercio": r["source_id_comercio"],
+            "id_bandera": r["source_id_bandera"],
+            "cadena": r["source_cadena"],
+        },
+    }
