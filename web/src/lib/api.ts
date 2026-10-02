@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const api = axios.create({ baseURL: '/api' });
+// FastAPI reads a list from repeated keys (cadenas=A&cadenas=B), not cadenas[]=A.
+const api = axios.create({ baseURL: '/api', paramsSerializer: { indexes: null } });
 
 // ── Filter endpoints ──
 export const fetchProvinces = () => api.get<string[]>('/filters/provinces').then(r => r.data);
@@ -29,13 +30,41 @@ export interface Product {
   /** Stores carrying it, only nearby ones with a location. */
   sucursales: number;
 }
-export const searchProducts = (params: {
+/** Attributes that narrow a search to some of its products. */
+export interface ProductAttributeFilters {
+  tipo?: string;
+  marca?: string;
+  contenido?: number;
+  unidad?: 'g' | 'ml' | 'u';
+}
+export const searchProducts = (params: ProductAttributeFilters & {
   q: string;
+  /** Stores behind the from price and store count; they do not change the order. */
+  provincia?: string;
+  localidad?: string;
+  cadenas?: string[];
   lat?: number;
   lon?: number;
   radius?: number;
   limit?: number;
 }) => api.get<Product[]>('/products/search', { params }).then(r => r.data);
+
+export interface FacetValue {
+  valor: string;
+  productos: number;
+}
+export interface SizeFacetValue extends FacetValue {
+  contenido: number;
+  unidad: 'g' | 'ml' | 'u';
+}
+/** Choices that narrow a search; each counts with the other filters applied. */
+export interface SearchFacets {
+  tipos: FacetValue[];
+  marcas: FacetValue[];
+  tamanos: SizeFacetValue[];
+}
+export const fetchSearchFacets = (params: ProductAttributeFilters & { q: string }) =>
+  api.get<SearchFacets>('/products/search/facets', { params }).then(r => r.data);
 
 // ── Health ──
 export interface HealthData {

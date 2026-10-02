@@ -40,9 +40,13 @@ PRODUCTS = {
 }
 LECHE = "ean:7790000000011"
 
-# A store at the Obelisco and another about 33 km south of it.
+# A Coto at the Obelisco and a Dia about 33 km south of it, in the province.
 OBELISCO = (-34.6037, -58.3816)
-STORES = {1: OBELISCO, 2: (-34.9, -58.3816)}
+# store: (chain id, chain, province, locality, location)
+STORES = {
+    1: (12, "Coto", "CABA", "San Nicolas", OBELISCO),
+    2: (15, "Dia", "Buenos Aires", "Lomas de Zamora", (-34.9, -58.3816)),
+}
 
 
 @dataclass
@@ -51,6 +55,25 @@ class Catalog:
     run_id: int
     products: dict[str, int]
     stores: dict[int, int]
+
+    def add_product(self, identity, desc, brand, tipo, variant, size, unit, chains, *_):
+        """Add a product as ``PRODUCTS`` describes it, without a price."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO dim_producto (
+                    producto_identity, id_producto, es_ean, productos_descripcion,
+                    productos_marca, tipo, variante, contenido, contenido_unidad,
+                    cadenas_fuente
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING producto_sk
+                """,
+                (
+                    identity, identity.rsplit(":", 1)[1], identity.startswith("ean:"),
+                    desc, brand, tipo, variant, size, unit, chains,
+                ),
+            )
+            self.products[identity] = cur.fetchone()[0]
 
     def price(self, identity, store, lista, observada=FECHA_ID, promos=()):
         """Publish a price; ``promos`` holds up to two (price, legend) pairs."""
@@ -104,49 +127,44 @@ def catalog(pg_conn, monkeypatch):
             (raw_id,),
         )
         run_id = cur.fetchone()[0]
-        cur.execute(
-            """
-            INSERT INTO dim_comercio (id_comercio, id_bandera, comercio_bandera_nombre)
-            VALUES (12, 1, 'Coto') RETURNING comercio_sk
-            """
-        )
-        comercio_sk = cur.fetchone()[0]
         stores = {}
-        for store, (lat, lon) in STORES.items():
+        for store, (chain_id, chain, province, locality, (lat, lon)) in STORES.items():
+            cur.execute(
+                """
+                INSERT INTO dim_comercio (id_comercio, id_bandera, comercio_bandera_nombre)
+                VALUES (%s, 1, %s) RETURNING comercio_sk
+                """,
+                (chain_id, chain),
+            )
+            comercio_sk = cur.fetchone()[0]
+            cur.execute(
+                """
+                INSERT INTO dim_provincia (codigo_iso, nombre, region)
+                VALUES (%s, %s, 'AMBA') RETURNING provincia_sk
+                """,
+                (f"AR-{store}", province),
+            )
+            provincia_sk = cur.fetchone()[0]
             cur.execute(
                 """
                 INSERT INTO dim_sucursal (
-                    id_comercio, id_bandera, id_sucursal, comercio_sk,
-                    sucursales_latitud, sucursales_longitud
-                ) VALUES (12, 1, %s, %s, %s, %s) RETURNING sucursal_sk
+                    id_comercio, id_bandera, id_sucursal, comercio_sk, provincia_sk,
+                    sucursales_localidad, sucursales_latitud, sucursales_longitud
+                ) VALUES (%s, 1, 1, %s, %s, %s, %s, %s) RETURNING sucursal_sk
                 """,
-                (store, comercio_sk, lat, lon),
+                (chain_id, comercio_sk, provincia_sk, locality, lat, lon),
             )
             stores[store] = cur.fetchone()[0]
-        keys = {}
-        for identity, (desc, brand, tipo, variant, size, unit, chains, _) in PRODUCTS.items():
-            cur.execute(
-                """
-                INSERT INTO dim_producto (
-                    producto_identity, id_producto, es_ean, productos_descripcion,
-                    productos_marca, tipo, variante, contenido, contenido_unidad,
-                    cadenas_fuente
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING producto_sk
-                """,
-                (
-                    identity, identity.rsplit(":", 1)[1], identity.startswith("ean:"),
-                    desc, brand, tipo, variant, size, unit, chains,
-                ),
-            )
-            keys[identity] = cur.fetchone()[0]
     _ensure_partition(pg_conn, FECHA_ID)
-    catalog = Catalog(pg_conn, run_id, keys, stores)
+    catalog = Catalog(pg_conn, run_id, {}, stores)
     for identity, row in PRODUCTS.items():
+        catalog.add_product(identity, *row)
         if row[-1]:
             catalog.price(identity, 1, 100)
 
     async def fetch(sql: str, *params):
+        # asyncpg infers each parameter's type from the statement.
+        assert {int(n) for n in re.findall(r"\$(\d+)", sql)} == set(range(1, len(params) + 1))
         with pg_conn.cursor() as cur:
             # asyncpg reuses $1; name the placeholders so psycopg can too.
             cur.execute(
@@ -160,9 +178,15 @@ def catalog(pg_conn, monkeypatch):
     return catalog
 
 
+def _facets(q, **filters):
+    filters = {"tipo": None, "marca": None, "contenido": None, "unidad": None, **filters}
+    return asyncio.run(products.search_facets(q, **filters))
+
+
 def _search(q, **filters):
     filters = {
         "tipo": None, "marca": None, "contenido": None, "unidad": None,
+        "provincia": None, "localidad": None, "cadenas": None,
         "lat": None, "lon": None, "radius": 1, "limit": 50, **filters,
     }
     return asyncio.run(products.search_products(q, **filters))
@@ -295,8 +319,75 @@ def test_only_nearby_stores_count_with_a_location(catalog):
 
 
 def test_a_product_carried_by_no_nearby_store_has_no_from_price(catalog):
-    lat, lon = STORES[2]
+    lat, lon = STORES[2][-1]
 
     # Still listed, in the same order.
     assert _names("leche", lat=lat, lon=lon) == _names("leche")
     assert _offer("leche", lat=lat, lon=lon) == (None, None, 0)
+
+
+@pytest.mark.parametrize(
+    "stores, offer",
+    [
+        ({"cadenas": ["Dia"]}, (Decimal("90"), "2026-03-17", 1)),
+        ({"cadenas": ["Coto", "Dia"]}, (Decimal("90"), "2026-03-17", 2)),
+        ({"provincia": "CABA"}, (Decimal("100"), "2026-03-17", 1)),
+        ({"provincia": "Buenos Aires", "localidad": "Lomas de Zamora"},
+         (Decimal("90"), "2026-03-17", 1)),
+        ({"localidad": "Palermo"}, (None, None, 0)),
+    ],
+)
+def test_store_filters_choose_the_stores_that_count(catalog, stores, offer):
+    catalog.price(LECHE, 2, 90)
+
+    assert _offer("leche", **stores) == offer
+    assert _names("leche", **stores) == _names("leche")
+
+
+def _values(facet):
+    return [(value["valor"], value["productos"]) for value in facet]
+
+
+def test_facets_count_the_products_a_search_lists(catalog):
+    # Ilolay has no published price, so it is not counted.
+    facets = _facets("leche")
+
+    assert _values(facets["tipos"]) == [
+        ("dulce de leche", 1), ("galletitas", 1), ("leche", 1)
+    ]
+    assert _values(facets["marcas"]) == [("La Serenisima", 2), ("Mana", 1)]
+    assert facets["tamanos"] == [
+        {"valor": "1 l", "productos": 1, "contenido": Decimal("1000"), "unidad": "ml"},
+        {"valor": "145 g", "productos": 1, "contenido": Decimal("145"), "unidad": "g"},
+        {"valor": "400 g", "productos": 1, "contenido": Decimal("400"), "unidad": "g"},
+    ]
+
+
+def test_brands_are_grouped_without_regard_to_case_or_accents(catalog):
+    for n, brand in enumerate(["La Serenísima", "LA SERENISIMA"]):
+        identity = f"ean:779000000010{n}"
+        catalog.add_product(identity, "LECHE ENT 500ML", brand, "leche", None, 500, "ml", 1)
+        catalog.price(identity, 1, 50)
+
+    # Three products write it in capitals, one with an accent.
+    assert _values(_facets("leche")["marcas"]) == [("La Serenisima", 4), ("Mana", 1)]
+    assert len(_search("leche", marca="la serenisima")) == 4
+
+
+def test_a_facet_ignores_its_own_filter_and_applies_the_others(catalog):
+    facets = _facets("leche", tipo="leche", marca="mana")
+
+    # Every type of the brand, every brand of the type.
+    assert _values(facets["tipos"]) == [("galletitas", 1)]
+    assert _values(facets["marcas"]) == [("La Serenisima", 1)]
+    assert facets["tamanos"] == []
+
+
+def test_a_blank_brand_and_a_single_unit_are_not_choices(catalog):
+    catalog.add_product("ean:7790000000110", "TE X 1", " ", "té", None, 1, "u", 1)
+    catalog.price("ean:7790000000110", 1, 10)
+
+    facets = _facets("te")
+
+    assert _values(facets["marcas"]) == [("Green Hills", 1)]
+    assert _values(facets["tamanos"]) == [("x 50", 1)]

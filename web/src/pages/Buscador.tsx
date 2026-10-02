@@ -4,9 +4,12 @@ import { createColumnHelper } from '@tanstack/react-table';
 import {
   fetchBuscador,
   fetchBuscadorDates,
+  fetchSearchFacets,
   geocode,
   searchProducts,
+  type FacetValue,
   type Product,
+  type ProductAttributeFilters,
   type StorePrice,
 } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
@@ -46,12 +49,50 @@ const columns = [
   }),
 ];
 
+// ── Facet chips: one choice per facet, clicked again to clear ──
+function FacetChips<T extends FacetValue>({
+  label,
+  values,
+  isSelected,
+  onToggle,
+}: {
+  label: string;
+  values: T[];
+  isSelected: (value: T) => boolean;
+  onToggle: (value: T) => void;
+}) {
+  if (values.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs font-medium text-slate-500 mr-1">{label}</span>
+      {values.map((value) => {
+        const selected = isSelected(value);
+        return (
+          <button
+            key={value.valor}
+            onClick={() => onToggle(value)}
+            aria-pressed={selected}
+            className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+              selected
+                ? 'border-blue-600 bg-blue-600 text-white'
+                : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+            }`}
+          >
+            {value.valor} <span className={selected ? 'text-blue-100' : 'text-slate-400'}>{value.productos}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function Buscador() {
   const { provincia, localidad, cadenas } = useFilters();
 
   // Two mutually exclusive modes: one product, or the cards of a search
   const [product, setProduct] = useState<Product | null>(null);
   const [genericQuery, setGenericQuery] = useState<string | null>(null);
+  const [attributes, setAttributes] = useState<ProductAttributeFilters>({});
 
   const [fechaId, setFechaId] = useState<number | null>(null);
   const [showMap, setShowMap] = useState(false);
@@ -91,6 +132,7 @@ export function Buscador() {
 
   const handleSearchAll = (q: string) => {
     setGenericQuery(q || null);
+    setAttributes({});
     setProduct(null);
     setFechaId(null);
   };
@@ -125,15 +167,39 @@ export function Buscador() {
   });
 
   // ── Product cards of a search (latest published day) ──
+  // The panel and location choose the stores behind each card's price.
   const { data: cards = [], isLoading: isLoadingCards } = useQuery({
-    queryKey: ['product-cards', genericQuery, userLat, userLon, radius],
-    queryFn: () => searchProducts({ q: genericQuery!, ...locationParams }),
+    queryKey: ['product-cards', genericQuery, attributes, provincia, localidad, cadenas, userLat, userLon, radius],
+    queryFn: () =>
+      searchProducts({
+        q: genericQuery!,
+        ...attributes,
+        provincia: provincia || undefined,
+        localidad: localidad || undefined,
+        cadenas: cadenas.length > 0 ? cadenas : undefined,
+        ...locationParams,
+      }),
     enabled: !!genericQuery,
   });
+
+  const { data: facets } = useQuery({
+    queryKey: ['search-facets', genericQuery, attributes],
+    queryFn: () => fetchSearchFacets({ q: genericQuery!, ...attributes }),
+    enabled: !!genericQuery,
+    placeholderData: (previous) => previous,
+  });
+
+  const toggleAttributes = (selected: boolean, chosen: ProductAttributeFilters) =>
+    setAttributes((current) => {
+      const cleared = { ...current };
+      for (const key of Object.keys(chosen) as (keyof ProductAttributeFilters)[]) delete cleared[key];
+      return selected ? cleared : { ...cleared, ...chosen };
+    });
 
   const isLoading = isLoadingSingle || isLoadingCards;
   const isGenericMode = !!genericQuery;
   const nearby = userLat != null && userLon != null;
+  const storesChosen = nearby || !!provincia || !!localidad || cadenas.length > 0;
   const cheapest = !isGenericMode && stores.length > 0 ? stores[0] : null;
 
   return (
@@ -300,6 +366,35 @@ export function Buscador() {
             </>
           )}
 
+          {/* ── Facets ── */}
+          {isGenericMode && facets && (
+            <div className="space-y-2">
+              <FacetChips
+                label="Tipo"
+                values={facets.tipos}
+                isSelected={(v) => attributes.tipo === v.valor}
+                onToggle={(v) => toggleAttributes(attributes.tipo === v.valor, { tipo: v.valor })}
+              />
+              <FacetChips
+                label="Marca"
+                values={facets.marcas}
+                isSelected={(v) => attributes.marca === v.valor}
+                onToggle={(v) => toggleAttributes(attributes.marca === v.valor, { marca: v.valor })}
+              />
+              <FacetChips
+                label="Tamaño"
+                values={facets.tamanos}
+                isSelected={(v) => attributes.contenido === v.contenido && attributes.unidad === v.unidad}
+                onToggle={(v) =>
+                  toggleAttributes(
+                    attributes.contenido === v.contenido && attributes.unidad === v.unidad,
+                    { contenido: v.contenido, unidad: v.unidad },
+                  )
+                }
+              />
+            </div>
+          )}
+
           {/* ── Product cards ── */}
           {isGenericMode && cards.length > 0 && (
             <div className="grid sm:grid-cols-2 gap-3">
@@ -323,12 +418,14 @@ export function Buscador() {
                       </p>
                       <p className="text-xs text-slate-500">
                         en {card.sucursales} {card.sucursales === 1 ? 'local' : 'locales'}
-                        {nearby && ' cerca'}
+                        {storesChosen && (nearby ? ' cerca' : ' de tu selección')}
                       </p>
                       <PriceDate value={card.fecha_precio_desde} />
                     </>
                   ) : (
-                    <p className="mt-2 text-sm text-slate-400">Ningún local cerca lo tiene.</p>
+                    <p className="mt-2 text-sm text-slate-400">
+                      Ningún local{nearby ? ' cerca' : storesChosen ? ' de tu selección' : ''} lo tiene.
+                    </p>
                   )}
                 </button>
               ))}

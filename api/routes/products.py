@@ -20,6 +20,8 @@ MIN_WORD_LENGTH = 2
 MAX_WORDS = 8
 # pg_trgm indexes a LIKE pattern only from three letters on.
 TRIGRAM_LENGTH = 3
+# Facet values listed per attribute, the most common first.
+MAX_FACET_VALUES = 20
 # Kilometres per degree in AMBA, as the other location filters approximate.
 KM_PER_DEGREE_LAT = 111.0
 KM_PER_DEGREE_LON = 85.0
@@ -35,6 +37,112 @@ def query_words(q: str) -> list[str]:
     return unique[:MAX_WORDS]
 
 
+class _Matching:
+    """The products a query matches, as SQL over ``v_producto p``.
+
+    Values are added through :meth:`param`, and the query text through
+    :meth:`query` only where it is used: asyncpg must infer the type of every
+    parameter from the statement.
+    """
+
+    def __init__(self, q: str):
+        self.q = q
+        self.words = query_words(q)
+        self.ean = q.strip() if q.strip().isdigit() else None
+        self.params: list = []
+        self._query_ref: str | None = None
+        # The product the query spells as an EAN, if any.
+        self.is_ean = f"p.producto_identity = 'ean:' || {self.param(self.ean)}"
+
+        patterns = {word: self.param(f"%{word}%") for word in self.words}
+        # Candidates come from indexes: the voted attributes through trigrams
+        # (words of at least three letters), the type the query names when it
+        # has no such word, and the few products with an override, whose
+        # corrected text is checked below.
+        type_named = None
+        indexed = [pattern for word, pattern in patterns.items() if len(word) >= TRIGRAM_LENGTH]
+        self.candidates = [
+            "SELECT producto_sk FROM dim_producto p WHERE " + self.is_ean
+        ]
+        if indexed:
+            text = (
+                "pipeline_product_search_text("
+                "productos_descripcion, productos_marca, tipo, variante)"
+            )
+            self.candidates.append(
+                "SELECT producto_sk FROM dim_producto WHERE "
+                + " AND ".join(f"{text} LIKE {pattern}" for pattern in indexed)
+            )
+        elif self.words:
+            self.candidates.append(
+                "SELECT producto_sk FROM dim_producto WHERE "
+                f"tipo = pipeline_product_type({self.query()})"
+            )
+            type_named = f"p.tipo = pipeline_product_type({self.query()})"
+        if self.words:
+            self.candidates.append(
+                "SELECT d.producto_sk FROM producto_overrides o "
+                "JOIN dim_producto d ON d.producto_identity = o.producto_identity"
+            )
+
+        self.conditions = [
+            f"""EXISTS (
+                SELECT 1 FROM fact_precios f
+                WHERE f.producto_sk = p.producto_sk
+                  AND f.fecha_id = {LATEST_PUBLISHED_FECHA_ID}
+            )"""
+        ]
+        if self.words:
+            matches = " AND ".join(
+                f"p.texto_busqueda LIKE {pattern}" for pattern in patterns.values()
+            )
+            if type_named:
+                matches = f"{type_named} AND {matches}"
+            self.conditions.append(f"({self.is_ean} OR ({matches}))")
+
+    @property
+    def empty(self) -> bool:
+        return not self.words and self.ean is None
+
+    def param(self, value) -> str:
+        self.params.append(value)
+        return f"${len(self.params)}"
+
+    def query(self) -> str:
+        """The parameter holding the query text."""
+        if self._query_ref is None:
+            self._query_ref = self.param(self.q)
+        return self._query_ref
+
+    def attribute_filters(self, tipo, marca, contenido, unidad) -> dict[str, str]:
+        """Conditions of the attribute filters given, keyed by facet."""
+        filters = {}
+        if tipo:
+            filters["tipo"] = f"p.tipo = {self.param(tipo)}"
+        if marca:
+            filters["marca"] = (
+                "pipeline_normalize_text(p.productos_marca) = "
+                f"pipeline_normalize_text({self.param(marca)})"
+            )
+        sizes = []
+        if contenido is not None:
+            sizes.append(f"p.contenido = {self.param(contenido)}")
+        if unidad:
+            sizes.append(f"p.contenido_unidad = {self.param(unidad)}")
+        if sizes:
+            filters["tamano"] = " AND ".join(sizes)
+        return filters
+
+    def candidates_cte(self) -> str:
+        # Materialized so that the text checks run on the candidates only;
+        # inlined, the planner applied them to every product (about 700 ms).
+        return f"""candidatos AS MATERIALIZED (
+            SELECT p.*
+            FROM v_producto p
+            WHERE p.producto_sk IN ({" UNION ".join(self.candidates)})
+        )"""
+
+
 @router.get("/products/search")
 async def search_products(
     q: str = Query(..., min_length=1),
@@ -42,6 +150,9 @@ async def search_products(
     marca: str | None = Query(None),
     contenido: Decimal | None = Query(None, gt=0),
     unidad: Literal["g", "ml", "u"] | None = Query(None),
+    provincia: str | None = Query(None),
+    localidad: str | None = Query(None),
+    cadenas: list[str] | None = Query(None),
     lat: float | None = Query(None, ge=-90, le=90),
     lon: float | None = Query(None, ge=-180, le=180),
     radius: float = Query(1, ge=0.5, le=50),
@@ -54,105 +165,58 @@ async def search_products(
     whole words ("serenisima leche"), then products sold by more chains.
 
     Each product carries its lowest store price in that day, the date that
-    price was observed, and how many stores carry it; with ``lat`` and
-    ``lon``, only stores within ``radius`` km count, and a product none of
-    them carries has no "from" price.  Location does not change the order.
+    price was observed, and how many stores carry it.  The store filters
+    (province, locality, chains, and ``radius`` km around ``lat`` and
+    ``lon``) choose which stores count; a product none of them carries has
+    no "from" price.  They do not change the order.
     """
-    words = query_words(q)
-    ean = q.strip() if q.strip().isdigit() else None
-    if not words and ean is None:
+    matching = _Matching(q)
+    if matching.empty:
         return []
-
-    params: list = [q, ean]
-
-    def param(value) -> str:
-        params.append(value)
-        return f"${len(params)}"
-
-    patterns = {word: param(f"%{word}%") for word in words}
-    # Candidates come from indexes: the voted attributes through trigrams
-    # (words of at least three letters), the type the query names when it
-    # has no such word, and the few products with an override, whose
-    # corrected text is checked below.
-    type_named = None
-    indexed = [pattern for word, pattern in patterns.items() if len(word) >= TRIGRAM_LENGTH]
-    candidates = ["SELECT producto_sk FROM dim_producto WHERE producto_identity = 'ean:' || $2"]
-    if indexed:
-        text = (
-            "pipeline_product_search_text("
-            "productos_descripcion, productos_marca, tipo, variante)"
-        )
-        candidates.append(
-            "SELECT producto_sk FROM dim_producto WHERE "
-            + " AND ".join(f"{text} LIKE {pattern}" for pattern in indexed)
-        )
-    elif words:
-        candidates.append(
-            "SELECT producto_sk FROM dim_producto WHERE tipo = pipeline_product_type($1)"
-        )
-        type_named = "p.tipo = pipeline_product_type($1)"
-    if words:
-        candidates.append(
-            "SELECT d.producto_sk FROM producto_overrides o "
-            "JOIN dim_producto d ON d.producto_identity = o.producto_identity"
-        )
-
+    param = matching.param
+    q_ref = matching.query()
     conditions = [
-        f"""EXISTS (
-            SELECT 1 FROM fact_precios f
-            WHERE f.producto_sk = p.producto_sk
-              AND f.fecha_id = {LATEST_PUBLISHED_FECHA_ID}
-        )"""
+        *matching.conditions,
+        *matching.attribute_filters(tipo, marca, contenido, unidad).values(),
     ]
-    if words:
-        matches = " AND ".join(f"p.texto_busqueda LIKE {pattern}" for pattern in patterns.values())
-        if type_named:
-            matches = f"{type_named} AND {matches}"
-        conditions.append(f"(p.producto_identity = 'ean:' || $2 OR ({matches}))")
-    if tipo:
-        conditions.append(f"p.tipo = {param(tipo)}")
-    if marca:
-        conditions.append(
-            f"pipeline_normalize_text(p.productos_marca) = pipeline_normalize_text({param(marca)})"
-        )
-    if contenido is not None:
-        conditions.append(f"p.contenido = {param(contenido)}")
-    if unidad:
-        conditions.append(f"p.contenido_unidad = {param(unidad)}")
 
     # Each result's prices are read after ranking, for the returned page only.
-    prices_where = "f.producto_sk = r.producto_sk AND f.fecha_id = r.fecha_id"
-    prices_source = "fact_precios f"
+    prices_where = ["f.producto_sk = r.producto_sk", "f.fecha_id = r.fecha_id"]
+    joins = []
+    if provincia:
+        joins.append("JOIN dim_provincia pr ON pr.provincia_sk = s.provincia_sk")
+        prices_where.append(f"pr.nombre = {param(provincia)}")
+    if localidad:
+        prices_where.append(f"s.sucursales_localidad = {param(localidad)}")
+    if cadenas:
+        joins.append("JOIN dim_comercio c ON c.comercio_sk = s.comercio_sk")
+        prices_where.append(f"c.comercio_bandera_nombre = ANY({param(cadenas)}::text[])")
     if lat is not None and lon is not None:
-        prices_source += " JOIN dim_sucursal s ON s.sucursal_sk = f.sucursal_sk"
         lat_km = f"(s.sucursales_latitud::float8 - {param(lat)}::float8) * {KM_PER_DEGREE_LAT}"
         lon_km = f"(s.sucursales_longitud::float8 - {param(lon)}::float8) * {KM_PER_DEGREE_LON}"
-        prices_where += f" AND SQRT(POW({lat_km}, 2) + POW({lon_km}, 2)) <= {param(radius)}"
+        prices_where.append(f"SQRT(POW({lat_km}, 2) + POW({lon_km}, 2)) <= {param(radius)}")
+    prices_source = "fact_precios f"
+    if len(prices_where) > 2:
+        prices_source += " JOIN dim_sucursal s ON s.sucursal_sk = f.sucursal_sk " + " ".join(joins)
     prices = store_priced_facts(
-        prices_source, prices_where, f"{PRICE_DATE_SQL} AS fecha_precio"
+        prices_source, " AND ".join(prices_where), f"{PRICE_DATE_SQL} AS fecha_precio"
     )
 
-    # Materialized so that the text checks run on the candidates only; inlined,
-    # the planner applied them to every product (about 700 ms).
     rows = await fetch(
         f"""
-        WITH candidatos AS MATERIALIZED (
-            SELECT p.*
-            FROM v_producto p
-            WHERE p.producto_sk IN ({" UNION ".join(candidates)})
-        ),
+        WITH {matching.candidates_cte()},
         resultados AS (
             SELECT p.producto_sk, p.id_producto, p.es_ean, p.nombre,
                    p.productos_descripcion, p.productos_marca, p.tipo, p.variante,
                    p.contenido, p.contenido_unidad,
                    {LATEST_PUBLISHED_FECHA_ID} AS fecha_id,
                    ROW_NUMBER() OVER (
-                       ORDER BY p.producto_identity = 'ean:' || $2 IS TRUE DESC,
-                                COALESCE(p.tipo = pipeline_product_type($1), FALSE) DESC,
+                       ORDER BY {matching.is_ean} IS TRUE DESC,
+                                COALESCE(p.tipo = pipeline_product_type({q_ref}), FALSE) DESC,
                                 CASE
                                     WHEN POSITION(
                                         ' ' || pipeline_normalize_text(p.tipo) || ' '
-                                        IN ' ' || pipeline_normalize_text($1) || ' '
+                                        IN ' ' || pipeline_normalize_text({q_ref}) || ' '
                                     ) > 0 THEN LENGTH(p.tipo)
                                     ELSE 0
                                 END DESC,
@@ -177,7 +241,7 @@ async def search_products(
         ) precios
         ORDER BY r.orden
         """,
-        *params,
+        *matching.params,
     )
     return [
         {
@@ -197,3 +261,81 @@ async def search_products(
         }
         for r in rows
     ]
+
+
+@router.get("/products/search/facets")
+async def search_facets(
+    q: str = Query(..., min_length=1),
+    tipo: str | None = Query(None),
+    marca: str | None = Query(None),
+    contenido: Decimal | None = Query(None, gt=0),
+    unidad: Literal["g", "ml", "u"] | None = Query(None),
+):
+    """Types, brands and sizes of the products a search lists, to narrow it.
+
+    Each value counts the products the search would list with it chosen, so
+    a facet applies the other filters but not its own: choosing a brand
+    keeps the other brands available.  Brands are grouped without regard to
+    case or accents ("Cepita" and "CEPITA"), under their most common
+    spelling as the product names write it.  A blank brand and a single unit,
+    which names leave out, are not choices.
+    """
+    empty = {"tipos": [], "marcas": [], "tamanos": []}
+    matching = _Matching(q)
+    if matching.empty:
+        return empty
+    filters = matching.attribute_filters(tipo, marca, contenido, unidad)
+
+    def others(facet: str) -> str:
+        return " AND ".join(c for name, c in filters.items() if name != facet) or "TRUE"
+
+    # facet: (filter it ignores, grouping keys, label, size and unit columns)
+    facet_queries = {
+        "tipos": ("tipo", ["p.tipo"], "p.tipo", "NULL::numeric", "NULL::text"),
+        "marcas": (
+            "marca",
+            ["NULLIF(pipeline_normalize_text(p.productos_marca), '')"],
+            "INITCAP(MODE() WITHIN GROUP (ORDER BY BTRIM(p.productos_marca)))",
+            "NULL::numeric",
+            "NULL::text",
+        ),
+        "tamanos": (
+            "tamano",
+            ["p.contenido", "p.contenido_unidad"],
+            "pipeline_format_size(p.contenido, p.contenido_unidad)",
+            "p.contenido",
+            "p.contenido_unidad",
+        ),
+    }
+    selects = []
+    for kind, (facet, keys, label, size, unit) in facet_queries.items():
+        selects.append(
+            f"""(
+            SELECT '{kind}' AS faceta, {label} AS valor, {size} AS contenido,
+                   {unit} AS unidad, COUNT(*) AS productos
+            FROM coincidencias p
+            WHERE {others(facet)} AND {" AND ".join(f"{key} IS NOT NULL" for key in keys)}
+            GROUP BY {", ".join(keys)}
+            HAVING {label} IS NOT NULL
+            ORDER BY productos DESC, valor
+            LIMIT {MAX_FACET_VALUES}
+        )"""
+        )
+
+    rows = await fetch(
+        f"""
+        WITH {matching.candidates_cte()},
+        coincidencias AS MATERIALIZED (
+            SELECT p.* FROM candidatos p WHERE {" AND ".join(matching.conditions)}
+        )
+        {" UNION ALL ".join(selects)}
+        """,
+        *matching.params,
+    )
+    facets = empty
+    for r in rows:
+        value = {"valor": r["valor"], "productos": r["productos"]}
+        if r["faceta"] == "tamanos":
+            value |= {"contenido": r["contenido"], "unidad": r["unidad"]}
+        facets[r["faceta"]].append(value)
+    return facets

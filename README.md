@@ -249,7 +249,11 @@ Data rules the pipeline relies on:
   Each result carries `precio_desde`, its lowest store price (unconditional
   promotions in force only), the observation date of that price, and
   `sucursales`, how many stores carry it. With `lat`, `lon` and `radius` (km,
-  default 1), only nearby stores count; the order stays the same.
+  default 1), only nearby stores count; `provincia`, `localidad` and
+  repeated `cadenas` keys choose stores the same way. The order stays the
+  same. `GET /products/search/facets` takes the same query and attribute
+  filters and returns `tipos`, `marcas` and `tamanos` with product counts;
+  each facet ignores its own filter and applies the others.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.
