@@ -12,7 +12,7 @@ async def search_products(q: str = Query(..., min_length=1)):
     rows = await fetch(
         """
         SELECT producto_sk, id_producto, productos_descripcion, productos_marca
-        FROM dim_producto
+        FROM v_producto
         WHERE productos_descripcion ILIKE $1
            OR productos_marca        ILIKE $1
            OR id_producto             = $2

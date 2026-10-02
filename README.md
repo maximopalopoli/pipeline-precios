@@ -63,7 +63,7 @@ Daily ZIP (~300 MB)
 | **Staging** | `stg_comercios`, `stg_sucursales`, `stg_productos` |
 | **Dimensions** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
 | **Fact** | `fact_precios` (monthly parents with daily leaves; grain: product × store × day) |
-| **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample), `producto_conflictos` (brand and size disagreements between chains) |
+| **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample), `producto_conflictos` (brand and size disagreements between chains), `producto_overrides` (curated corrections, from a versioned seed) |
 
 ## Project Structure
 
@@ -210,6 +210,14 @@ Data rules the pipeline relies on:
   preferring a measured size over a unit count. Unknown units stay empty. Full
   runs record products whose chains disagree on brand or measured size in
   `producto_conflictos` for review.
+- **Curated overrides.** When the vote is wrong, a row in
+  `db/seeds/seed_producto_overrides.sql` corrects a product's description,
+  brand or size, with a note saying why. The seed is the source of truth:
+  every migration run (`make db`) replaces `producto_overrides` with it. The
+  API reads products through `v_producto`, which applies overrides when
+  reading, so removing one restores the voted value. List what is left to
+  review with
+  `SELECT * FROM v_producto_conflictos_pendientes ORDER BY cadenas_fuente DESC`.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.

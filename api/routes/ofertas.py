@@ -74,7 +74,7 @@ async def get_ofertas(
                 / NULLIF(f.precio_lista, 0) * 100
             )::numeric, 1) AS descuento_pct
         FROM fact_precios f
-        JOIN dim_producto  p  ON f.producto_sk  = p.producto_sk
+        JOIN v_producto  p  ON f.producto_sk  = p.producto_sk
         JOIN dim_fecha     fe ON f.fecha_id     = fe.fecha_id
         JOIN dim_sucursal  s  ON f.sucursal_sk  = s.sucursal_sk
         JOIN dim_comercio  c  ON s.comercio_sk  = c.comercio_sk

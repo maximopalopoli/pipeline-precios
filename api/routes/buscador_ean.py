@@ -21,7 +21,7 @@ async def get_ean_dates(q: str = Query(..., min_length=2)):
         """
         SELECT DISTINCT f.fecha_id, fe.fecha
         FROM fact_precios f
-        JOIN dim_producto p ON f.producto_sk = p.producto_sk
+        JOIN v_producto p ON f.producto_sk = p.producto_sk
         JOIN dim_fecha fe   ON f.fecha_id    = fe.fecha_id
         WHERE p.es_ean = true
           AND p.productos_descripcion ILIKE $1
@@ -107,7 +107,7 @@ async def get_buscador_ean(
             s.sucursales_latitud      AS lat,
             s.sucursales_longitud     AS lon
         FROM fact_precios f
-        JOIN dim_producto  p  ON f.producto_sk = p.producto_sk
+        JOIN v_producto  p  ON f.producto_sk = p.producto_sk
         JOIN dim_sucursal  s  ON f.sucursal_sk = s.sucursal_sk
         JOIN dim_comercio  c  ON s.comercio_sk = c.comercio_sk
         JOIN dim_provincia pr ON s.provincia_sk = pr.provincia_sk
