@@ -714,8 +714,13 @@ All variables have development defaults. Set them in `.env` (see
 
 ### Airflow
 
-The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs
-to capture government rectifications). Its tasks run download → duplicate check
+The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily,
+Argentine time (two runs to capture government rectifications). Each run
+ingests the Argentine calendar day it was scheduled for (Airflow's
+`data_interval_end`, not `ds`, which for the 06:30 run is the previous day).
+Before a chain delivers, the weekday URL still serves last week's ZIP: its hash
+is already published, so the 06:30 run stops at the duplicate check, and the
+10:30 run ingests the new or rectified file. Its tasks run download → duplicate check
 → staging → quality checks → dimensions → pending facts → atomic publication.
 If a task fails after opening an ingestion run, the DAG records the terminal
 failure before Airflow retries or marks the task as failed.

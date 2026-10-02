@@ -8,15 +8,15 @@ publication.  Failed or interrupted attempts remain eligible for a retry.
 from etl.ingestion_run import should_process_raw_file
 
 
-def _create_raw_file(conn, sha256: str) -> int:
+def _create_raw_file(conn, sha256: str, fecha_datos: str = "2026-03-15") -> int:
     with conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
-            VALUES (%s, 'http://example.test/data.zip', %s, 1, '2026-03-15')
+            VALUES (%s, 'http://example.test/data.zip', %s, 1, %s)
             RETURNING id
             """,
-            (f"{sha256}.zip", sha256),
+            (f"{sha256}.zip", sha256, fecha_datos),
         )
         return cur.fetchone()[0]
 
@@ -103,3 +103,26 @@ def test_a_file_completed_with_the_same_scope_is_skipped(pg_conn):
 
     assert should_process_raw_file(pg_conn, raw_file_id, regional_scope="amba") is False
     assert should_process_raw_file(pg_conn, raw_file_id) is True
+
+
+def test_a_rectification_of_a_published_day_is_processed(pg_conn):
+    # The 06:30 run published the day; the 10:30 run downloads a rectified
+    # file with another hash for the same date and must ingest it.
+    first_id = _create_raw_file(pg_conn, "entrypoint-0630", "2026-03-17")
+    _create_run(pg_conn, first_id, "completed")
+    rectified_id = _create_raw_file(pg_conn, "entrypoint-1030", "2026-03-17")
+    pg_conn.commit()
+
+    assert should_process_raw_file(pg_conn, first_id) is False
+    assert should_process_raw_file(pg_conn, rectified_id) is True
+
+
+def test_a_late_delivery_serving_last_weeks_published_file_is_skipped(pg_conn):
+    # Before a chain delivers, the weekday URL still serves last week's ZIP.
+    # Its hash is already published, so the run stops before staging and the
+    # 10:30 run ingests the day once the new file arrives.
+    stale_id = _create_raw_file(pg_conn, "entrypoint-last-week", "2026-03-10")
+    _create_run(pg_conn, stale_id, "completed")
+    pg_conn.commit()
+
+    assert should_process_raw_file(pg_conn, stale_id) is False

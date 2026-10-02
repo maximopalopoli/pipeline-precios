@@ -29,3 +29,14 @@ def resolve_ingestion_date(
     if now.tzinfo is None:
         raise ValueError("now must include a timezone")
     return now.astimezone(ARGENTINA_TIMEZONE).date()
+
+
+def scheduled_ingestion_date(scheduled_for: datetime) -> date:
+    """Return the Argentine calendar day of a scheduled Airflow run.
+
+    Pass Airflow's ``data_interval_end``: the moment the run was scheduled for
+    (06:30 or 10:30 in Argentina), which stays fixed across retries and
+    clears.  ``ds`` is the start of the interval, the previous schedule slot,
+    so for the 06:30 run it names the previous day.
+    """
+    return resolve_ingestion_date(now=scheduled_for)

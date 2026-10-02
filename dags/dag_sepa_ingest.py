@@ -1,7 +1,8 @@
 """
 dag_sepa_ingest.py — Airflow DAG for daily SEPA price ingestion.
 
-Schedule: 06:30 and 10:30 daily (two runs to capture rectified prices).
+Schedule: 06:30 and 10:30 daily in Argentina (two runs to capture rectified
+prices).
 Dimensions are loaded from staging and products are streamed in chunks into
 pending facts before the daily snapshot is published atomically.
 """
@@ -12,12 +13,14 @@ import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+import pendulum
 import psycopg2
 import structlog
 
 from airflow import DAG
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator, ShortCircuitOperator
+from etl.ingestion_date import ARGENTINA_TIMEZONE
 from etl.performance import StageTimer
 
 log = structlog.get_logger(__name__)
@@ -37,11 +40,15 @@ def _db_connect() -> psycopg2.extensions.connection:
     )
 
 
-def _run_date(ds: str) -> date:
-    """Use Airflow's logical date, which is explicit and not worker-local."""
-    from etl.ingestion_date import resolve_ingestion_date
+def _run_date(data_interval_end: datetime) -> date:
+    """Use the Argentine day the run was scheduled for, not ``ds``.
 
-    return resolve_ingestion_date(date.fromisoformat(ds))
+    ``ds`` is the start of the data interval: the previous schedule slot, which
+    for the 06:30 run is the previous day's 10:30.
+    """
+    from etl.ingestion_date import scheduled_ingestion_date
+
+    return scheduled_ingestion_date(data_interval_end)
 
 
 def _mark_task_failure(conn, run_id: int, exc: Exception) -> None:
@@ -149,7 +156,7 @@ def _fail_active_timer(timer: StageTimer | None, exc: Exception) -> None:
 # ---------------------------------------------------------------------------
 
 
-def download_zip(ds: str, **kwargs):
+def download_zip(data_interval_end: datetime, **kwargs):
     """Download daily SEPA ZIP and register in raw_files."""
     from etl.extract import downloader
 
@@ -161,7 +168,7 @@ def download_zip(ds: str, **kwargs):
         raw_dir = Path(Variable.get("sepa_raw_dir", default_var="/opt/airflow/data"))
         raw_dir.mkdir(parents=True, exist_ok=True)
 
-        fecha_logica = _run_date(ds)
+        fecha_logica = _run_date(data_interval_end)
         dl = downloader.download(conn, raw_dir, fecha_logica)
         timer.finish(filename=dl.filename, size_bytes=dl.size_bytes)
 
@@ -684,8 +691,10 @@ with DAG(
     dag_id="sepa_ingest",
     default_args=default_args,
     description="Daily SEPA price ingestion pipeline",
+    # Chains deliver by 06:00 and may rectify until 10:00, Argentine time. A
+    # naive start date would run the cron in UTC (03:30 and 07:30 there).
     schedule="30 6,10 * * *",
-    start_date=datetime(2026, 3, 19),
+    start_date=pendulum.datetime(2026, 3, 19, tz=ARGENTINA_TIMEZONE.key),
     catchup=False,
     max_active_runs=1,
     tags=["sepa", "etl"],
