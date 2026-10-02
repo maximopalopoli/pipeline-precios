@@ -239,6 +239,13 @@ Data rules the pipeline relies on:
   reading, so removing one restores the voted value. List what is left to
   review with
   `SELECT * FROM v_producto_conflictos_pendientes ORDER BY cadenas_fuente DESC`.
+- **Display name and search.** `v_producto.nombre` joins type, brand, variant
+  and size ("Leche La Serenisima entera 1 l"); an untyped product keeps its
+  description. `GET /products/search?q=` lists products priced in the latest
+  published day. Every query word must appear in any order, ignoring case and
+  accents. An exact EAN comes first, then products of the type the query
+  names, then those listed by more chains. Optional `tipo`, `marca`,
+  `contenido` and `unidad` (`g`, `ml`, `u`) filters narrow the results.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.

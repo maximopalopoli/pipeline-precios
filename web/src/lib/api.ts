@@ -12,8 +12,16 @@ export const fetchLocalities = (province: string) =>
 export interface Product {
   producto_sk: number;
   id_producto: string;
+  es_ean: boolean;
+  /** Display name from type, brand, variant and size; the description when untyped. */
+  nombre: string;
+  /** Description as the chains publish it (or its curated correction). */
   descripcion: string;
   marca: string | null;
+  tipo: string | null;
+  variante: string | null;
+  contenido: number | null;
+  contenido_unidad: 'g' | 'ml' | 'u' | null;
 }
 export const searchProducts = (q: string) =>
   api.get<Product[]>('/products/search', { params: { q } }).then(r => r.data);

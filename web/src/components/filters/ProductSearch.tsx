@@ -73,7 +73,7 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
         </label>
         <div className="flex items-center gap-2 rounded-md bg-blue-50 px-3 py-2 text-sm">
           <span className="flex-1">
-            {selected.descripcion} — {selected.marca || ''} ({selected.id_producto})
+            {selected.nombre} <span className="text-slate-500">({selected.id_producto})</span>
           </span>
           <button
             onClick={() => { onSelect(null); setQuery(''); }}
@@ -116,7 +116,10 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
               onClick={() => { onSelect(p); setIsOpen(false); setQuery(''); }}
               className="cursor-pointer px-3 py-2 text-sm hover:bg-slate-100"
             >
-              {p.descripcion} — {p.marca || ''} <span className="text-slate-400">({p.id_producto})</span>
+              <div className="text-slate-900">{p.nombre}</div>
+              <div className="text-xs text-slate-400">
+                {p.nombre !== p.descripcion && `${p.descripcion} · `}{p.id_producto}
+              </div>
             </li>
           ))}
         </ul>
