@@ -7,6 +7,8 @@ import {
   type GenericStorePrice,
 } from '../lib/api';
 import { useShoppingList } from '../hooks/useShoppingList';
+import { useSearchRadius } from '../hooks/useSearchRadius';
+import { RadiusNotice } from '../components/filters/RadiusNotice';
 import { formatCurrency } from '../lib/constants';
 import { PriceDate } from '../components/pricing/PriceDate';
 
@@ -247,7 +249,9 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
   const completedCount = Object.keys(selections).length;
 
   // Location params
-  const locationParams = lat != null && lon != null ? { lat, lon, radius } : {};
+  const searchArea = useSearchRadius(lat, lon, radius);
+  const searchRadius = searchArea.radius;
+  const locationParams = lat != null && lon != null ? { lat, lon, radius: searchRadius } : {};
 
   // Get available dates
   const { data: dates = [] } = useQuery({
@@ -260,14 +264,14 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
 
   // Search results
   const { data: results = [], isLoading } = useQuery({
-    queryKey: ['lista-search', searchTerm, fechaId, lat, lon, radius],
+    queryKey: ['lista-search', searchTerm, fechaId, lat, lon, searchRadius],
     queryFn: () =>
       fetchBuscadorGeneric({
         q: searchTerm,
         fecha_id: fechaId!,
         ...locationParams,
       }),
-    enabled: !!searchTerm && !!fechaId,
+    enabled: !!searchTerm && !!fechaId && searchArea.ready,
   });
 
   // Group results by chain
@@ -352,7 +356,8 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
       {/* Location indicator */}
       {lat != null && (
         <div className="rounded-lg border border-blue-100 bg-blue-50/50 px-4 py-2 text-sm text-blue-700">
-          Mostrando resultados a menos de {radius} km de tu ubicacion
+          Mostrando resultados a menos de {searchRadius} km de tu ubicacion
+          <RadiusNotice area={searchArea.area} />
         </div>
       )}
 

@@ -608,7 +608,7 @@ def test_missing_store_prices_are_carried_until_the_store_returns(
                 buscador.get_buscador(
                     producto_sk=product_b, fecha_id=fecha_id,
                     provincia=None, localidad=None, cadenas=None,
-                    lat=None, lon=None, radius=5,
+                    location=None,
                 )
             )
             assert len(offers) == 1

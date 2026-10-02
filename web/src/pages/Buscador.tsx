@@ -15,6 +15,8 @@ import {
   type StorePrice,
 } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
+import { useSearchRadius } from '../hooks/useSearchRadius';
+import { RadiusNotice } from '../components/filters/RadiusNotice';
 import { FilterPanel } from '../components/filters/FilterPanel';
 import { ProductSearch } from '../components/filters/ProductSearch';
 import { DataTable } from '../components/tables/DataTable';
@@ -215,13 +217,15 @@ export function Buscador() {
   const activeDates = product ? dates : [];
   const selectedFechaId = fechaId ?? (activeDates.length > 0 ? activeDates[0].fecha_id : null);
 
-  // ── Location params for API ──
+  // ── Location params for API: the chosen radius, grown to reach three chains ──
+  const searchArea = useSearchRadius(userLat, userLon, radius);
+  const searchRadius = searchArea.radius;
   const locationParams = userLat != null && userLon != null
-    ? { lat: userLat, lon: userLon, radius } : {};
+    ? { lat: userLat, lon: userLon, radius: searchRadius } : {};
 
   // ── Single-product results ──
   const { data: stores = [], isLoading: isLoadingSingle } = useQuery({
-    queryKey: ['buscador', product?.producto_sk, selectedFechaId, provincia, localidad, cadenas, userLat, userLon, radius],
+    queryKey: ['buscador', product?.producto_sk, selectedFechaId, provincia, localidad, cadenas, userLat, userLon, searchRadius],
     queryFn: () =>
       fetchBuscador({
         producto_sk: product!.producto_sk,
@@ -231,13 +235,13 @@ export function Buscador() {
         cadenas: cadenas.length > 0 ? cadenas : undefined,
         ...locationParams,
       }),
-    enabled: !!product && !!selectedFechaId,
+    enabled: !!product && !!selectedFechaId && searchArea.ready,
   });
 
   // ── Product cards of a search (latest published day) ──
   // The panel and location choose the stores behind each card's price.
   const { data: cards = [], isLoading: isLoadingCards } = useQuery({
-    queryKey: ['product-cards', genericQuery, attributes, provincia, localidad, cadenas, userLat, userLon, radius],
+    queryKey: ['product-cards', genericQuery, attributes, provincia, localidad, cadenas, userLat, userLon, searchRadius],
     queryFn: () =>
       searchProducts({
         q: genericQuery!,
@@ -247,7 +251,7 @@ export function Buscador() {
         cadenas: cadenas.length > 0 ? cadenas : undefined,
         ...locationParams,
       }),
-    enabled: !!genericQuery,
+    enabled: !!genericQuery && searchArea.ready,
   });
 
   const { data: facets } = useQuery({
@@ -372,11 +376,12 @@ export function Buscador() {
           {/* Location active indicator */}
           {locationEnabled && userLat != null && (product || genericQuery) && !isLoading && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
-              Mostrando resultados a menos de {radius} km de tu ubicacion
+              Mostrando resultados a menos de {searchRadius} km de tu ubicacion
               {((isGenericMode && cards.length > 0 && cards.every((c) => c.sucursales === 0))
                 || (!isGenericMode && stores.length === 0 && selectedFechaId)) && (
                 <span> — no hay locales cerca. Intenta aumentar el radio.</span>
               )}
+              <RadiusNotice area={searchArea.area} />
             </div>
           )}
 

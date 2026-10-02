@@ -309,5 +309,17 @@ export const fetchStorePromos = (sucursal_sk: number) =>
   api.get<StorePromo[]>(`/locales/${sucursal_sk}/promos`).then(r => r.data);
 
 // ── Geocode ──
+/** Radius to search around a point: the requested one, grown to reach three grocery chains. */
+export interface SearchRadius {
+  radio_km: number;
+  /** Grocery chain companies with a priced store within radio_km. */
+  cadenas: number;
+  ampliado: boolean;
+  /** False when even the largest radius reaches fewer than three. */
+  suficiente: boolean;
+}
+export const fetchSearchRadius = (params: { lat: number; lon: number; radius: number }) =>
+  api.get<SearchRadius>('/location/radius', { params }).then(r => r.data);
+
 export const geocode = (address: string, city: string) =>
   api.get<{ lat: number | null; lon: number | null }>('/geocode', { params: { address, city } }).then(r => r.data);

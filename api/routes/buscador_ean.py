@@ -1,18 +1,14 @@
 """EAN-only product search — compare the exact same product across chains."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from api.db import fetch
+from api.location import Location, optional_location
 from api.price_date import PRICE_DATE_SQL
 from api.pricing import OFFER_PRICE_COLUMNS, PROMO_JOINS
+from api.store_filters import store_conditions
 
 router = APIRouter()
-
-
-def _distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    d_lat = (lat2 - lat1) * 111.0
-    d_lon = (lon2 - lon1) * 85.0
-    return (d_lat * d_lat + d_lon * d_lon) ** 0.5
 
 
 @router.get("/buscador/ean/dates")
@@ -43,9 +39,7 @@ async def get_buscador_ean(
     provincia: str | None = Query(None),
     localidad: str | None = Query(None),
     cadenas: list[str] | None = Query(None),
-    lat: float | None = Query(None),
-    lon: float | None = Query(None),
-    radius: float = Query(1, ge=0.5, le=50),
+    location: Location | None = Depends(optional_location),
 ):
     conditions = [
         "p.es_ean = true",
@@ -53,35 +47,7 @@ async def get_buscador_ean(
         "f.fecha_id = $2",
     ]
     params: list = [f"%{q}%", fecha_id]
-    idx = 3
-
-    if provincia:
-        conditions.append(f"pr.nombre = ${idx}")
-        params.append(provincia)
-        idx += 1
-
-    if localidad:
-        conditions.append(f"s.sucursales_localidad = ${idx}")
-        params.append(localidad)
-        idx += 1
-
-    if cadenas:
-        placeholders = ", ".join(f"${idx + i}" for i in range(len(cadenas)))
-        conditions.append(f"c.comercio_bandera_nombre IN ({placeholders})")
-        params.extend(cadenas)
-        idx += len(cadenas)
-
-    has_location = lat is not None and lon is not None
-    if has_location:
-        lat_range = radius / 111.0
-        lon_range = radius / 85.0
-        conditions.append(f"s.sucursales_latitud BETWEEN ${idx} AND ${idx + 1}")
-        params.extend([lat - lat_range, lat + lat_range])
-        idx += 2
-        conditions.append(f"s.sucursales_longitud BETWEEN ${idx} AND ${idx + 1}")
-        params.extend([lon - lon_range, lon + lon_range])
-        idx += 2
-
+    conditions += store_conditions(params, provincia, localidad, cadenas, location)
     where = " AND ".join(conditions)
 
     rows = await fetch(
@@ -118,11 +84,4 @@ async def get_buscador_ean(
         """,
         *params,
     )
-    results = [dict(r) for r in rows]
-    if has_location:
-        results = [
-            r for r in results
-            if r["lat"] is not None and r["lon"] is not None
-            and _distance_km(lat, lon, float(r["lat"]), float(r["lon"])) <= radius
-        ]
-    return results
+    return [dict(r) for r in rows]

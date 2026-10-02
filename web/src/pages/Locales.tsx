@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
 import { fetchLocales, fetchStorePromos, geocode, type NearbyStore, type StorePromo } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
+import { useSearchRadius } from '../hooks/useSearchRadius';
+import { RadiusNotice } from '../components/filters/RadiusNotice';
 import { FilterPanel } from '../components/filters/FilterPanel';
 import { DataTable } from '../components/tables/DataTable';
 import { StoreLocatorMap } from '../components/maps/StoreLocator';
@@ -94,16 +96,19 @@ export function Locales() {
   const lat = mode === 'address' ? geoResult?.lat ?? null : manualLat;
   const lon = mode === 'address' ? geoResult?.lon ?? null : manualLon;
 
+  const searchArea = useSearchRadius(lat, lon, radius);
+  const searchRadius = searchArea.radius;
+
   const { data: stores = [], isLoading } = useQuery({
-    queryKey: ['locales', lat, lon, radius, cadenas],
+    queryKey: ['locales', lat, lon, searchRadius, cadenas],
     queryFn: () =>
       fetchLocales({
         lat: lat!,
         lon: lon!,
-        radius,
+        radius: searchRadius,
         cadenas: cadenas.length > 0 ? cadenas : undefined,
       }),
-    enabled: lat != null && lon != null,
+    enabled: lat != null && lon != null && searchArea.ready,
   });
 
   return (
@@ -211,14 +216,15 @@ export function Locales() {
             <>
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
                 <p className="text-sm text-emerald-800">
-                  <strong>{stores.length} locales</strong> encontrados en un radio de {radius} km
+                  <strong>{stores.length} locales</strong> encontrados en un radio de {searchRadius} km
                 </p>
+                <RadiusNotice area={searchArea.area} />
               </div>
 
               <StoreLocatorMap
                 userLat={lat}
                 userLon={lon}
-                radiusKm={radius}
+                radiusKm={searchRadius}
                 stores={stores}
               />
 
@@ -237,7 +243,7 @@ export function Locales() {
 
           {lat != null && lon != null && !isLoading && stores.length === 0 && (
             <p className="text-sm text-slate-400">
-              No se encontraron locales en un radio de {radius} km.
+              No se encontraron locales en un radio de {searchRadius} km.
             </p>
           )}
 

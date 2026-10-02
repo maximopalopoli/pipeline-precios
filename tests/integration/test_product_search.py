@@ -8,6 +8,7 @@ from decimal import Decimal
 
 import pytest
 
+from api.location import Location
 from api.routes import products
 from etl.load.warehouse_loader import _ensure_partition
 
@@ -187,7 +188,7 @@ def _search(q, **filters):
     filters = {
         "tipo": None, "marca": None, "contenido": None, "unidad": None,
         "provincia": None, "localidad": None, "cadenas": None,
-        "lat": None, "lon": None, "radius": 1, "limit": 50, **filters,
+        "location": None, "limit": 50, **filters,
     }
     return asyncio.run(products.search_products(q, **filters))
 
@@ -315,15 +316,15 @@ def test_only_nearby_stores_count_with_a_location(catalog):
     lat, lon = OBELISCO
 
     assert _offer("leche") == (Decimal("90"), "2026-03-17", 2)
-    assert _offer("leche", lat=lat, lon=lon, radius=5) == (Decimal("100"), "2026-03-17", 1)
+    assert _offer("leche", location=Location(lat, lon, 5)) == (Decimal("100"), "2026-03-17", 1)
 
 
 def test_a_product_carried_by_no_nearby_store_has_no_from_price(catalog):
     lat, lon = STORES[2][-1]
 
     # Still listed, in the same order.
-    assert _names("leche", lat=lat, lon=lon) == _names("leche")
-    assert _offer("leche", lat=lat, lon=lon) == (None, None, 0)
+    assert _names("leche", location=Location(lat, lon, 1)) == _names("leche")
+    assert _offer("leche", location=Location(lat, lon, 1)) == (None, None, 0)
 
 
 @pytest.mark.parametrize(

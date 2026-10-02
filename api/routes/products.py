@@ -5,9 +5,10 @@ import unicodedata
 from decimal import Decimal
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from api.db import fetch
+from api.location import Location, optional_location, within_sql
 from api.price_date import PRICE_DATE_SQL
 from api.pricing import store_priced_facts
 from api.published_stores import LATEST_PUBLISHED_FECHA_ID
@@ -22,9 +23,6 @@ MAX_WORDS = 8
 TRIGRAM_LENGTH = 3
 # Facet values listed per attribute, the most common first.
 MAX_FACET_VALUES = 20
-# Kilometres per degree in AMBA, as the other location filters approximate.
-KM_PER_DEGREE_LAT = 111.0
-KM_PER_DEGREE_LON = 85.0
 
 
 def query_words(q: str) -> list[str]:
@@ -153,9 +151,7 @@ async def search_products(
     provincia: str | None = Query(None),
     localidad: str | None = Query(None),
     cadenas: list[str] | None = Query(None),
-    lat: float | None = Query(None, ge=-90, le=90),
-    lon: float | None = Query(None, ge=-180, le=180),
-    radius: float = Query(1, ge=0.5, le=50),
+    location: Location | None = Depends(optional_location),
     limit: int = Query(50, ge=1, le=100),
 ):
     """Products with a price in the latest published day, ranked for reading.
@@ -191,10 +187,8 @@ async def search_products(
     if cadenas:
         joins.append("JOIN dim_comercio c ON c.comercio_sk = s.comercio_sk")
         prices_where.append(f"c.comercio_bandera_nombre = ANY({param(cadenas)}::text[])")
-    if lat is not None and lon is not None:
-        lat_km = f"(s.sucursales_latitud::float8 - {param(lat)}::float8) * {KM_PER_DEGREE_LAT}"
-        lon_km = f"(s.sucursales_longitud::float8 - {param(lon)}::float8) * {KM_PER_DEGREE_LON}"
-        prices_where.append(f"SQRT(POW({lat_km}, 2) + POW({lon_km}, 2)) <= {param(radius)}")
+    if location:
+        prices_where.append(within_sql(location, matching.params))
     prices_source = "fact_precios f"
     if len(prices_where) > 2:
         prices_source += " JOIN dim_sucursal s ON s.sucursal_sk = f.sucursal_sk " + " ".join(joins)

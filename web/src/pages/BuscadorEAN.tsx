@@ -7,6 +7,8 @@ import {
   type EanStorePrice,
 } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
+import { useSearchRadius } from '../hooks/useSearchRadius';
+import { RadiusNotice } from '../components/filters/RadiusNotice';
 import { FilterPanel } from '../components/filters/FilterPanel';
 import { KpiCard } from '../components/layout/KpiCard';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
@@ -118,12 +120,14 @@ export function BuscadorEAN() {
   const selectedFechaId = fechaId ?? (dates.length > 0 ? dates[0].fecha_id : null);
 
   // ── Location params ──
+  const searchArea = useSearchRadius(userLat, userLon, radius);
+  const searchRadius = searchArea.radius;
   const locationParams = userLat != null && userLon != null
-    ? { lat: userLat, lon: userLon, radius } : {};
+    ? { lat: userLat, lon: userLon, radius: searchRadius } : {};
 
   // ── Results ──
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: ['ean-search', searchTerm, selectedFechaId, provincia, localidad, cadenas, userLat, userLon, radius],
+    queryKey: ['ean-search', searchTerm, selectedFechaId, provincia, localidad, cadenas, userLat, userLon, searchRadius],
     queryFn: () =>
       fetchBuscadorEan({
         q: searchTerm!,
@@ -133,7 +137,7 @@ export function BuscadorEAN() {
         cadenas: cadenas.length > 0 ? cadenas : undefined,
         ...locationParams,
       }),
-    enabled: !!searchTerm && !!selectedFechaId,
+    enabled: !!searchTerm && !!selectedFechaId && searchArea.ready,
   });
 
   const productGroups = groupByProduct(rows);
@@ -259,10 +263,11 @@ export function BuscadorEAN() {
           {/* Location indicator */}
           {locationEnabled && userLat != null && searchTerm && !isLoading && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
-              Mostrando resultados a menos de {radius} km de tu ubicacion
+              Mostrando resultados a menos de {searchRadius} km de tu ubicacion
               {rows.length === 0 && selectedFechaId && (
                 <span> — no hay locales cerca. Intenta aumentar el radio.</span>
               )}
+              <RadiusNotice area={searchArea.area} />
             </div>
           )}
 

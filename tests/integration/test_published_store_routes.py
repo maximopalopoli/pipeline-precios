@@ -4,6 +4,7 @@ import asyncio
 import re
 from datetime import date
 
+from api.location import Location
 from api.routes import filters, locales
 from etl.load.warehouse_loader import _ensure_partition
 
@@ -143,6 +144,6 @@ def test_store_routes_exclude_stores_only_in_retained_older_day(pg_conn, monkeyp
     assert asyncio.run(filters.get_localities("CABA")) == ["Current store"]
 
     stores = asyncio.run(
-        locales.get_locales(-34.6037, -58.3816, radius=5, cadenas=None)
+        locales.get_locales(Location(-34.6037, -58.3816, 5), cadenas=None)
     )
     assert [store["sucursal_sk"] for store in stores] == [current_store]

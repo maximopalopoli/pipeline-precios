@@ -398,7 +398,15 @@ Stores are classified while `sucursales.csv` is staged:
 | `AR-B` without plausible coordinates | Unlocated: counted and left out, never guessed |
 
 Store discovery (`/api/locales` and the province, chain and locality filters)
-includes only stores with prices on the latest published day. Older
+includes only stores with prices on the latest published day.
+
+Every located route takes `lat`, `lon` and `radius` (km). The point must lie
+in Argentina, both coordinates come together, and the radius is 0.5–50 km.
+Distance is measured before any limit. `GET /api/location/radius` returns
+`radio_km`, the chosen radius grown through 1, 2, 5, 10, 20 and 50 km until
+grocery stores of three chain companies are within it. It also returns
+`cadenas` (the companies reached), `ampliado` and `suficiente`. Gas-station
+shops and pharmacies do not count. Older
 national facts may remain under fact retention without appearing as current
 stores.
 

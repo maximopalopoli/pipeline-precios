@@ -129,7 +129,7 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
         buscador.get_buscador(
             producto_sk=producto_sk, fecha_id=fecha_id,
             provincia=None, localidad=None, cadenas=None,
-            lat=None, lon=None, radius=5,
+            location=None,
         )
     )
     assert len(store_offers) == 1
