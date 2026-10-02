@@ -720,6 +720,15 @@ to capture government rectifications). Its tasks run download → duplicate chec
 If a task fails after opening an ingestion run, the DAG records the terminal
 failure before Airflow retries or marks the task as failed.
 
+The Airflow containers receive the production settings listed in
+`docker-compose.yml` from `.env` (regional scope, chunk size, retention,
+rejection sample, quality limits and alert email); a blank value means unset.
+The partial development bounds `SEPA_DEV_*` are deliberately not passed, so a
+local `.env` cannot make the scheduled ingestion publish nothing.
+`SEPA_ARCHIVE_DIR` is not passed either: under Airflow the archive is
+`data/archive`, so mount another disk there to keep it off the database disk.
+A unit test fails when the ETL reads a setting the compose file does not pass.
+
 ### Web app
 
 Pages: Home, Buscador (price finder with map), BuscadorEAN (lookup by barcode),

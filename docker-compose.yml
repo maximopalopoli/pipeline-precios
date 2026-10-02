@@ -17,6 +17,29 @@ x-airflow-common: &airflow-common
     AIRFLOW__SCHEDULER__LOCAL_TASK_JOB_HEARTBEAT_SEC: "30"
     _PIP_ADDITIONAL_REQUIREMENTS: "pandas>=2.2 psycopg2-binary>=2.9 structlog>=24.0 requests>=2.32"
     PYTHONPATH: /opt/airflow
+    # Production ingestion settings from .env; blank means unset. The partial
+    # development bounds (SEPA_DEV_*) are left out on purpose so a local .env
+    # can never turn the scheduled ingestion into one that publishes nothing,
+    # and SEPA_ARCHIVE_DIR is a host path: the archive is data/archive, so
+    # mount another disk there to keep it off the database disk.
+    SEPA_REGIONAL_SCOPE: "${SEPA_REGIONAL_SCOPE:-}"
+    SEPA_FACT_CHUNK_SIZE: "${SEPA_FACT_CHUNK_SIZE:-}"
+    SEPA_FACT_RETENTION_DAYS: "${SEPA_FACT_RETENTION_DAYS:-}"
+    SEPA_STAGING_RETENTION_DAYS: "${SEPA_STAGING_RETENTION_DAYS:-}"
+    SEPA_RAW_RETENTION_DAYS: "${SEPA_RAW_RETENTION_DAYS:-}"
+    SEPA_REJECTED_SAMPLE_ROWS: "${SEPA_REJECTED_SAMPLE_ROWS:-}"
+    SEPA_MAX_REJECTED_SHARE: "${SEPA_MAX_REJECTED_SHARE:-}"
+    SEPA_MAX_WITHOUT_KEYS_SHARE: "${SEPA_MAX_WITHOUT_KEYS_SHARE:-}"
+    SEPA_MAX_STORE_UNLISTED_SHARE: "${SEPA_MAX_STORE_UNLISTED_SHARE:-}"
+    SEPA_MIN_PRODUCT_ROWS: "${SEPA_MIN_PRODUCT_ROWS:-}"
+    SEPA_MAX_ROW_COUNT_DRIFT: "${SEPA_MAX_ROW_COUNT_DRIFT:-}"
+    ALERT_EMAIL_TO: "${ALERT_EMAIL_TO:-}"
+    ALERT_EMAIL_FROM: "${ALERT_EMAIL_FROM:-}"
+    SMTP_HOST: "${SMTP_HOST:-}"
+    SMTP_PORT: "${SMTP_PORT:-}"
+    SMTP_USER: "${SMTP_USER:-}"
+    SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
+    SMTP_USE_TLS: "${SMTP_USE_TLS:-}"
   volumes:
     - ./dags:/opt/airflow/dags
     - ./etl:/opt/airflow/etl
