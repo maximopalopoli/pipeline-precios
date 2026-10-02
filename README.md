@@ -63,7 +63,7 @@ Daily ZIP (~300 MB)
 | **Staging** | `stg_comercios`, `stg_sucursales`, `stg_productos` |
 | **Dimensions** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
 | **Fact** | `fact_precios` (monthly parents with daily leaves; grain: product × store × day) |
-| **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample), `producto_conflictos` (brand and size disagreements between chains), `producto_overrides` (curated corrections, from a versioned seed) |
+| **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample), `producto_conflictos` (brand and size disagreements between chains), `producto_overrides` (curated corrections, from a versioned seed), `producto_tipo_terminos` (curated type dictionary, from a versioned seed) |
 
 ## Project Structure
 
@@ -95,7 +95,7 @@ pipeline-precios/
 │   └── producto.py                   # ProductoRecord
 ├── db/
 │   ├── migrations/                   # ordered SQL migrations, checksum-verified
-│   └── seeds/                        # Provinces (ISO 3166-2) + calendar
+│   └── seeds/                        # Provinces, calendar, curated product overrides and types
 ├── tests/
 │   ├── unit/                         # focused module and lifecycle tests
 │   ├── integration/                  # database-backed ETL, publication and entrypoint tests
@@ -210,9 +210,19 @@ Data rules the pipeline relies on:
   preferring a measured size over a unit count. Unknown units stay empty. Full
   runs record products whose chains disagree on brand or measured size in
   `producto_conflictos` for review.
+- **Product type.** SEPA has no category, but descriptions name the product
+  first, often abbreviated ("YOG BEBIBLE", "SH SEDAL"). The curated dictionary
+  in `db/seeds/seed_producto_tipos.sql` maps one to three normalized words to a
+  type (`YOG` → yogur, `DULCE DE LECHE` → dulce de leche). A description takes
+  the type of the term at its first word, the longest when several start
+  there; terms flagged `tras_marca` (SH, DEO, YOG) also match behind a brand,
+  at the second or third word. Each chain's description is classified and the
+  chains vote. A description with no known term leaves `dim_producto.tipo`
+  empty; it is never guessed. A dictionary change (`make db`) reaches the
+  products of the next full ingestion.
 - **Curated overrides.** When the vote is wrong, a row in
   `db/seeds/seed_producto_overrides.sql` corrects a product's description,
-  brand or size, with a note saying why. The seed is the source of truth:
+  brand, size or type, with a note saying why. The seed is the source of truth:
   every migration run (`make db`) replaces `producto_overrides` with it. The
   API reads products through `v_producto`, which applies overrides when
   reading, so removing one restores the voted value. List what is left to
