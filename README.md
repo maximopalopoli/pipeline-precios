@@ -410,6 +410,11 @@ shops and pharmacies do not count. Older
 national facts may remain under fact retention without appearing as current
 stores.
 
+Prices per kg or l (`precio_unitario_desde` on search results,
+`precio_unitario` on store offers) are computed from the canonical package
+size in g or ml, never from `productos_precio_referencia`, which some chains
+fill with the list price. Products sold by the unit have none.
+
 `GET /api/lista/totales` takes the list as repeated `producto_sk` keys (up to
 50, a repeated product counts once) and a location. For each store within the
 radius with a price on the latest published day, it returns `total` (prices

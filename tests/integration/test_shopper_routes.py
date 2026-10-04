@@ -69,8 +69,11 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
         cur.execute(
             """
             INSERT INTO dim_producto (
-                producto_identity, id_producto, productos_descripcion, productos_marca
-            ) VALUES ('ean:7791234567895', '7791234567895', 'Leche entera 1 l', 'Marca')
+                producto_identity, id_producto, productos_descripcion, productos_marca,
+                contenido, contenido_unidad
+            ) VALUES (
+                'ean:7791234567895', '7791234567895', 'Leche entera 1 l', 'Marca', 1000, 'ml'
+            )
             RETURNING producto_sk
             """
         )
@@ -143,6 +146,17 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
     assert (
         store_offers[0]["id_comercio"], store_offers[0]["id_bandera"], store_offers[0]["id_sucursal"]
     ) == (12, 1, 7)
+    # Per litre, from the store price: the conditional promotion is apart.
+    assert store_offers[0]["precio_unitario"] == {"precio": Decimal("80.00"), "unidad": "l"}
+    described = asyncio.run(
+        buscador.get_buscador_generic(
+            q="leche entera", fecha_id=fecha_id,
+            provincia=None, localidad=None, cadenas=None, location=None,
+        )
+    )
+    assert [(o["producto_sk"], o["precio_unitario"]) for o in described] == [
+        (producto_sk, {"precio": Decimal("80.00"), "unidad": "l"})
+    ]
     offers = asyncio.run(
         ofertas.get_ofertas(provincia=None, localidad=None, cadenas=None)
     )

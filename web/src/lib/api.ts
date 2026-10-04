@@ -25,6 +25,8 @@ export interface Product {
   contenido_unidad: 'g' | 'ml' | 'u' | null;
   /** Lowest store price in the latest published day; null when no nearby store carries it. */
   precio_desde: number | null;
+  /** That price per kg or l; null for products sold by the unit or of unknown size. */
+  precio_unitario_desde: UnitPrice | null;
   /** Observation date (YYYY-MM-DD) of that price. */
   fecha_precio_desde: string | null;
   /** Stores carrying it, only nearby ones with a location. */
@@ -129,6 +131,12 @@ export interface BuscadorDate {
 export const fetchBuscadorDates = (producto_sk: number) =>
   api.get<BuscadorDate[]>('/buscador/dates', { params: { producto_sk } }).then(r => r.data);
 
+/** Price per kg or l, computed from the canonical package size. */
+export interface UnitPrice {
+  precio: number;
+  unidad: 'kg' | 'l';
+}
+
 /** Requirement read from a promotion legend (migration 037). */
 export type PromoCondition = 'cantidad' | 'medio_pago' | 'programa' | 'horario';
 
@@ -154,6 +162,8 @@ export interface StorePrice {
   lon: number | null;
   sucursal: string;
   direccion: string | null;
+  /** Store price per kg or l; null when it does not apply. */
+  precio_unitario: UnitPrice | null;
   /** Source store codes; id_sucursal is unique only within its chain. */
   id_comercio: number;
   id_bandera: number;
@@ -190,6 +200,8 @@ export interface GenericStorePrice {
   precio_condicional: number | null;
   leyenda_condicional: string | null;
   condicion: PromoCondition | null;
+  /** Store price per kg or l; null when it does not apply. */
+  precio_unitario: UnitPrice | null;
   lat: number | null;
   lon: number | null;
 }

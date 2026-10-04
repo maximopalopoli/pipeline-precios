@@ -305,6 +305,17 @@ def test_a_product_is_offered_from_its_lowest_store_price(catalog):
     assert _offer("leche") == (Decimal("95"), "2026-03-16", 2)
 
 
+def test_the_from_price_is_also_given_per_kg_or_l(catalog):
+    by_name = {row["nombre"]: row["precio_unitario_desde"] for row in _search("la serenisima")}
+
+    assert by_name == {
+        "Leche La Serenisima entera 1 l": {"precio": Decimal("100.00"), "unidad": "l"},
+        "Dulce de leche La Serenisima 400 g": {"precio": Decimal("250.00"), "unidad": "kg"},
+    }
+    # Sold by the unit: no price per kg or l.
+    assert [row["precio_unitario_desde"] for row in _search("green hills")] == [None]
+
+
 def test_a_store_with_a_promotion_above_its_list_price_offers_the_list_price(catalog):
     catalog.price(LECHE, 2, 90, promos=[(Decimal("130"), "20% de descuento")])
 

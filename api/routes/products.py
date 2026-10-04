@@ -12,6 +12,7 @@ from api.location import Location, optional_location, within_sql
 from api.price_date import PRICE_DATE_SQL
 from api.pricing import store_priced_facts
 from api.published_stores import LATEST_PUBLISHED_FECHA_ID
+from api.unit_price import unit_price
 
 router = APIRouter()
 
@@ -161,7 +162,7 @@ async def search_products(
     whole words ("serenisima leche"), then products sold by more chains.
 
     Each product carries its lowest store price in that day, the date that
-    price was observed, and how many stores carry it.  The store filters
+    price was observed, that price per kg or l, and how many stores carry it.  The store filters
     (province, locality, chains, and ``radius`` km around ``lat`` and
     ``lon``) choose which stores count; a product none of them carries has
     no "from" price.  They do not change the order.
@@ -250,6 +251,9 @@ async def search_products(
             "contenido": r["contenido"],
             "contenido_unidad": r["contenido_unidad"],
             "precio_desde": r["precio_desde"],
+            "precio_unitario_desde": unit_price(
+                r["precio_desde"], r["contenido"], r["contenido_unidad"]
+            ),
             "fecha_precio_desde": r["fecha_precio_desde"],
             "sucursales": r["sucursales"],
         }

@@ -25,6 +25,7 @@ import { KpiCard } from '../components/layout/KpiCard';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { PriceDate } from '../components/pricing/PriceDate';
 import { formatCurrency } from '../lib/constants';
+import { byUnitPrice, formatUnitPrice } from '../lib/unitPrice';
 
 // ── Single-product table columns ──
 const col = createColumnHelper<StorePrice>();
@@ -46,6 +47,14 @@ const columns = [
   col.accessor('provincia', { header: 'Provincia' }),
   col.accessor('precio_lista', { header: 'Precio lista', cell: (info) => formatCurrency(info.getValue()) }),
   col.accessor('mejor_precio', { header: 'Mejor precio', cell: (info) => formatCurrency(info.getValue()) }),
+  col.accessor('precio_unitario', {
+    header: 'Por kg / l',
+    cell: (info) => {
+      const value = info.getValue();
+      return value ? formatUnitPrice(value) : '—';
+    },
+    enableSorting: false,
+  }),
   col.accessor('fecha_precio', { header: 'Fecha', cell: (info) => <PriceDate value={info.getValue()} /> }),
   col.accessor('ahorro', { header: 'Ahorro', cell: (info) => formatCurrency(info.getValue()) }),
   col.display({
@@ -160,6 +169,7 @@ export function Buscador() {
 
   const [fechaId, setFechaId] = useState<number | null>(null);
   const [showMap, setShowMap] = useState(false);
+  const [sortByUnitPrice, setSortByUnitPrice] = useState(false);
 
   // ── Location filter ──
   const [address, setAddress] = useState('');
@@ -253,6 +263,12 @@ export function Buscador() {
       }),
     enabled: !!genericQuery && searchArea.ready,
   });
+
+  // Sizes are compared per kg or l, among the cards loaded.
+  const comparable = cards.some((card) => card.precio_unitario_desde);
+  const shownCards = sortByUnitPrice
+    ? byUnitPrice(cards, (card) => card.precio_unitario_desde)
+    : cards;
 
   const { data: facets } = useQuery({
     queryKey: ['search-facets', genericQuery, attributes],
@@ -474,9 +490,20 @@ export function Buscador() {
           )}
 
           {/* ── Product cards ── */}
+          {isGenericMode && comparable && (
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input
+                type="checkbox"
+                checked={sortByUnitPrice}
+                onChange={(e) => setSortByUnitPrice(e.target.checked)}
+                className="rounded"
+              />
+              Ordenar estos resultados por precio por kg o litro
+            </label>
+          )}
           {isGenericMode && cards.length > 0 && (
             <div className="grid sm:grid-cols-2 gap-3">
-              {cards.map((card) => (
+              {shownCards.map((card) => (
                 <button
                   key={card.producto_sk}
                   onClick={() => handleSelectProduct(card)}
@@ -494,6 +521,11 @@ export function Buscador() {
                           {formatCurrency(card.precio_desde)}
                         </span>
                       </p>
+                      {card.precio_unitario_desde && (
+                        <p className="text-xs text-slate-600">
+                          {formatUnitPrice(card.precio_unitario_desde)}
+                        </p>
+                      )}
                       <p className="text-xs text-slate-500">
                         en {card.sucursales} {card.sucursales === 1 ? 'local' : 'locales'}
                         {storesChosen && (nearby ? ' cerca' : ' de tu selección')}

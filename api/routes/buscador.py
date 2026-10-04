@@ -7,6 +7,7 @@ from api.location import Location, optional_location
 from api.price_date import PRICE_DATE_SQL
 from api.pricing import OFFER_PRICE_COLUMNS, PROMO_JOINS, STORE_PRICE
 from api.store_filters import store_conditions
+from api.unit_price import with_unit_price
 
 router = APIRouter()
 
@@ -60,8 +61,11 @@ async def get_buscador(
             NULLIF(CONCAT_WS(' ', s.sucursales_calle, s.sucursales_numero), '') AS direccion,
             s.id_comercio,
             s.id_bandera,
-            s.id_sucursal
+            s.id_sucursal,
+            p.contenido,
+            p.contenido_unidad
         FROM fact_precios f
+        JOIN v_producto    p  ON f.producto_sk  = p.producto_sk
         JOIN dim_sucursal  s  ON f.sucursal_sk  = s.sucursal_sk
         JOIN dim_comercio  c  ON s.comercio_sk  = c.comercio_sk
         JOIN dim_provincia pr ON s.provincia_sk  = pr.provincia_sk
@@ -72,7 +76,7 @@ async def get_buscador(
         """,
         *params,
     )
-    return [dict(r) for r in rows]
+    return [with_unit_price(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -129,7 +133,9 @@ async def get_buscador_generic(
             {PRICE_DATE_SQL}          AS fecha_precio,
             {OFFER_PRICE_COLUMNS},
             s.sucursales_latitud      AS lat,
-            s.sucursales_longitud     AS lon
+            s.sucursales_longitud     AS lon,
+            p.contenido,
+            p.contenido_unidad
         FROM fact_precios f
         JOIN v_producto  p  ON f.producto_sk = p.producto_sk
         JOIN dim_sucursal  s  ON f.sucursal_sk = s.sucursal_sk
@@ -142,4 +148,4 @@ async def get_buscador_generic(
         """,
         *params,
     )
-    return [dict(r) for r in rows]
+    return [with_unit_price(r) for r in rows]

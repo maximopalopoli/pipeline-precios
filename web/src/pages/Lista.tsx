@@ -12,6 +12,7 @@ import { useShoppingList } from '../hooks/useShoppingList';
 import { useSearchRadius } from '../hooks/useSearchRadius';
 import { RadiusNotice } from '../components/filters/RadiusNotice';
 import { formatCurrency } from '../lib/constants';
+import { formatUnitPrice } from '../lib/unitPrice';
 import { PriceDate } from '../components/pricing/PriceDate';
 
 // ── Step 0: Build shopping list ──
@@ -425,6 +426,11 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
                               <span className="ml-2 text-xs text-slate-400 line-through">
                                 {formatCurrency(item.precio_lista)}
                               </span>
+                            )}
+                            {item.precio_unitario && (
+                              <div className="text-xs text-slate-500">
+                                {formatUnitPrice(item.precio_unitario)}
+                              </div>
                             )}
                             {item.precio_condicional != null && (
                               <div
