@@ -410,6 +410,11 @@ shops and pharmacies do not count. Older
 national facts may remain under fact retention without appearing as current
 stores.
 
+Search results and the product detail carry `cobertura`: `fraccionado_en_local`
+(a 13-digit code with GS1 prefix 2, weighed or cut in the store and numbered
+by each chain), `codigo_interno` (no valid EAN) and, on search results,
+`pocos_locales` (one or two of the chosen stores carry it).
+
 Prices per kg or l (`precio_unitario_desde` on search results,
 `precio_unitario` on store offers) are computed from the canonical package
 size in g or ml, never from `productos_precio_referencia`, which some chains

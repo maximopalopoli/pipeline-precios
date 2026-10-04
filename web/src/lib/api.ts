@@ -31,7 +31,11 @@ export interface Product {
   fecha_precio_desde: string | null;
   /** Stores carrying it, only nearby ones with a location. */
   sucursales: number;
+  /** Reasons its prices may compare poorly. */
+  cobertura: CoverageNote[];
 }
+/** Why a product's prices compare poorly (api/coverage.py). */
+export type CoverageNote = 'fraccionado_en_local' | 'codigo_interno' | 'pocos_locales';
 /** Attributes that narrow a search to some of its products. */
 export interface ProductAttributeFilters {
   tipo?: string;
@@ -65,6 +69,8 @@ export interface ProductDetail {
   cadenas_fuente: number | null;
   /** A curated correction replaced some published attribute. */
   corregido: boolean;
+  /** Reasons its prices may compare poorly, apart from how many stores carry it. */
+  cobertura: CoverageNote[];
   /** Description, brand and size as the chains wrote them. */
   publicado: {
     descripcion: string | null;

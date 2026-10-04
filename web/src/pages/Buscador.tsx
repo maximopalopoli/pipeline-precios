@@ -24,6 +24,7 @@ import { PriceMap } from '../components/maps/PriceMap';
 import { KpiCard } from '../components/layout/KpiCard';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { PriceDate } from '../components/pricing/PriceDate';
+import { CoverageNotes, FEW_STORES } from '../components/pricing/CoverageNotes';
 import { formatCurrency } from '../lib/constants';
 import { byUnitPrice, formatUnitPrice } from '../lib/unitPrice';
 
@@ -86,8 +87,9 @@ const columns = [
 ];
 
 // ── Product detail header: catalog name, published text and source codes ──
-function ProductHeader({ detail }: { detail: ProductDetail }) {
+function ProductHeader({ detail, stores, nearby }: { detail: ProductDetail; stores?: number; nearby: boolean }) {
   const { publicado, codigos } = detail;
+  const few = stores != null && stores > 0 && stores < FEW_STORES;
   const publishedSize = [publicado.cantidad, publicado.unidad].filter(Boolean).join(' ');
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
@@ -118,6 +120,12 @@ function ProductHeader({ detail }: { detail: ProductDetail }) {
           </>
         )}
       </dl>
+      <CoverageNotes
+        notes={few ? [...detail.cobertura, 'pocos_locales'] : detail.cobertura}
+        sucursales={stores}
+        cadena={codigos.cadena}
+        nearby={nearby}
+      />
     </div>
   );
 }
@@ -403,7 +411,11 @@ export function Buscador() {
 
           {/* ── Single-product detail ── */}
           {!isGenericMode && detail && detail.producto_sk === product?.producto_sk && (
-            <ProductHeader detail={detail} />
+            <ProductHeader
+              detail={detail}
+              stores={isLoadingSingle ? undefined : stores.length}
+              nearby={nearby}
+            />
           )}
 
           {/* ── Single-product results ── */}
@@ -537,6 +549,7 @@ export function Buscador() {
                       Ningún local{nearby ? ' cerca' : storesChosen ? ' de tu selección' : ''} lo tiene.
                     </p>
                   )}
+                  <CoverageNotes notes={card.cobertura} sucursales={card.sucursales} nearby={nearby} />
                 </button>
               ))}
             </div>

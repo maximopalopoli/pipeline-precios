@@ -7,6 +7,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from api.coverage import coverage_notes
 from api.db import fetch
 from api.location import Location, optional_location, within_sql
 from api.price_date import PRICE_DATE_SQL
@@ -162,7 +163,8 @@ async def search_products(
     whole words ("serenisima leche"), then products sold by more chains.
 
     Each product carries its lowest store price in that day, the date that
-    price was observed, that price per kg or l, and how many stores carry it.  The store filters
+    price was observed, that price per kg or l, how many stores carry it, and
+    the reasons its prices may compare poorly (``api.coverage``).  The store filters
     (province, locality, chains, and ``radius`` km around ``lat`` and
     ``lon``) choose which stores count; a product none of them carries has
     no "from" price.  They do not change the order.
@@ -256,6 +258,7 @@ async def search_products(
             ),
             "fecha_precio_desde": r["fecha_precio_desde"],
             "sucursales": r["sucursales"],
+            "cobertura": coverage_notes(r["es_ean"], r["id_producto"], r["sucursales"]),
         }
         for r in rows
     ]
@@ -383,6 +386,7 @@ async def get_product(producto_sk: int):
         "contenido_unidad": r["contenido_unidad"],
         "cadenas_fuente": r["cadenas_fuente"],
         "corregido": bool(r["corregido"]),
+        "cobertura": coverage_notes(r["es_ean"], r["id_producto"]),
         "publicado": {
             "descripcion": r["publicado_descripcion"],
             "marca": r["publicado_marca"],

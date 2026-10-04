@@ -458,6 +458,18 @@ def test_detail_names_the_chain_that_scopes_a_product_without_ean(catalog):
     }
 
 
+def test_coverage_explains_a_chain_code_and_few_stores(catalog):
+    # The catalog prices each product in one store.
+    assert {row["nombre"]: row["cobertura"] for row in _search("leche")} == {
+        name: ["pocos_locales"] for name in _names("leche")
+    }
+    # A product no chosen store carries is not "few stores".
+    far = _search("leche", location=Location(*STORES[2][4], 1))
+    assert {tuple(row["cobertura"]) for row in far} == {()}
+    assert _product(catalog.products["12:1:2045"])["cobertura"] == ["codigo_interno"]
+    assert _product(catalog.products[LECHE])["cobertura"] == []
+
+
 def test_detail_of_an_unknown_product_is_not_found(catalog):
     with pytest.raises(products.HTTPException) as error:
         _product(-1)
