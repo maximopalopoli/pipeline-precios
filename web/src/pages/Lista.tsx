@@ -588,7 +588,8 @@ function Summary() {
         <div className="rounded-lg border border-blue-100 bg-blue-50/50 px-4 py-2 text-sm text-blue-700">
           {productIds.length} {productIds.length === 1 ? 'producto' : 'productos'} en locales a
           menos de {searchArea.radius} km de tu ubicación. El total suma el precio que se paga
-          sin condiciones; las promociones condicionales se suman aparte.
+          sin condiciones; las promociones condicionales se suman aparte. No incluye
+          farmacias ni tiendas de estaciones de servicio.
           <RadiusNotice area={searchArea.area} />
         </div>
       )}

@@ -3,7 +3,14 @@
 from fastapi import APIRouter, Depends, Query
 
 from api.db import fetch, fetchrow
-from api.location import Location, bind, distance_km_sql, required_location, within_sql
+from api.location import (
+    NON_GROCERY_COMERCIOS,
+    Location,
+    bind,
+    distance_km_sql,
+    required_location,
+    within_sql,
+)
 from api.price_date import PRICE_DATE_SQL
 from api.pricing import OFFER_PRICE_COLUMNS, PROMO_JOINS
 from api.published_stores import LATEST_PUBLISHED_FECHA_ID
@@ -87,7 +94,8 @@ async def get_list_totals(
     """Each nearby store's total for the list, with its coverage and gaps.
 
     Prices come from the latest published day, carried prices included with
-    their observation date.  A product listed twice counts once.
+    their observation date.  A product listed twice counts once.  Pharmacies
+    and gas-station shops are left out; single-product search keeps them.
     """
     products = list(dict.fromkeys(producto_sk))
     fecha = await fetchrow(f"SELECT {LATEST_PUBLISHED_FECHA_ID} AS fecha_id")
@@ -100,6 +108,9 @@ async def get_list_totals(
         f"f.fecha_id = {bind(params, fecha['fecha_id'])}",
         f"f.producto_sk = ANY({bind(params, products)}::int[])",
         within_sql(location, params),
+        # A list is a grocery basket: pharmacies and gas-station shops carry
+        # a few of its items and would only crowd the incomplete groups.
+        f"s.id_comercio <> ALL({bind(params, list(NON_GROCERY_COMERCIOS))}::int[])",
     ]
     rows = await fetch(
         f"""

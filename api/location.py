@@ -29,8 +29,9 @@ RADIUS_STEPS_KM = (1.0, 2.0, 5.0, 10.0, 20.0, MAX_RADIUS_KM)
 # Phase 0: 1 km reaches 4-7 companies in CABA but none in parts of GBA.
 MIN_CHAIN_COMPANIES = 3
 # SEPA companies that are not grocery stores: Estacion Lima, FULL and Axion
-# (gas-station shops) and Farmacity.  They are listed but never make a
-# neighbourhood well covered.
+# (gas-station shops) and Farmacity.  They are listed in single-product
+# search, but never make a neighbourhood well covered and take no part in
+# shopping list totals.
 NON_GROCERY_COMERCIOS = (4, 19, 23, 24)
 
 

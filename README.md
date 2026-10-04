@@ -422,7 +422,9 @@ paid without any condition), `total_condicional` (meeting every conditional
 promotion, or null), `cubiertos` of `productos`, the missing `faltantes`
 and each item's price and observation date. Stores are ranked by coverage
 first, then by total, so an incomplete basket never ranks above a complete
-one; it returns at most 50.
+one; it returns at most 50. Pharmacies and gas-station shops (`id_comercio`
+4, 19, 23 and 24) are left out of list totals but stay in single-product
+search.
 
 The product-date, daily-offer and store-promotion routes read published
 facts and run metadata directly. The analytics aggregates (weekly variation

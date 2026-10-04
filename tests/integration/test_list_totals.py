@@ -7,7 +7,7 @@ from decimal import Decimal as D
 
 import pytest
 
-from api.location import KM_PER_DEGREE_LAT, Location
+from api.location import KM_PER_DEGREE_LAT, NON_GROCERY_COMERCIOS, Location
 from api.routes import lista
 from etl.load.warehouse_loader import _ensure_partition
 
@@ -66,19 +66,23 @@ class Day:
             )
             return [row[0] for row in cur.fetchall()]
 
-    def store(self, km_north: float, prices: dict[int, object]) -> int:
+    def store(
+        self, km_north: float, prices: dict[int, object], comercio: int | None = None
+    ) -> int:
         """A store that far north of the Obelisco with ``prices`` per product.
 
         A price is the list price, or ``(list price, promotion, legend)``.
+        Each store is its own chain company unless ``comercio`` is given.
         """
         self.stores += 1
+        comercio = comercio or 100 + self.stores
         with self.conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO dim_comercio (id_comercio, id_bandera, comercio_bandera_nombre)
                 VALUES (%s, 1, %s) RETURNING comercio_sk
                 """,
-                (self.stores, f"Cadena {self.stores}"),
+                (comercio, f"Cadena {comercio}"),
             )
             cur.execute(
                 """
@@ -88,7 +92,7 @@ class Day:
                 ) VALUES (%s, 1, 1, %s, %s, %s, %s) RETURNING sucursal_sk
                 """,
                 (
-                    self.stores, cur.fetchone()[0], self.provincia_sk,
+                    comercio, cur.fetchone()[0], self.provincia_sk,
                     round(OBELISCO[0] + km_north / KM_PER_DEGREE_LAT, 6), OBELISCO[1],
                 ),
             )
@@ -196,3 +200,12 @@ def test_each_item_keeps_its_price_date(day):
 
     assert store["items"][0]["fecha_precio"] == "2026-03-17"
     assert float(store["distancia_km"]) == 0.5
+
+
+@pytest.mark.parametrize("comercio", NON_GROCERY_COMERCIOS)
+def test_pharmacies_and_gas_station_shops_take_no_part(day, comercio):
+    leche, pan = day.products(2)
+    day.store(0.2, {leche: 50, pan: 50}, comercio=comercio)
+    supermarket = day.store(0.5, {leche: 500, pan: 800})
+
+    assert [t["sucursal_sk"] for t in _totals([leche, pan])] == [supermarket]
