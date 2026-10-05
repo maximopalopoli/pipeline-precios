@@ -63,7 +63,7 @@ Daily ZIP (~300 MB)
 | **Staging** | `stg_comercios`, `stg_sucursales`, `stg_productos` |
 | **Dimensions** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
 | **Fact** | `fact_precios` (monthly parents with daily leaves; grain: product × store × day) |
-| **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample) |
+| **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample), `producto_conflictos` (brand and size disagreements between chains), `producto_overrides` (curated corrections, from a versioned seed), `producto_tipo_terminos` and `producto_variante_terminos` (curated type and variant dictionaries, from versioned seeds) |
 
 ## Project Structure
 
@@ -95,7 +95,7 @@ pipeline-precios/
 │   └── producto.py                   # ProductoRecord
 ├── db/
 │   ├── migrations/                   # ordered SQL migrations, checksum-verified
-│   └── seeds/                        # Provinces (ISO 3166-2) + calendar
+│   └── seeds/                        # Provinces, calendar, curated product overrides, types and variants
 ├── tests/
 │   ├── unit/                         # focused module and lifecycle tests
 │   ├── integration/                  # database-backed ETL, publication and entrypoint tests
@@ -202,6 +202,43 @@ Data rules the pipeline relies on:
 - **Product identity.** A product is `ean:<id>` only when the source flags it as
   an EAN and it passes the EAN-8/13 checksum; otherwise it is scoped to its
   chain. Products are never merged by name similarity.
+- **Product attributes.** Chains spell a shared EAN differently ("20 gr",
+  "0.02 KG", "1 UNI"). Each attribute is chosen by a vote of chains, one vote
+  per chain whatever its store count: the description with most chains, then
+  the longest text; the brand with most chains, then most rows; and the size
+  normalized to grams, millilitres or units (`contenido`, `contenido_unidad`),
+  preferring a measured size over a unit count. Unknown units stay empty. Full
+  runs record products whose chains disagree on brand or measured size in
+  `producto_conflictos` for review.
+- **Product type.** SEPA has no category, but descriptions name the product
+  first, often abbreviated ("YOG BEBIBLE", "SH SEDAL"). The curated dictionary
+  in `db/seeds/seed_producto_tipos.sql` maps one to three normalized words to a
+  type (`YOG` → yogur, `DULCE DE LECHE` → dulce de leche). A description takes
+  the type of the term at its first word, the longest when several start
+  there; terms flagged `tras_marca` (SH, DEO, YOG) also match behind a brand,
+  at the second or third word. Each chain's description is classified and the
+  chains vote. A description with no known term leaves `dim_producto.tipo`
+  empty; it is never guessed. A dictionary change (`make db`) reaches the
+  products of the next full ingestion.
+- **Product variant.** Products of the same type, brand and size still differ
+  by flavor, fat content or recipe. The curated dictionary in
+  `db/seeds/seed_producto_variantes.sql` maps one to three normalized words to a
+  variant value (`VAI` → vainilla, `PARC DESC` → parcialmente descremada,
+  `S G` → sin gas). A description's variant is the sorted set of the values it
+  names at any word, joined with ", " ("firme, vainilla"); a term inside a
+  longer matched term does not count ("LIMA LIMON" is lima limón only), and a
+  value equal to the product's type is left out. The chains vote: a named
+  variant beats none, then most chains, then most values. A description with
+  no known term leaves `dim_producto.variante` empty; it is never guessed, and
+  a dictionary change also reaches the next full ingestion.
+- **Curated overrides.** When the vote is wrong, a row in
+  `db/seeds/seed_producto_overrides.sql` corrects a product's description,
+  brand, size, type or variant, with a note saying why. The seed is the source of truth:
+  every migration run (`make db`) replaces `producto_overrides` with it. The
+  API reads products through `v_producto`, which applies overrides when
+  reading, so removing one restores the voted value. List what is left to
+  review with
+  `SELECT * FROM v_producto_conflictos_pendientes ORDER BY cadenas_fuente DESC`.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.

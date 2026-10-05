@@ -134,7 +134,7 @@ async def get_store_promos(sucursal_sk: int):
                 / NULLIF(f.precio_lista, 0) * 100, 1
             ) AS descuento_pct
         FROM fact_precios f
-        JOIN dim_producto p ON f.producto_sk = p.producto_sk
+        JOIN v_producto p ON f.producto_sk = p.producto_sk
         {PROMO_JOINS}
         WHERE f.sucursal_sk = $1
           AND f.fecha_id = $2
