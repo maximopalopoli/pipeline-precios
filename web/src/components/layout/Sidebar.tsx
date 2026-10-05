@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom';
+import { DataNotice } from './DataNotice';
 
 const NAV_ITEMS = [
   { to: '/', label: 'Inicio', icon: '📊' },
@@ -40,6 +41,7 @@ export function AppLayout() {
 
       {/* Main content */}
       <main className="flex-1 overflow-auto bg-slate-50 p-6">
+        <DataNotice />
         <Outlet />
       </main>
     </div>

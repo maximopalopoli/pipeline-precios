@@ -10,6 +10,7 @@ import {
 import { useShoppingList } from '../hooks/useShoppingList';
 import { useSearchRadius } from '../hooks/useSearchRadius';
 import { RadiusNotice } from '../components/filters/RadiusNotice';
+import { QueryError } from '../components/layout/QueryError';
 import { formatCurrency } from '../lib/constants';
 import { formatUnitPrice } from '../lib/unitPrice';
 import { PriceDate } from '../components/pricing/PriceDate';
@@ -261,9 +262,13 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
   const {
     data: pages,
     isLoading,
+    isError,
+    error,
+    refetch,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    isFetchNextPageError,
   } = useInfiniteQuery({
     queryKey: ['lista-search', searchTerm, lat, lon, searchRadius],
     queryFn: ({ pageParam }) =>
@@ -349,7 +354,11 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
       {/* Results */}
       {isLoading && <p className="text-sm text-slate-400">Cargando resultados...</p>}
 
-      {!isLoading && results.length === 0 && (
+      {isError && !pages && (
+        <QueryError what="los productos" error={error} onRetry={() => refetch()} />
+      )}
+
+      {pages && results.length === 0 && (
         <p className="text-sm text-slate-400">No se encontraron productos para "{searchTerm}".</p>
       )}
 
@@ -421,6 +430,9 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
           {isFetchingNextPage ? 'Cargando...' : 'Ver más productos'}
         </button>
       )}
+      {isFetchNextPageError && (
+        <QueryError compact what="más productos" error={error} onRetry={() => fetchNextPage()} />
+      )}
 
       {/* Navigation */}
       <div className="flex items-center justify-between pt-4 border-t border-slate-200">
@@ -474,7 +486,7 @@ function Summary() {
   const productIds = Array.from(names.keys());
   const selectedCount = Object.keys(selections).length;
 
-  const { data: stores = [], isLoading, isError } = useQuery({
+  const { data: stores = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['list-totals', productIds, lat, lon, searchArea.radius],
     queryFn: () =>
       fetchListTotals({ producto_sk: productIds, lat: lat!, lon: lon!, radius: searchArea.radius }),
@@ -554,7 +566,7 @@ function Summary() {
       )}
 
       {isLoading && <p className="text-sm text-slate-400">Calculando totales...</p>}
-      {isError && <p className="text-sm text-red-600">No se pudieron calcular los totales.</p>}
+      {isError && <QueryError what="los totales de la lista" error={error} onRetry={() => refetch()} />}
       {located && !isLoading && !isError && productIds.length > 0 && stores.length === 0 && (
         <p className="text-sm text-slate-400">
           Ningún local cercano tiene precio para los productos elegidos.

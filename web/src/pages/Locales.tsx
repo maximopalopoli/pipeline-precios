@@ -7,6 +7,7 @@ import { useSearchRadius } from '../hooks/useSearchRadius';
 import { RadiusNotice } from '../components/filters/RadiusNotice';
 import { FilterPanel } from '../components/filters/FilterPanel';
 import { DataTable } from '../components/tables/DataTable';
+import { QueryError } from '../components/layout/QueryError';
 import { StoreLocatorMap } from '../components/maps/StoreLocator';
 import { formatCurrency, formatPercent } from '../lib/constants';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
@@ -44,7 +45,7 @@ const promoColumns = [
 
 function StoreExpander({ store }: { store: NearbyStore }) {
   const [isOpen, setIsOpen] = useState(false);
-  const { data: promos = [] } = useQuery({
+  const { data: promos = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['store-promos', store.sucursal_sk],
     queryFn: () => fetchStorePromos(store.sucursal_sk),
     enabled: isOpen,
@@ -65,7 +66,11 @@ function StoreExpander({ store }: { store: NearbyStore }) {
       </button>
       {isOpen && (
         <div className="px-4 pb-3">
-          {promos.length > 0 ? (
+          {isLoading ? (
+            <p className="text-sm text-slate-400">Cargando...</p>
+          ) : isError ? (
+            <QueryError compact what="las promociones del local" error={error} onRetry={() => refetch()} />
+          ) : promos.length > 0 ? (
             <DataTable data={promos} columns={promoColumns} />
           ) : (
             <p className="text-sm text-slate-400">Sin promociones activas en este local.</p>
@@ -99,7 +104,7 @@ export function Locales() {
   const searchArea = useSearchRadius(lat, lon, radius);
   const searchRadius = searchArea.radius;
 
-  const { data: stores = [], isLoading } = useQuery({
+  const { data: stores = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ['locales', lat, lon, searchRadius, cadenas],
     queryFn: () =>
       fetchLocales({
@@ -212,6 +217,8 @@ export function Locales() {
         <div className="space-y-4">
           {isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
 
+          {isError && <QueryError what="los locales" error={error} onRetry={() => refetch()} />}
+
           {lat != null && lon != null && stores.length > 0 && (
             <>
               <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
@@ -241,7 +248,7 @@ export function Locales() {
             </>
           )}
 
-          {lat != null && lon != null && !isLoading && stores.length === 0 && (
+          {lat != null && lon != null && !isLoading && !isError && stores.length === 0 && (
             <p className="text-sm text-slate-400">
               No se encontraron locales en un radio de {searchRadius} km.
             </p>

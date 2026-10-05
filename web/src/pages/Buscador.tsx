@@ -22,6 +22,7 @@ import { ProductSearch } from '../components/filters/ProductSearch';
 import { DataTable } from '../components/tables/DataTable';
 import { PriceMap } from '../components/maps/PriceMap';
 import { KpiCard } from '../components/layout/KpiCard';
+import { QueryError } from '../components/layout/QueryError';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { PriceDate } from '../components/pricing/PriceDate';
 import { CoverageNotes, FEW_STORES } from '../components/pricing/CoverageNotes';
@@ -203,7 +204,7 @@ export function Buscador() {
   };
 
   // ── Dates ──
-  const { data: dates = [] } = useQuery({
+  const { data: dates = [], isSuccess: datesLoaded, error: datesError, refetch: refetchDates } = useQuery({
     queryKey: ['buscador-dates', product?.producto_sk],
     queryFn: () => fetchBuscadorDates(product!.producto_sk),
     enabled: !!product,
@@ -227,9 +228,12 @@ export function Buscador() {
   const {
     data: storePages,
     isLoading: isLoadingSingle,
+    error: storesError,
+    refetch: refetchStores,
     fetchNextPage: fetchMoreStores,
     hasNextPage: hasMoreStores,
     isFetchingNextPage: isFetchingMoreStores,
+    isFetchNextPageError: isMoreStoresError,
   } = useInfiniteQuery({
     queryKey: ['buscador', product?.producto_sk, selectedFechaId, provincia, localidad, cadenas, userLat, userLon, searchRadius],
     queryFn: ({ pageParam }) =>
@@ -257,9 +261,12 @@ export function Buscador() {
   const {
     data: cardPages,
     isLoading: isLoadingCards,
+    error: cardsError,
+    refetch: refetchCards,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    isFetchNextPageError: isMoreCardsError,
   } = useInfiniteQuery({
     queryKey: ['product-cards', genericQuery, attributes, provincia, localidad, cadenas, userLat, userLon, searchRadius],
     queryFn: ({ pageParam }) =>
@@ -354,12 +361,22 @@ export function Buscador() {
 
           {isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
 
+          {!isGenericMode && product && datesError && (
+            <QueryError what="las fechas del producto" error={datesError} onRetry={() => refetchDates()} />
+          )}
+          {!isGenericMode && storesError && !storePages && (
+            <QueryError what="los precios del producto" error={storesError} onRetry={() => refetchStores()} />
+          )}
+          {isGenericMode && cardsError && !cardPages && (
+            <QueryError what="los productos" error={cardsError} onRetry={() => refetchCards()} />
+          )}
+
           {/* Location active indicator */}
           {location.located && (product || genericQuery) && !isLoading && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
               Mostrando resultados a menos de {searchRadius} km de tu ubicacion
               {((isGenericMode && cards.length > 0 && cards.every((c) => c.sucursales === 0))
-                || (!isGenericMode && stores.length === 0 && selectedFechaId)) && (
+                || (!isGenericMode && storePages && stores.length === 0)) && (
                 <span> — no hay locales cerca. Intenta aumentar el radio.</span>
               )}
               <RadiusNotice area={location.area} />
@@ -373,6 +390,13 @@ export function Buscador() {
               stores={isLoadingSingle ? undefined : storeSummary?.total}
               nearby={nearby}
             />
+          )}
+
+          {!isGenericMode && product && datesLoaded && dates.length === 0 && (
+            <p className="text-sm text-slate-400">Este producto no tiene precios publicados.</p>
+          )}
+          {!isGenericMode && storePages && stores.length === 0 && !location.located && (
+            <p className="text-sm text-slate-400">No hay precios de este producto para los filtros elegidos.</p>
           )}
 
           {/* ── Single-product results ── */}
@@ -440,6 +464,9 @@ export function Buscador() {
                     >
                       {isFetchingMoreStores ? 'Cargando...' : 'Ver más locales'}
                     </button>
+                  )}
+                  {isMoreStoresError && (
+                    <QueryError compact what="más locales" error={storesError} onRetry={() => fetchMoreStores()} />
                   )}
                 </div>
               </div>
@@ -544,13 +571,16 @@ export function Buscador() {
                   {isFetchingNextPage ? 'Cargando...' : 'Ver más resultados'}
                 </button>
               )}
+              {isMoreCardsError && (
+                <QueryError compact what="más resultados" error={cardsError} onRetry={() => fetchNextPage()} />
+              )}
               {moreCards && !hasNextPage && (
                 <span>Usá los filtros de tipo, marca o tamaño para acotar la búsqueda.</span>
               )}
             </div>
           )}
 
-          {isGenericMode && !isLoading && cards.length === 0 && (
+          {isGenericMode && cardPages && cards.length === 0 && (
             <p className="text-sm text-slate-400">
               No se encontraron productos para "{genericQuery}".
             </p>
