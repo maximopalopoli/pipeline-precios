@@ -154,6 +154,7 @@ export interface UnitPrice {
 export type PromoCondition = 'cantidad' | 'medio_pago' | 'programa' | 'horario';
 
 export interface StorePrice {
+  sucursal_sk: number;
   cadena: string;
   tipo: string;
   localidad: string;
@@ -191,7 +192,19 @@ export const fetchBuscador = (params: {
   lat?: number;
   lon?: number;
   radius?: number;
-}) => api.get<StorePrice[]>('/buscador', { params }).then(r => r.data);
+  limit?: number;
+  offset?: number;
+}) => api.get<StorePricePage>('/buscador', { params }).then(r => r.data);
+
+/** One page of a product's store prices; the count and prices summarize every store. */
+export interface StorePricePage {
+  sucursales: StorePrice[];
+  total: number;
+  hay_mas: boolean;
+  precio_min: number | null;
+  precio_max: number | null;
+  precio_promedio: number | null;
+}
 
 // ── Generic Buscador (search by text across all matching products) ──
 export interface GenericStorePrice {

@@ -3,6 +3,7 @@
 import asyncio
 import re
 from datetime import date
+from decimal import Decimal
 
 import pytest
 
@@ -132,15 +133,36 @@ def test_a_nearby_store_is_listed_behind_many_cheaper_far_ones(day):
     day.store(12, 0.5, price=900)
     nearby_id = day.stores
 
-    offers = asyncio.run(
+    offers = _store_page(day, Location(*OBELISCO, 1))["sucursales"]
+
+    assert [o["id_sucursal"] for o in offers] == [nearby_id]
+
+
+def test_store_pages_follow_the_price_and_summarize_every_store(day):
+    for n in range(205):
+        day.store(10, 0.5, price=100 + n % 3)
+    pages = [_store_page(day, Location(*OBELISCO, 1), offset=offset) for offset in (0, 200, 205)]
+
+    listed = [o["sucursal_sk"] for page in pages for o in page["sucursales"]]
+    assert [len(page["sucursales"]) for page in pages] == [200, 5, 0]
+    assert len(set(listed)) == 205
+    prices = [o["mejor_precio"] for page in pages for o in page["sucursales"]]
+    assert prices == sorted(prices)
+    assert [page["hay_mas"] for page in pages] == [True, False, False]
+    # The summary covers every store, whichever page is read.
+    for page in pages:
+        assert (page["total"], page["precio_min"], page["precio_max"]) == (205, 100, 102)
+        assert page["precio_promedio"] == Decimal("101.00")
+
+
+def _store_page(day, location, offset=0):
+    return asyncio.run(
         buscador.get_buscador(
             producto_sk=day.producto_sk, fecha_id=FECHA_ID,
             provincia=None, localidad=None, cadenas=None,
-            location=Location(*OBELISCO, 1),
+            location=location, limit=200, offset=offset,
         )
     )
-
-    assert [o["id_sucursal"] for o in offers] == [nearby_id]
 
 
 def test_distance_is_exact_not_a_square(day):

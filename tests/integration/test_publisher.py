@@ -608,9 +608,9 @@ def test_missing_store_prices_are_carried_until_the_store_returns(
                 buscador.get_buscador(
                     producto_sk=product_b, fecha_id=fecha_id,
                     provincia=None, localidad=None, cadenas=None,
-                    location=None,
+                    location=None, limit=50, offset=0,
                 )
-            )
+            )["sucursales"]
             assert len(offers) == 1
             assert offers[0]["fecha_precio"] == "2026-03-15"
 

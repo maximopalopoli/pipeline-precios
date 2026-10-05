@@ -30,6 +30,7 @@ import { byUnitPrice, formatUnitPrice } from '../lib/unitPrice';
 
 // ── Single-product table columns ──
 const CARDS_PER_PAGE = 50;
+const STORES_PER_PAGE = 50;
 // The API's deepest page offset; past it the search should be narrowed.
 const MAX_CARDS_OFFSET = 1000;
 
@@ -246,9 +247,16 @@ export function Buscador() {
     ? { lat: userLat, lon: userLon, radius: searchRadius } : {};
 
   // ── Single-product results ──
-  const { data: stores = [], isLoading: isLoadingSingle } = useQuery({
+  // Cheapest first, a page at a time; the summary covers every store.
+  const {
+    data: storePages,
+    isLoading: isLoadingSingle,
+    fetchNextPage: fetchMoreStores,
+    hasNextPage: hasMoreStores,
+    isFetchingNextPage: isFetchingMoreStores,
+  } = useInfiniteQuery({
     queryKey: ['buscador', product?.producto_sk, selectedFechaId, provincia, localidad, cadenas, userLat, userLon, searchRadius],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       fetchBuscador({
         producto_sk: product!.producto_sk,
         fecha_id: selectedFechaId!,
@@ -256,9 +264,16 @@ export function Buscador() {
         localidad: localidad || undefined,
         cadenas: cadenas.length > 0 ? cadenas : undefined,
         ...locationParams,
+        limit: STORES_PER_PAGE,
+        offset: pageParam,
       }),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) =>
+      last.hay_mas ? pages.length * STORES_PER_PAGE : undefined,
     enabled: !!product && !!selectedFechaId && searchArea.ready,
   });
+  const stores = storePages?.pages.flatMap((page) => page.sucursales) ?? [];
+  const storeSummary = storePages?.pages[0];
 
   // ── Product cards of a search (latest published day) ──
   // The panel and location choose the stores behind each card's price.
@@ -433,7 +448,7 @@ export function Buscador() {
           {!isGenericMode && detail && detail.producto_sk === product?.producto_sk && (
             <ProductHeader
               detail={detail}
-              stores={isLoadingSingle ? undefined : stores.length}
+              stores={isLoadingSingle ? undefined : storeSummary?.total}
               nearby={nearby}
             />
           )}
@@ -464,12 +479,12 @@ export function Buscador() {
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <KpiCard label="Locales" value={String(stores.length)} />
-                <KpiCard label="Precio min." value={formatCurrency(Math.min(...stores.map((s) => s.mejor_precio)))} />
-                <KpiCard label="Precio max." value={formatCurrency(Math.max(...stores.map((s) => s.mejor_precio)))} />
+                <KpiCard label="Locales" value={String(storeSummary?.total ?? stores.length)} />
+                <KpiCard label="Precio min." value={formatCurrency(storeSummary?.precio_min ?? cheapest.mejor_precio)} />
+                <KpiCard label="Precio max." value={formatCurrency(storeSummary?.precio_max ?? cheapest.mejor_precio)} />
                 <KpiCard
                   label="Precio prom."
-                  value={formatCurrency(stores.reduce((sum, s) => sum + s.mejor_precio, 0) / stores.length)}
+                  value={formatCurrency(storeSummary?.precio_promedio ?? cheapest.mejor_precio)}
                 />
               </div>
 
@@ -488,6 +503,23 @@ export function Buscador() {
                 </div>
                 {showMap && <PriceMap stores={stores} />}
                 <DataTable data={stores} columns={columns} />
+                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                  <span>
+                    {stores.length === storeSummary?.total
+                      ? `${stores.length} ${stores.length === 1 ? 'local' : 'locales'}`
+                      : `Los ${stores.length} más baratos de ${storeSummary?.total} locales`}
+                    {showMap && hasMoreStores ? '; el mapa muestra solo estos' : ''}
+                  </span>
+                  {hasMoreStores && (
+                    <button
+                      onClick={() => fetchMoreStores()}
+                      disabled={isFetchingMoreStores}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                    >
+                      {isFetchingMoreStores ? 'Cargando...' : 'Ver más locales'}
+                    </button>
+                  )}
+                </div>
               </div>
             </>
           )}

@@ -128,13 +128,15 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
     assert asyncio.run(buscador.get_product_dates(producto_sk)) == [
         {"fecha_id": fecha_id, "fecha": "2026-03-17"}
     ]
-    store_offers = asyncio.run(
+    store_page = asyncio.run(
         buscador.get_buscador(
             producto_sk=producto_sk, fecha_id=fecha_id,
             provincia=None, localidad=None, cadenas=None,
-            location=None,
+            location=None, limit=50, offset=0,
         )
     )
+    assert (store_page["total"], store_page["hay_mas"]) == (1, False)
+    store_offers = store_page["sucursales"]
     assert len(store_offers) == 1
     assert store_offers[0]["mejor_precio"] == Decimal("80.00")
     assert store_offers[0]["leyenda_promo"] == "20% de descuento"
