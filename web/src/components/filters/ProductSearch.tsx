@@ -25,7 +25,8 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
 
   const { data: products = [] } = useQuery({
     queryKey: ['products', debouncedQuery],
-    queryFn: () => searchProducts({ q: debouncedQuery, limit: SUGGESTIONS }),
+    queryFn: () =>
+      searchProducts({ q: debouncedQuery, limit: SUGGESTIONS }).then((page) => page.productos),
     enabled: debouncedQuery.length >= 2,
   });
 

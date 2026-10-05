@@ -184,13 +184,17 @@ def _facets(q, **filters):
     return asyncio.run(products.search_facets(q, **filters))
 
 
-def _search(q, **filters):
+def _page(q, **filters):
     filters = {
         "tipo": None, "marca": None, "contenido": None, "unidad": None,
         "provincia": None, "localidad": None, "cadenas": None,
-        "location": None, "limit": 50, **filters,
+        "location": None, "limit": 50, "offset": 0, **filters,
     }
     return asyncio.run(products.search_products(q, **filters))
+
+
+def _search(q, **filters):
+    return _page(q, **filters)["productos"]
 
 
 def _names(q, **filters):
@@ -258,6 +262,19 @@ def test_a_scanned_code_is_found_without_its_leading_zeros(catalog):
     catalog.price("ean:0000077900124", 1, 10)
 
     assert [row["id_producto"] for row in _search("7790-0124")] == ["0000077900124"]
+
+
+def test_pages_cover_every_result_once_and_say_when_more_follow(catalog):
+    everything = [row["producto_sk"] for row in _search("la serenisima")]
+    assert len(everything) == 2
+
+    pages = [_page("la serenisima", limit=1, offset=offset) for offset in range(3)]
+
+    assert [[row["producto_sk"] for row in page["productos"]] for page in pages] == [
+        everything[:1], everything[1:], [],
+    ]
+    assert [page["hay_mas"] for page in pages] == [True, False, False]
+    assert _page("de") == {"productos": [], "hay_mas": False}
 
 
 def test_a_query_of_short_words_finds_the_type_it_names(catalog):

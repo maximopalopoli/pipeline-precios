@@ -25,6 +25,8 @@ MAX_WORDS = 8
 TRIGRAM_LENGTH = 3
 # Facet values listed per attribute, the most common first.
 MAX_FACET_VALUES = 20
+# Search results are paged; deeper pages mean the query should be narrowed.
+MAX_SEARCH_OFFSET = 1000
 # SEPA zero-pads every product code to 13 digits, so a scanned EAN-8 or a
 # 12-digit UPC-A is stored with leading zeros.
 BARCODE_LENGTHS = range(8, 14)
@@ -170,8 +172,14 @@ async def search_products(
     cadenas: list[str] | None = Query(None),
     location: Location | None = Depends(optional_location),
     limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=MAX_SEARCH_OFFSET),
 ):
     """Products with a price in the latest published day, ranked for reading.
+
+    Returns one page, ``{"productos": [...], "hay_mas": bool}``: ``offset``
+    skips earlier results, and ``hay_mas`` says whether a further page has
+    any.  Every tie is broken by product, so within one published day the
+    pages neither repeat nor skip a product.
 
     An exact EAN comes first, then products of the type the query names
     ("leche" before dulce de leche), then of the longest type it names as
@@ -186,7 +194,7 @@ async def search_products(
     """
     matching = _Matching(q)
     if matching.empty:
-        return []
+        return {"productos": [], "hay_mas": False}
     param = matching.param
     q_ref = matching.query()
     conditions = [
@@ -239,7 +247,8 @@ async def search_products(
             FROM candidatos p
             WHERE {" AND ".join(conditions)}
             ORDER BY orden
-            LIMIT {param(limit)}
+            -- One more than the page, to tell whether another page follows.
+            LIMIT {param(limit + 1)} OFFSET {param(offset)}
         )
         SELECT r.*, precios.*
         FROM resultados r
@@ -255,7 +264,7 @@ async def search_products(
         """,
         *matching.params,
     )
-    return [
+    productos = [
         {
             "producto_sk": r["producto_sk"],
             "id_producto": r["id_producto"],
@@ -275,8 +284,9 @@ async def search_products(
             "sucursales": r["sucursales"],
             "cobertura": coverage_notes(r["es_ean"], r["id_producto"], r["sucursales"]),
         }
-        for r in rows
+        for r in rows[:limit]
     ]
+    return {"productos": productos, "hay_mas": len(rows) > limit}
 
 
 @router.get("/products/search/facets")

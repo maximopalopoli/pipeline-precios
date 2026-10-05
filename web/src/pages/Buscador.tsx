@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
 import {
   fetchBuscador,
@@ -29,6 +29,10 @@ import { formatCurrency } from '../lib/constants';
 import { byUnitPrice, formatUnitPrice } from '../lib/unitPrice';
 
 // ── Single-product table columns ──
+const CARDS_PER_PAGE = 50;
+// The API's deepest page offset; past it the search should be narrowed.
+const MAX_CARDS_OFFSET = 1000;
+
 const col = createColumnHelper<StorePrice>();
 const columns = [
   col.accessor('cadena', { header: 'Cadena' }),
@@ -258,9 +262,16 @@ export function Buscador() {
 
   // ── Product cards of a search (latest published day) ──
   // The panel and location choose the stores behind each card's price.
-  const { data: cards = [], isLoading: isLoadingCards } = useQuery({
+  // Pages follow the search's ranking; "Ver más" appends the next one.
+  const {
+    data: cardPages,
+    isLoading: isLoadingCards,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
     queryKey: ['product-cards', genericQuery, attributes, provincia, localidad, cadenas, userLat, userLon, searchRadius],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       searchProducts({
         q: genericQuery!,
         ...attributes,
@@ -268,9 +279,18 @@ export function Buscador() {
         localidad: localidad || undefined,
         cadenas: cadenas.length > 0 ? cadenas : undefined,
         ...locationParams,
+        limit: CARDS_PER_PAGE,
+        offset: pageParam,
       }),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => {
+      const offset = pages.length * CARDS_PER_PAGE;
+      return last.hay_mas && offset <= MAX_CARDS_OFFSET ? offset : undefined;
+    },
     enabled: !!genericQuery && searchArea.ready,
   });
+  const cards = cardPages?.pages.flatMap((page) => page.productos) ?? [];
+  const moreCards = cardPages?.pages.at(-1)?.hay_mas ?? false;
 
   // Sizes are compared per kg or l, among the cards loaded.
   const comparable = cards.some((card) => card.precio_unitario_desde);
@@ -552,6 +572,27 @@ export function Buscador() {
                   <CoverageNotes notes={card.cobertura} sucursales={card.sucursales} nearby={nearby} />
                 </button>
               ))}
+            </div>
+          )}
+
+          {isGenericMode && cards.length > 0 && (
+            <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
+              <span>
+                {cards.length} {cards.length === 1 ? 'producto' : 'productos'}
+                {moreCards ? ' — hay más' : ''}
+              </span>
+              {hasNextPage && (
+                <button
+                  onClick={() => fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {isFetchingNextPage ? 'Cargando...' : 'Ver más resultados'}
+                </button>
+              )}
+              {moreCards && !hasNextPage && (
+                <span>Usá los filtros de tipo, marca o tamaño para acotar la búsqueda.</span>
+              )}
             </div>
           )}
 

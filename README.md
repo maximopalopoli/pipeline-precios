@@ -251,7 +251,11 @@ Data rules the pipeline relies on:
   `sucursales`, how many stores carry it. With `lat`, `lon` and `radius` (km,
   default 1), only nearby stores count; `provincia`, `localidad` and
   repeated `cadenas` keys choose stores the same way. The order stays the
-  same. `GET /products/search/facets` takes the same query and attribute
+  same. The response is one page, `{"productos": [...], "hay_mas": bool}`:
+  `limit` (default 50, at most 100) and `offset` (at most 1000) choose it,
+  and `hay_mas` says whether another page follows. Ties are broken by
+  product, so pages of one published day never repeat or skip a product.
+  `GET /products/search/facets` takes the same query and attribute
   filters and returns `tipos`, `marcas` and `tamanos` with product counts;
   each facet ignores its own filter and applies the others.
   `GET /products/{producto_sk}` is the product detail: catalog name and

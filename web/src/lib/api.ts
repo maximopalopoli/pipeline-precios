@@ -53,7 +53,14 @@ export const searchProducts = (params: ProductAttributeFilters & {
   lon?: number;
   radius?: number;
   limit?: number;
-}) => api.get<Product[]>('/products/search', { params }).then(r => r.data);
+  offset?: number;
+}) => api.get<ProductSearchPage>('/products/search', { params }).then(r => r.data);
+
+/** One page of a product search; ``hay_mas`` says whether another page follows. */
+export interface ProductSearchPage {
+  productos: Product[];
+  hay_mas: boolean;
+}
 
 /** A product as the catalog names it, next to what its source published. */
 export interface ProductDetail {
