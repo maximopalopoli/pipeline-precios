@@ -9,14 +9,11 @@ from api.db import close_pool, get_pool
 from api.routes import (
     buscador,
     buscador_ean,
-    evolucion,
     filters,
     health,
-    kpis,
     locales,
     ofertas,
     products,
-    variaciones,
 )
 
 
@@ -37,12 +34,9 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/api")
-app.include_router(kpis.router, prefix="/api")
 app.include_router(filters.router, prefix="/api")
 app.include_router(products.router, prefix="/api")
 app.include_router(buscador.router, prefix="/api")
-app.include_router(evolucion.router, prefix="/api")
-app.include_router(variaciones.router, prefix="/api")
 app.include_router(ofertas.router, prefix="/api")
 app.include_router(locales.router, prefix="/api")
 app.include_router(buscador_ean.router, prefix="/api")

@@ -28,6 +28,8 @@ from enum import Enum
 from typing import Any
 
 import psycopg2
+
+from etl.quality_thresholds import QualityThresholds, thresholds_from_environment
 import structlog
 
 log = structlog.get_logger(__name__)
@@ -92,11 +94,11 @@ _EXPECTED_PRODUCTOS_COLS = {
     "productos_leyenda_promo2",
 }
 
-# Minimum number of product rows expected per run (protects against truncated ZIPs)
-DEFAULT_MIN_PRODUCTOS = 100
-
-# Maximum allowed relative drift in productos row count vs previous run
-DEFAULT_MAX_DRIFT = 0.20  # 20 %
+# Minimum product rows per run (protects against truncated ZIPs) and maximum
+# relative drift against the previous run; SEPA_MIN_PRODUCT_ROWS and
+# SEPA_MAX_ROW_COUNT_DRIFT override them in run_all().
+DEFAULT_MIN_PRODUCTOS = QualityThresholds.min_product_rows
+DEFAULT_MAX_DRIFT = QualityThresholds.max_row_count_drift
 
 # Argentina bounding box (approximate, covers continental + Malvinas)
 _ARG_LAT_MIN = -55.1
@@ -181,8 +183,8 @@ def run_all(
     conn: "psycopg2.connection",
     run_id: int,
     *,
-    min_productos: int = DEFAULT_MIN_PRODUCTOS,
-    max_drift: float = DEFAULT_MAX_DRIFT,
+    min_productos: int | None = None,
+    max_drift: float | None = None,
 ) -> list[CheckResult]:
     """
     Run all quality checks for *run_id* against the stg_* tables.
@@ -198,17 +200,24 @@ def run_all(
     run_id:
         ingestion_runs.id whose staging rows are being validated.
     min_productos:
-        Minimum number of productos rows required to pass the row-count check.
+        Minimum number of productos rows required to pass the row-count check
+        (default: ``SEPA_MIN_PRODUCT_ROWS`` or 100).
     max_drift:
         Maximum allowed relative change in productos count vs the previous
-        completed run (0.20 = 20 %).
+        completed run of the same regional scope (default:
+        ``SEPA_MAX_ROW_COUNT_DRIFT`` or 0.20 = 20 %).
 
     Returns
     -------
     list[CheckResult] — one entry per check, in order.
     """
+    thresholds = thresholds_from_environment()
+    if min_productos is None:
+        min_productos = thresholds.min_product_rows
+    if max_drift is None:
+        max_drift = thresholds.max_row_count_drift
     logger = log.bind(run_id=run_id)
-    logger.info("quality.checks.start")
+    logger.info("quality.checks.start", min_productos=min_productos, max_drift=max_drift)
     product_rows = _product_row_count(conn, run_id)
 
     results: list[CheckResult] = [
@@ -475,7 +484,8 @@ def check_row_count_drift(
     current_rows: int | None = None,
 ) -> CheckResult:
     """
-    Compare productos row count vs the previous completed run.
+    Compare productos row count vs the previous completed full run of the
+    same regional scope (an AMBA run holds about half the national rows).
 
     A drift greater than *max_drift* (default 20 %) suggests an unusual
     data volume change (missing chains, truncated ZIP, or data explosion).
@@ -493,10 +503,13 @@ def check_row_count_drift(
                AND ir.status = 'completed'
                AND ir.is_partial = FALSE
                AND ir.rows_productos_raw IS NOT NULL
+               AND ir.regional_scope IS NOT DISTINCT FROM (
+                   SELECT regional_scope FROM ingestion_runs WHERE id = %s
+               )
              ORDER BY ir.id DESC
              LIMIT 1
             """,
-            (run_id,),
+            (run_id, run_id),
         )
         row = cur.fetchone()
 

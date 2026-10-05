@@ -7,8 +7,6 @@ export const fetchProvinces = () => api.get<string[]>('/filters/provinces').then
 export const fetchChains = () => api.get<string[]>('/filters/chains').then(r => r.data);
 export const fetchLocalities = (province: string) =>
   api.get<string[]>('/filters/localities', { params: { province } }).then(r => r.data);
-export const fetchDateRange = () =>
-  api.get<{ min_fecha: string | null; max_fecha: string | null }>('/filters/date-range').then(r => r.data);
 
 // ── Products ──
 export interface Product {
@@ -41,28 +39,6 @@ export interface HealthData {
 }
 export const fetchHealth = () => api.get<HealthData>('/health').then(r => r.data);
 
-// ── KPIs ──
-export interface WeeklyVariation {
-  valor: number | null;
-  fecha_inicio: string | null;
-  fecha_fin: string | null;
-  series_comparadas: number;
-  metodologia: string;
-}
-
-export interface KpiData {
-  /** @deprecated Use variacion_semanal.valor instead. */
-  inflacion_semanal: number | null;
-  variacion_semanal: WeeklyVariation;
-  total_productos: number;
-  total_sucursales: number;
-  pct_promo: number | null;
-  top_subas: { producto: string; provincia: string; variacion: number }[];
-  top_bajas: { producto: string; provincia: string; variacion: number }[];
-  best_chain: { cadena: string; pct_promo: number } | null;
-}
-export const fetchKpis = () => api.get<KpiData>('/kpis').then(r => r.data);
-
 // ── Buscador ──
 export interface BuscadorDate {
   fecha_id: number;
@@ -70,6 +46,9 @@ export interface BuscadorDate {
 }
 export const fetchBuscadorDates = (producto_sk: number) =>
   api.get<BuscadorDate[]>('/buscador/dates', { params: { producto_sk } }).then(r => r.data);
+
+/** Requirement read from a promotion legend (migration 037). */
+export type PromoCondition = 'cantidad' | 'medio_pago' | 'programa' | 'horario';
 
 export interface StorePrice {
   cadena: string;
@@ -85,6 +64,10 @@ export interface StorePrice {
   /** Source-provided promotion conditions; null means they were not supplied. */
   leyenda_promo: string | null;
   tiene_descuento: boolean;
+  /** Lower promotion that requires a condition; never part of mejor_precio. */
+  precio_condicional: number | null;
+  leyenda_condicional: string | null;
+  condicion: PromoCondition | null;
   lat: number | null;
   lon: number | null;
   sucursal: string;
@@ -115,6 +98,10 @@ export interface GenericStorePrice {
   precio_promo: number | null;
   leyenda_promo: string | null;
   tiene_descuento: boolean;
+  /** Lower promotion that requires a condition; never part of mejor_precio. */
+  precio_condicional: number | null;
+  leyenda_condicional: string | null;
+  condicion: PromoCondition | null;
   lat: number | null;
   lon: number | null;
 }
@@ -154,6 +141,10 @@ export interface EanStorePrice {
   precio_promo: number | null;
   leyenda_promo: string | null;
   tiene_descuento: boolean;
+  /** Lower promotion that requires a condition; never part of mejor_precio. */
+  precio_condicional: number | null;
+  leyenda_condicional: string | null;
+  condicion: PromoCondition | null;
   lat: number | null;
   lon: number | null;
 }
@@ -171,36 +162,6 @@ export const fetchBuscadorEan = (params: {
   radius?: number;
 }) => api.get<EanStorePrice[]>('/buscador/ean', { params }).then(r => r.data);
 
-// ── Evolucion ──
-export interface PricePoint {
-  fecha: string;
-  precio_lista: number | null;
-  precio_promo: number | null;
-  observaciones: number;
-}
-export const fetchEvolucion = (params: { producto_sk: number; provincia?: string }) =>
-  api.get<PricePoint[]>('/evolucion', { params }).then(r => r.data);
-
-// ── Variaciones ──
-export interface VariacionItem {
-  productos_descripcion: string;
-  productos_marca: string | null;
-  provincia: string;
-  precio_anterior: number | null;
-  precio_actual: number | null;
-  variacion: number | null;
-}
-export interface VariacionesResponse {
-  min_fecha: string | null;
-  max_fecha: string | null;
-  items: VariacionItem[];
-}
-export const fetchVariaciones = (params: {
-  mode: 'lista' | 'promo';
-  provincia?: string;
-  cadenas?: string[];
-}) => api.get<VariacionesResponse>('/variaciones', { params }).then(r => r.data);
-
 // ── Ofertas ──
 export interface OfertaItem {
   producto: string;
@@ -211,6 +172,8 @@ export interface OfertaItem {
   precio_lista: number;
   fecha_precio: string;
   precio_promo: number;
+  /** Requirement of this promotion; null when it states none. */
+  condicion: PromoCondition | null;
   descuento_pct: number;
 }
 export interface OfertasResponse {
@@ -250,6 +213,8 @@ export interface StorePromo {
   precio_lista: number;
   fecha_precio: string;
   precio_promo: number;
+  /** Requirement of this promotion; null when it states none. */
+  condicion: PromoCondition | null;
   leyenda_promo: string | null;
   descuento_pct: number;
 }

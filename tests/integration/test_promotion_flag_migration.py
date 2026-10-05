@@ -2,18 +2,44 @@
 
 from pathlib import Path
 
-from etl.load.warehouse_loader import _ensure_partition
+import pytest
 
 
 _ROOT = Path(__file__).parent.parent.parent
+_MIGRATIONS = sorted((_ROOT / "db" / "migrations").glob("*.sql"))
 _SEEDS = _ROOT / "db" / "seeds" / "seed_provincias.sql"
 _MIGRATION = _ROOT / "db" / "migrations" / "018_normalize_effective_promotion_flags.sql"
+_SCHEMA = "promotion_flag_upgrade_test"
 
 
-def test_promotion_flag_migration_corrects_historical_facts_and_aggregates(pg_conn):
-    _ensure_partition(pg_conn, 20260315)
+@pytest.fixture()
+def pre_promotion_flag_schema(pg_conn):
+    """Create an isolated schema at migration 017, before aggregates were retired."""
     with pg_conn.cursor() as cur:
+        cur.execute(f"CREATE SCHEMA {_SCHEMA}")
+        cur.execute(f"SET search_path TO {_SCHEMA}")
+        for migration in _MIGRATIONS:
+            if migration.name >= "018_":
+                break
+            cur.execute(migration.read_text())
         cur.execute(_SEEDS.read_text())
+    pg_conn.commit()
+
+    try:
+        yield pg_conn
+    finally:
+        pg_conn.rollback()
+        with pg_conn.cursor() as cur:
+            cur.execute("SET search_path TO public")
+            cur.execute(f"DROP SCHEMA {_SCHEMA} CASCADE")
+        pg_conn.commit()
+
+
+def test_promotion_flag_migration_corrects_historical_facts_and_aggregates(
+    pre_promotion_flag_schema,
+):
+    pg_conn = pre_promotion_flag_schema
+    with pg_conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)

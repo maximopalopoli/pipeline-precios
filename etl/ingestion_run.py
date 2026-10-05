@@ -154,8 +154,54 @@ def open_ingestion_run(
     if row is None:
         raise ValueError(f"Raw file {raw_file_id} does not exist.")
     run_id: int = row[0]
+    delete_superseded_partial_pending(conn, run_id=run_id)
     conn.commit()
     return run_id
+
+
+def delete_superseded_partial_pending(conn, *, run_id: int) -> int:
+    """Delete pending facts of completed partial runs except the newest one.
+
+    A partial run never publishes, so its pending facts would otherwise stay
+    forever.  The newest completed partial run keeps its rows for local
+    inspection until another partial run completes.  Running and failed runs
+    are never touched, so a retry still finds its rows.  The caller owns the
+    transaction.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT superseded.id
+            FROM (
+                SELECT id
+                FROM ingestion_runs
+                WHERE is_partial = TRUE AND status = 'completed'
+                ORDER BY id DESC
+                OFFSET 1
+            ) AS superseded
+            WHERE EXISTS (
+                SELECT 1 FROM pending_fact_precios AS pending
+                WHERE pending.run_id = superseded.id
+            )
+            ORDER BY superseded.id
+            """
+        )
+        partial_run_ids = [row[0] for row in cur.fetchall()]
+        if not partial_run_ids:
+            return 0
+        cur.execute(
+            "DELETE FROM pending_fact_precios WHERE run_id = ANY(%s)",
+            (partial_run_ids,),
+        )
+        rows_deleted = cur.rowcount
+    if rows_deleted:
+        log.info(
+            "ingestion_run.partial_pending_deleted",
+            run_id=run_id,
+            partial_run_ids=partial_run_ids,
+            rows_deleted=rows_deleted,
+        )
+    return rows_deleted
 
 
 def record_source_date(conn, run_id: int, fecha_fuente: date | None) -> None:

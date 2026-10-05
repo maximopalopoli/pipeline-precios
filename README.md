@@ -50,8 +50,8 @@ Daily ZIP (~300 MB)
           └──────┬───────┘
                  │
           ┌──────▼───────┐
-          │  Aggregate    │  etl/load/aggregator.py
-          │               │  → agg_precios_diarios, v_variacion_precios
+          │  Publish      │  etl/load/publisher.py
+          │  (Atomic)     │  → daily partition swap + carried-forward stores
           └───────────────┘
 ```
 
@@ -63,7 +63,6 @@ Daily ZIP (~300 MB)
 | **Staging** | `stg_comercios`, `stg_sucursales`, `stg_productos` |
 | **Dimensions** | `dim_comercio`, `dim_sucursal`, `dim_producto`, `dim_provincia`, `dim_fecha` |
 | **Fact** | `fact_precios` (monthly parents with daily leaves; grain: product × store × day) |
-| **Aggregations** | `agg_precios_diarios`, view `v_variacion_precios` |
 | **Quality** | `rejection_counts` (every rejection per run, source and reason), `rejected_rows` (bounded sample) |
 
 ## Project Structure
@@ -83,7 +82,6 @@ pipeline-precios/
 │   ├── transform/fact_builder.py     # Fact DataFrame construction
 │   ├── load/warehouse_loader.py      # Bulk COPY + upserts + pending facts
 │   ├── load/publisher.py             # Atomic daily publication
-│   ├── load/aggregator.py            # Daily aggregate recalculation
 │   ├── ingestion_run.py, ingestion_lock.py, reconciliation.py  # Run records, per-date lock, counts
 │   ├── rejection_counts.py           # Rejection counts per reason + bounded samples
 │   ├── development_ingestion.py      # Bounded partial development mode
@@ -255,7 +253,9 @@ Measured over the files for 2026-03-17, 03-19, 03-20, 03-23, 03-24 and 09-22:
   2 or more chains cover 67% of all rows. Fresh products are largely absent or
   use internal codes.
 - Promo 1 appears on 3% of rows and promo 2 on 0.9%; legends are store
-  discounts, not bank or wallet promotions.
+  discounts, not bank or wallet promotions. Legends carry the promotion's
+  validity dates and sometimes a requirement (mostly several units); the API
+  keeps conditional promotions out of the store price (migration 037).
 - About 3,160 physical stores with prices per day, nearly all with plausible
   coordinates. AMBA (CABA + Buenos Aires province within 60 km of the Obelisco)
   is 1,834 stores and 52% of the rows.
@@ -339,15 +339,15 @@ Stores are classified while `sucursales.csv` is staged:
 | `AR-C` without plausible coordinates (all of CABA lies inside the radius) | In scope |
 | `AR-B` without plausible coordinates | Unlocated: counted and left out, never guessed |
 
-Store discovery (`/api/locales`, province, chain and locality filters, and the
-store KPI) includes only stores with prices on the latest published day. Older
+Store discovery (`/api/locales` and the province, chain and locality filters)
+includes only stores with prices on the latest published day. Older
 national facts may remain under fact retention without appearing as current
 stores.
 
-The shopper-facing product-date, daily-offer and store-promotion routes read
-published facts directly. They continue to work when the analytics aggregate
-table is empty; the remaining analytics routes still use that table until
-their planned retirement.
+The product-date, daily-offer and store-promotion routes read published
+facts and run metadata directly. The analytics aggregates (weekly variation
+KPI, Evolución, Variaciones) were retired in migration 035; price history
+lives in the archived source ZIPs.
 
 When a store has no valid price rows in a later file, publication carries its
 last prices from the newest available snapshot of the same regional scope.
@@ -471,10 +471,32 @@ rows_productos_without_keys = SUM(rejection_counts.row_count) for fact_key_resol
 ```
 
 For an explicit partial development run, `rows_fact_published` is zero and its
-pending rows remain isolated for local inspection, and its bounds leave source
-rows out on purpose; those are the intended exceptions to the full-run
-invariants. A missing `rows_productos_out_of_scope` or
+bounds leave source rows out on purpose; those are the intended exceptions to
+the full-run invariants. Its pending rows remain isolated for local inspection.
+Only the newest completed partial run keeps them: opening any run deletes the
+pending rows of older completed partial runs
+(`ingestion_run.partial_pending_deleted`). Running and failed runs keep theirs. A missing `rows_productos_out_of_scope` or
 `rows_productos_store_unlisted` counts as zero.
+
+### Quality limits
+
+Reconciliation proves that every row is accounted for; configurable limits
+decide whether the losses are acceptable. Before the partition swap, a full
+run fails (and the previous snapshot stays visible) when any share exceeds its
+limit:
+
+| Share | Limit (default) |
+|-------|-----------------|
+| `rows_productos_rejected / rows_productos_raw` | `SEPA_MAX_REJECTED_SHARE` (0.01) |
+| `rows_productos_without_keys / rows_productos_valid` | `SEPA_MAX_WITHOUT_KEYS_SHARE` (0.01) |
+| `rows_productos_store_unlisted / (rows_productos_store_unlisted + rows_productos_raw)` | `SEPA_MAX_STORE_UNLISTED_SHARE` (0.05) |
+
+The 2026-03-23 and 03-24 AMBA replays measured 0.03%, 0% and 0.75%. The error
+message names each exceeded share; the event `quality.rejection_thresholds_checked`
+logs all three. Partial development runs are not checked. Staging quality
+checks also read `SEPA_MIN_PRODUCT_ROWS` (critical, default 100) and
+`SEPA_MAX_ROW_COUNT_DRIFT` (warning, default 0.20 against the previous full run
+of the same regional scope).
 
 ### Rejected rows
 
@@ -552,7 +574,7 @@ make etl-baseline RUN_ID=5
 # Compare only completed replays that share source ZIP and bounded policy.
 make compare-etl-baselines RUN_ID=5
 
-# Representative /api/kpis, /api/buscador and /api/ofertas plans.
+# Representative /api/buscador and /api/ofertas plans.
 # Requires at least one full published snapshot; bounded runs publish no facts.
 make audit-queries FECHA_ID=20260922
 ```
@@ -574,8 +596,8 @@ The local bounded-ingestion mode is opt-in and uses `SEPA_DEV_CHAIN_KEYS`
 `SEPA_DEV_MAX_PRODUCT_ROWS` (a positive integer). Both settings are validated
 strictly and are disabled when unset. When either is set, CLI and Airflow mark
 the run as partial, retain
-its staging and pending facts only for local inspection, and publish zero facts
-and aggregates. They may add dimension keys required by their pending facts but
+its staging and pending facts only for local inspection, and publish zero
+facts. They may add dimension keys required by their pending facts but
 never overwrite attributes already visible from a full run. Partial runs skip
 retention and never make the source look fully ingested, so a later full
 ingestion of the same ZIP remains eligible. Their audit records retain both
@@ -680,34 +702,49 @@ All variables have development defaults. Set them in `.env` (see
 | `AIRFLOW_SECRET_KEY` | Airflow secret key |
 | `SEPA_FACT_CHUNK_SIZE` | Staged product rows per fact batch (default 300000) |
 | `SEPA_PENDING_FACT_COMMIT_EVERY_CHUNKS` | Pending-fact chunks written per commit (default 5) |
-| `SEPA_FACT_RETENTION_DAYS` | Opt-in; keeps the ingested date plus the previous N days of facts and drops older daily partitions and their daily aggregates. Use at least 7 while the weekly KPI, Variaciones and Evolución views exist; the first run on a long history deletes old aggregates in one transaction. Off when unset |
+| `SEPA_FACT_RETENTION_DAYS` | Opt-in; keeps the ingested date plus the previous N days of facts and drops older daily partitions (and months left empty). 3 covers rectifications and rollback. Off when unset |
 | `SEPA_STAGING_RETENTION_DAYS` | Opt-in; removes staging rows of terminal runs older than N days. Off when unset |
 | `SEPA_RAW_RETENTION_DAYS` | Opt-in; removes local ZIPs older than N days only when a verified archived copy exists. Frees space only when the archive is on another disk. Off when unset |
 | `SEPA_ARCHIVE_DIR` | Source ZIP archive folder (default: `archive` inside the raw directory) |
 | `SEPA_REJECTED_SAMPLE_ROWS` | Rejected rows kept in `rejected_rows` per run, source and reason (default 100; 0 keeps only counts) |
+| `SEPA_MAX_REJECTED_SHARE`, `SEPA_MAX_WITHOUT_KEYS_SHARE`, `SEPA_MAX_STORE_UNLISTED_SHARE` | Largest share of rejected, keyless and unlisted-store product rows a full run may lose before publication fails (defaults 0.01, 0.01, 0.05; see Quality limits) |
+| `SEPA_MIN_PRODUCT_ROWS`, `SEPA_MAX_ROW_COUNT_DRIFT` | Critical minimum of staged product rows (default 100) and warning drift against the previous full run of the same scope (default 0.20) |
 | `SEPA_REGIONAL_SCOPE` | Opt-in regional scope of a published ingestion; `amba` is the only value. Changing it re-ingests the current file. Off when unset |
 | `SEPA_DEV_CHAIN_KEYS`, `SEPA_DEV_MAX_PRODUCT_ROWS` | Bounded development ingestion (see above) |
 
 ### Airflow
 
-The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily (two runs
-to capture government rectifications). Its tasks run download → duplicate check
+The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily,
+Argentine time (two runs to capture government rectifications). Each run
+ingests the Argentine calendar day it was scheduled for (Airflow's
+`data_interval_end`, not `ds`, which for the 06:30 run is the previous day).
+Before a chain delivers, the weekday URL still serves last week's ZIP: its hash
+is already published, so the 06:30 run stops at the duplicate check, and the
+10:30 run ingests the new or rectified file. Its tasks run download → duplicate check
 → staging → quality checks → dimensions → pending facts → atomic publication.
 If a task fails after opening an ingestion run, the DAG records the terminal
 failure before Airflow retries or marks the task as failed.
 
+The Airflow containers receive the production settings listed in
+`docker-compose.yml` from `.env` (regional scope, chunk size, retention,
+rejection sample, quality limits and alert email); a blank value means unset.
+The partial development bounds `SEPA_DEV_*` are deliberately not passed, so a
+local `.env` cannot make the scheduled ingestion publish nothing.
+`SEPA_ARCHIVE_DIR` is not passed either: under Airflow the archive is
+`data/archive`, so mount another disk there to keep it off the database disk.
+A unit test fails when the ETL reads a setting the compose file does not pass.
+
 ### Web app
 
 Pages: Home, Buscador (price finder with map), BuscadorEAN (lookup by barcode),
-Lista (shopping list), Ofertas (daily promotions), Locales (nearby store
-locator), Evolución and Variaciones. The last two, along with the KPIs on Home,
-are analytics views being retired: detailed price history is out of scope for
-the comparator. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
+Lista (shopping list), Ofertas (daily promotions) and Locales (nearby store
+locator). Home shows the latest publication and the quality of the last
+ingestion. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
 TanStack Table/Query for data.
 
 ## Technical Decisions
 
-- **Idempotency:** SHA-256 plus a completed ingestion to skip duplicate downloads; failed runs remain retryable; `ON CONFLICT DO UPDATE` on dimensions and facts; re-runs recalculate aggregates
+- **Idempotency:** SHA-256 plus a completed ingestion to skip duplicate downloads; failed runs remain retryable; `ON CONFLICT DO UPDATE` on dimensions; a rectified day replaces its whole daily partition atomically
 - **Untyped staging:** all VARCHAR to preserve raw data and simplify quality check debugging
 - **SCD Type 1:** dimensions update with last-write-wins (no change history)
 - **Daily fact leaves:** `fact_precios` uses monthly parents with daily leaves, so a prepared day can be atomically replaced and retention can drop whole expired days (and fully expired months) without row-by-row deletes.
@@ -726,7 +763,9 @@ TanStack Table/Query for data.
 | Source measurements (price change rate, AMBA share, coverage) | Done |
 | Storage: current snapshot in PostgreSQL, history in archived ZIPs | Next |
 | AMBA regional scope | Done |
-| Carry-forward of missing stores and price date on offers | Done; full replay pending |
+| Carry-forward of missing stores and price date on offers | Done; full replay with an absent chain pending |
+| Shopper price routes independent of analytics aggregates | Done |
+| Analytics route and aggregate retirement | Done |
 | Canonical product catalog and shopping-list comparison UI | Planned |
 | Promotions and discounts beyond SEPA's list/promo prices | Later |
 

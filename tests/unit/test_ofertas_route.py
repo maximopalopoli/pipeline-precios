@@ -26,4 +26,5 @@ def test_offers_group_prices_by_their_promotion_conditions(monkeypatch):
     assert captured["params"] == (date(2026, 3, 17),)
     assert "AS leyenda_promo" in captured["sql"]
     assert "GROUP BY p.productos_descripcion, p.productos_marca," in captured["sql"]
-    assert "f.precio_promo1 < f.precio_lista" in captured["sql"]
+    assert "AS condicion" in captured["sql"]
+    assert "f.tiene_promo = TRUE AND ps.cualquiera IS NOT NULL" in captured["sql"]

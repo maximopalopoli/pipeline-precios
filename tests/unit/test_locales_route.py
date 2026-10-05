@@ -22,7 +22,5 @@ def test_store_promos_only_requests_effective_discounts(monkeypatch):
     assert (
         "AS leyenda_promo" in captured["sql"]
     )
-    assert (
-        "AND LEAST(CASE WHEN f.precio_promo1 > 0 "
-        "AND f.precio_promo1 < f.precio_lista " in captured["sql"]
-    )
+    assert "AS condicion" in captured["sql"]
+    assert "AND ps.cualquiera IS NOT NULL" in captured["sql"]

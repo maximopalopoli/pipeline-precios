@@ -39,6 +39,9 @@ const columns = [
       <PromotionDetails
         tieneDescuento={info.row.original.tiene_descuento}
         leyendaPromo={info.row.original.leyenda_promo}
+        precioCondicional={info.row.original.precio_condicional}
+        leyendaCondicional={info.row.original.leyenda_condicional}
+        condicionAparte={info.row.original.condicion}
         compact
       />
     ),
@@ -324,6 +327,9 @@ export function Buscador() {
                 <PromotionDetails
                   tieneDescuento={cheapest.tiene_descuento}
                   leyendaPromo={cheapest.leyenda_promo}
+                  precioCondicional={cheapest.precio_condicional}
+                  leyendaCondicional={cheapest.leyenda_condicional}
+                  condicionAparte={cheapest.condicion}
                 />
                 <PriceDate value={cheapest.fecha_precio} />
               </div>
@@ -440,6 +446,9 @@ export function Buscador() {
                                 <PromotionDetails
                                   tieneDescuento={item.tiene_descuento}
                                   leyendaPromo={item.leyenda_promo}
+                                  precioCondicional={item.precio_condicional}
+                                  leyendaCondicional={item.leyenda_condicional}
+                                  condicionAparte={item.condicion}
                                   compact
                                 />
                               </div>

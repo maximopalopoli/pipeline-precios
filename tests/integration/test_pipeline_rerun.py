@@ -6,14 +6,12 @@ Scenario
 The SEPA source occasionally publishes a corrected file for a date that was
 already processed.  When the pipeline re-runs for that same fecha_id it must:
 
-1. Upsert fact_precios — existing rows are overwritten with the rectified
-   prices (ON CONFLICT DO UPDATE).
-2. Re-compute agg_precios_diarios for that fecha_id — the stale aggregates
-   are replaced by fresh values derived from the rectified facts.
+upsert fact_precios, overwriting existing rows with the rectified prices
+(ON CONFLICT DO UPDATE).
 
-This test exercises warehouse_load + aggregate called twice for the same
-fecha_id with different price data and asserts that the final state of the
-agg table reflects the second (rectified) run, not the first.
+This test exercises warehouse_load called twice for the same fecha_id with
+different price data and asserts that the final facts reflect the second
+(rectified) run, not the first.
 """
 
 from datetime import date
@@ -25,7 +23,6 @@ import pytest
 from etl.transform.cleaner import ComercioRow, ProductoRow, SucursalRow
 from etl.transform.fact_builder import build_fact_df
 from etl.load.warehouse_loader import load as warehouse_load
-from etl.load.aggregator import aggregate
 
 _SEEDS = Path(__file__).parent.parent.parent / "db" / "seeds" / "seed_provincias.sql"
 
@@ -113,7 +110,7 @@ def _producto(id_producto="AAA", id_sucursal=10, precio=Decimal("100.00"),
 
 
 def _run_once(pg_conn, run_id, productos, sucursales=None):
-    """Simulate one pipeline execution: warehouse load + aggregation."""
+    """Simulate one pipeline execution: warehouse load."""
     c = [_comercio()]
     s = sucursales or [_sucursal()]
     fact_df = build_fact_df(
@@ -122,9 +119,7 @@ def _run_once(pg_conn, run_id, productos, sucursales=None):
     ).df
     warehouse_load(pg_conn, comercios=c, sucursales=s, productos=productos,
                    fact_df=fact_df, run_id=run_id)
-    agg = aggregate(pg_conn, FECHA_ID)
     pg_conn.commit()
-    return agg
 
 
 # ---------------------------------------------------------------------------
@@ -134,16 +129,16 @@ def _run_once(pg_conn, run_id, productos, sucursales=None):
 
 class TestPipelineRerun:
 
-    def test_second_run_overwrites_aggregates(self, pg_conn, run_id):
+    def test_second_run_overwrites_facts(self, pg_conn, run_id):
         """
         First run at price=100, second run (rectification) at price=200.
-        After the second run, agg must show avg=200, not the stale 100.
+        After the second run, the fact must show 200, not the stale 100.
         """
         _run_once(pg_conn, run_id, [_produto := _producto(precio=Decimal("100.00"))])
 
         with pg_conn.cursor() as cur:
             cur.execute(
-                "SELECT precio_lista_avg FROM agg_precios_diarios WHERE fecha_id=%s",
+                "SELECT precio_lista FROM fact_precios WHERE fecha_id=%s",
                 (FECHA_ID,),
             )
             assert float(cur.fetchone()[0]) == pytest.approx(100.0)
@@ -153,27 +148,27 @@ class TestPipelineRerun:
 
         with pg_conn.cursor() as cur:
             cur.execute(
-                "SELECT precio_lista_avg FROM agg_precios_diarios WHERE fecha_id=%s",
+                "SELECT precio_lista FROM fact_precios WHERE fecha_id=%s",
                 (FECHA_ID,),
             )
             assert float(cur.fetchone()[0]) == pytest.approx(200.0)
 
-    def test_second_run_no_duplicate_agg_rows(self, pg_conn, run_id):
-        """Re-running must not duplicate rows in agg_precios_diarios."""
+    def test_second_run_no_duplicate_fact_rows(self, pg_conn, run_id):
+        """Re-running must not duplicate rows in fact_precios."""
         _run_once(pg_conn, run_id, [_producto(precio=Decimal("100.00"))])
         _run_once(pg_conn, run_id, [_producto(precio=Decimal("150.00"))])
 
         with pg_conn.cursor() as cur:
             cur.execute(
-                "SELECT COUNT(*) FROM agg_precios_diarios WHERE fecha_id=%s",
+                "SELECT COUNT(*) FROM fact_precios WHERE fecha_id=%s",
                 (FECHA_ID,),
             )
             assert cur.fetchone()[0] == 1
 
-    def test_second_run_updates_promo_stats(self, pg_conn, run_id):
+    def test_second_run_updates_promotions(self, pg_conn, run_id):
         """
         First run: no promo.  Second run: promo added (rectification).
-        cantidad_con_promo must reflect the second run.
+        The fact's promotion must reflect the second run.
         """
         suc = [_sucursal(id_sucursal=10)]
 
@@ -183,10 +178,10 @@ class TestPipelineRerun:
 
         with pg_conn.cursor() as cur:
             cur.execute(
-                "SELECT cantidad_con_promo FROM agg_precios_diarios WHERE fecha_id=%s",
+                "SELECT tiene_promo FROM fact_precios WHERE fecha_id=%s",
                 (FECHA_ID,),
             )
-            assert cur.fetchone()[0] == 0
+            assert cur.fetchone()[0] is False
 
         # Second run adds a promo
         _run_once(pg_conn, run_id,
@@ -195,18 +190,18 @@ class TestPipelineRerun:
 
         with pg_conn.cursor() as cur:
             cur.execute(
-                "SELECT cantidad_con_promo, precio_promo_avg"
-                " FROM agg_precios_diarios WHERE fecha_id=%s",
+                "SELECT tiene_promo, precio_promo1"
+                " FROM fact_precios WHERE fecha_id=%s",
                 (FECHA_ID,),
             )
             row = cur.fetchone()
-        assert row[0] == 1
+        assert row[0] is True
         assert float(row[1]) == pytest.approx(80.0)
 
     def test_second_run_with_extra_sucursal(self, pg_conn, run_id):
         """
-        Rectified file adds a new branch.  Aggregates must reflect the
-        combined data, and the row count in agg must stay at 1 (same grain).
+        Rectified file adds a new branch.  Facts must reflect the combined
+        data: one row per product × branch, with the rectified price.
         """
         suc10 = _sucursal(id_sucursal=10, provincia="AR-C")
         suc20 = _sucursal(id_sucursal=20, provincia="AR-C")
@@ -226,13 +221,12 @@ class TestPipelineRerun:
 
         with pg_conn.cursor() as cur:
             cur.execute(
-                "SELECT cantidad_obs, precio_lista_avg, precio_lista_min, precio_lista_max"
-                " FROM agg_precios_diarios WHERE fecha_id=%s",
+                "SELECT COUNT(*), MIN(precio_lista), MAX(precio_lista)"
+                " FROM fact_precios WHERE fecha_id=%s",
                 (FECHA_ID,),
             )
             row = cur.fetchone()
 
-        assert row[0] == 2                           # two observations
-        assert float(row[1]) == pytest.approx(150.0) # avg(120, 180)
-        assert float(row[2]) == pytest.approx(120.0) # min
-        assert float(row[3]) == pytest.approx(180.0) # max
+        assert row[0] == 2                           # two branches
+        assert float(row[1]) == pytest.approx(120.0) # rectified branch 10
+        assert float(row[2]) == pytest.approx(180.0) # new branch 20

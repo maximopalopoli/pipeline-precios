@@ -4,17 +4,9 @@ from fastapi import APIRouter, Query
 
 from api.db import fetch
 from api.price_date import PRICE_DATE_SQL
-from api.pricing import (
-    discount_promo_label_sql,
-    discount_promo_price_sql,
-    effective_price_sql,
-)
+from api.pricing import OFFER_PRICE_COLUMNS, PROMO_JOINS, STORE_PRICE
 
 router = APIRouter()
-
-BEST_PRICE = effective_price_sql()
-DISCOUNT_PROMO_PRICE = discount_promo_price_sql()
-DISCOUNT_PROMO_LABEL = discount_promo_label_sql()
 
 
 def _distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -94,11 +86,8 @@ async def get_buscador(
             pr.nombre                 AS provincia,
             f.precio_lista,
             {PRICE_DATE_SQL}          AS fecha_precio,
-            {BEST_PRICE}              AS mejor_precio,
-            f.precio_lista - {BEST_PRICE} AS ahorro,
-            {DISCOUNT_PROMO_PRICE}    AS precio_promo,
-            {DISCOUNT_PROMO_LABEL}    AS leyenda_promo,
-            ({DISCOUNT_PROMO_PRICE} IS NOT NULL) AS tiene_descuento,
+            f.precio_lista - {STORE_PRICE} AS ahorro,
+            {OFFER_PRICE_COLUMNS},
             s.sucursales_latitud      AS lat,
             s.sucursales_longitud     AS lon,
             s.sucursales_nombre       AS sucursal
@@ -106,6 +95,7 @@ async def get_buscador(
         JOIN dim_sucursal  s  ON f.sucursal_sk  = s.sucursal_sk
         JOIN dim_comercio  c  ON s.comercio_sk  = c.comercio_sk
         JOIN dim_provincia pr ON s.provincia_sk  = pr.provincia_sk
+        {PROMO_JOINS}
         WHERE {where}
         ORDER BY mejor_precio ASC
         LIMIT 200
@@ -203,10 +193,7 @@ async def get_buscador_generic(
             pr.nombre                 AS provincia,
             f.precio_lista,
             {PRICE_DATE_SQL}          AS fecha_precio,
-            {BEST_PRICE}              AS mejor_precio,
-            {DISCOUNT_PROMO_PRICE}    AS precio_promo,
-            {DISCOUNT_PROMO_LABEL}    AS leyenda_promo,
-            ({DISCOUNT_PROMO_PRICE} IS NOT NULL) AS tiene_descuento,
+            {OFFER_PRICE_COLUMNS},
             s.sucursales_latitud      AS lat,
             s.sucursales_longitud     AS lon
         FROM fact_precios f
@@ -214,6 +201,7 @@ async def get_buscador_generic(
         JOIN dim_sucursal  s  ON f.sucursal_sk = s.sucursal_sk
         JOIN dim_comercio  c  ON s.comercio_sk = c.comercio_sk
         JOIN dim_provincia pr ON s.provincia_sk = pr.provincia_sk
+        {PROMO_JOINS}
         WHERE {where}
         ORDER BY c.comercio_bandera_nombre, mejor_precio ASC
         LIMIT 1000

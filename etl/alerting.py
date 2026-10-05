@@ -75,9 +75,10 @@ def _send_email(
     fecha: date | None,
     recipients: list[str],
 ) -> None:
-    from_addr = os.environ.get("ALERT_EMAIL_FROM", "sepa-pipeline@noreply")
-    smtp_host = os.environ.get("SMTP_HOST", "localhost")
-    smtp_port = int(os.environ.get("SMTP_PORT", "25"))
+    # Docker Compose passes unset settings as blank strings.
+    from_addr = os.environ.get("ALERT_EMAIL_FROM", "").strip() or "sepa-pipeline@noreply"
+    smtp_host = os.environ.get("SMTP_HOST", "").strip() or "localhost"
+    smtp_port = int(os.environ.get("SMTP_PORT", "").strip() or "25")
     smtp_user = os.environ.get("SMTP_USER", "")
     smtp_password = os.environ.get("SMTP_PASSWORD", "")
     use_tls = os.environ.get("SMTP_USE_TLS", "").lower() in ("true", "1")

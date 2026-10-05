@@ -10,7 +10,7 @@ Execution order
 4.  Quality checks (CRITICAL failures abort the run)
 5.  Clean and load dimensions from staging
 6.  Stream products by chunk into pending facts using dimension caches
-7.  Publish facts and aggregates atomically, then mark the run completed
+7.  Publish facts atomically, then mark the run completed
 
 Usage
 -----
@@ -416,7 +416,7 @@ def run(
         )
         conn.commit()
 
-        # ── 8. Publish facts + aggregations atomically ───────────────────────
+        # ── 8. Publish facts atomically ──────────────────────────────────────
         active_timer = StageTimer(logger, "publication")
         active_timer.start()
 
@@ -439,7 +439,6 @@ def run(
 
         active_timer.finish(
             rows_fact=publication.rows_fact,
-            rows_aggregated=publication.rows_aggregated,
             is_partial=development_policy.enabled,
             rows_fact_pending=reconciliation.rows_fact_pending,
             rows_fact_published=reconciliation.rows_fact_published,
@@ -502,7 +501,6 @@ def run(
                     "pipeline.fact_retention.completed",
                     cutoff=str(retention_policy.fact_cutoff(dl.fecha_datos)),
                     partitions=retention_result.partitions,
-                    aggregate_rows_deleted=retention_result.aggregate_rows_deleted,
                 )
         except Exception:
             # Publication is already committed. Retention is best-effort and

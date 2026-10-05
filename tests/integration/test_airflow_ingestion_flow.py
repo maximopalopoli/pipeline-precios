@@ -2,9 +2,10 @@
 
 import importlib.util
 import sys
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from types import ModuleType
+from zoneinfo import ZoneInfo
 
 import psycopg
 import pytest
@@ -34,7 +35,7 @@ class _Task:
 
 class _DAG:
     def __init__(self, *args, **kwargs):
-        pass
+        self.kwargs = kwargs
 
     def __enter__(self):
         return self
@@ -76,6 +77,9 @@ def dag_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "airflow.models", airflow_models)
     monkeypatch.setitem(sys.modules, "airflow.operators", ModuleType("airflow.operators"))
     monkeypatch.setitem(sys.modules, "airflow.operators.python", airflow_python)
+    pendulum = ModuleType("pendulum")
+    pendulum.datetime = lambda *args, tz: datetime(*args, tzinfo=ZoneInfo(tz))
+    monkeypatch.setitem(sys.modules, "pendulum", pendulum)
 
     spec = importlib.util.spec_from_file_location("test_airflow_dag", _DAG_PATH)
     assert spec is not None and spec.loader is not None
@@ -174,19 +178,43 @@ def _published_snapshot(conn, run_id: int):
             """,
             (run_id,),
         )
-        facts = cur.fetchall()
-        cur.execute(
-            """
-            SELECT producto_sk, provincia_sk, cantidad_obs, precio_lista_avg,
-                   precio_lista_min, precio_lista_max, cantidad_con_promo
-            FROM agg_precios_diarios
-            WHERE fecha_id = %s
-            ORDER BY producto_sk, provincia_sk
-            """,
-            (int(_RUN_DATE.strftime("%Y%m%d")),),
-        )
-        aggregates = cur.fetchall()
-    return facts, aggregates
+        return cur.fetchall()
+
+
+def test_dag_schedule_uses_argentine_time(dag_module):
+    start_date = dag_module.dag.kwargs["start_date"]
+
+    assert start_date.tzinfo.key == "America/Argentina/Buenos_Aires"
+    assert dag_module.dag.kwargs["schedule"] == "30 6,10 * * *"
+
+
+@pytest.mark.parametrize("utc_hour", [9, 13])
+def test_both_scheduled_runs_download_the_argentine_day(
+    dag_module, monkeypatch, tmp_path, utc_hour
+):
+    from etl.extract import downloader
+
+    requested: list[date] = []
+
+    def download(conn, raw_dir, fecha):
+        requested.append(fecha)
+        return DownloadResult(1, "x.zip", tmp_path / "x.zip", "abc", 1, fecha, True)
+
+    class _Connection:
+        def close(self):
+            pass
+
+    monkeypatch.setattr(dag_module, "_db_connect", _Connection)
+    monkeypatch.setattr(dag_module.Variable, "get", lambda *a, **k: str(tmp_path))
+    monkeypatch.setattr(downloader, "download", download)
+
+    # 06:30 and 10:30 in Argentina are 09:30 and 13:30 UTC.
+    info = dag_module.download_zip(
+        datetime(2026, 3, 17, utc_hour, 30, tzinfo=timezone.utc)
+    )
+
+    assert requested == [date(2026, 3, 17)]
+    assert info["fecha_logica"] == "2026-03-17"
 
 
 def test_airflow_tasks_stream_and_publish_staged_products(
@@ -645,7 +673,6 @@ def test_airflow_applies_enabled_retention_after_publication(
             run_id=kwargs["run_id"],
             fecha_id=kwargs["fecha_id"],
             rows_fact=0,
-            rows_aggregated=0,
         ),
     )
     ti = _TaskInstance(

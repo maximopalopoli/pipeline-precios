@@ -7,9 +7,9 @@ from time import perf_counter
 
 import structlog
 
-from etl.load.aggregator import aggregate
 from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation, record_product_reconciliation
+from etl.quality_thresholds import check_rejection_thresholds
 from etl.publication_metrics import record_publication_metrics
 
 log = structlog.get_logger(__name__)
@@ -20,7 +20,6 @@ class PublicationResult:
     run_id: int
     fecha_id: int
     rows_fact: int
-    rows_aggregated: int
     rows_carried_forward: int = 0
 
 
@@ -32,8 +31,9 @@ def complete_partial_run(
 ) -> PublicationResult:
     """Complete a bounded run without exposing its pending facts.
 
-    Pending facts stay scoped to the run for local inspection. No visible facts
-    or aggregates are changed, and the reconciliation records zero published
+    Pending facts stay scoped to the run for local inspection until a later
+    partial run completes and another run opens. No visible facts
+    are changed, and the reconciliation records zero published
     facts so the audit trail cannot present this as a full snapshot.
     """
     if not reconciliation.is_partial:
@@ -69,7 +69,7 @@ def complete_partial_run(
         if cur.rowcount != 1:
             raise ValueError(f"Cannot complete full ingestion run {run_id} as partial")
     result = PublicationResult(
-        run_id=run_id, fecha_id=0, rows_fact=0, rows_aggregated=0
+        run_id=run_id, fecha_id=0, rows_fact=0
     )
     log.info("publisher.partial_run_completed", **result.__dict__)
     return result
@@ -82,11 +82,11 @@ def publish_pending_facts(
     fecha_id: int,
     reconciliation: ProductReconciliation,
 ) -> PublicationResult:
-    """Replace one day's visible facts and aggregates from a pending run.
+    """Replace one day's visible facts from a pending run.
 
     The caller owns the transaction.  It must commit this function as one unit
     or roll it back if any statement fails.  Pending rows are only deleted once
-    they have been copied into ``fact_precios`` and their aggregates rebuilt.
+    they have been copied into ``fact_precios``.
     """
     with conn.cursor() as cur:
         cur.execute("SELECT is_partial FROM ingestion_runs WHERE id = %s", (run_id,))
@@ -121,6 +121,9 @@ def publish_pending_facts(
             f"pending facts, found {total_rows}"
         )
 
+    # Before the partition swap, so a rejected file costs nothing to publish.
+    check_rejection_thresholds(conn, run_id, reconciliation)
+
     source_fecha_id = _find_carry_source(conn, run_id=run_id, fecha_id=fecha_id)
     partition_swap_seconds, insert_facts_seconds, rows_source, rows_carried = _swap_daily_partition(
         conn, run_id=run_id, fecha_id=fecha_id, source_fecha_id=source_fecha_id
@@ -133,8 +136,7 @@ def publish_pending_facts(
         )
 
     rows_fact = rows_source + rows_carried
-
-    agg = aggregate(conn, fecha_id)
+    promo_legends_registered = _register_promo_legends(conn, fecha_id=fecha_id)
 
     record_product_reconciliation(conn, run_id, reconciliation)
 
@@ -163,8 +165,6 @@ def publish_pending_facts(
         run_id=run_id,
         delete_existing_seconds=0,
         insert_facts_seconds=insert_facts_seconds,
-        aggregate_delete_seconds=agg.delete_seconds,
-        aggregate_insert_seconds=agg.insert_seconds,
         cleanup_seconds=cleanup_seconds,
         partition_swap_seconds=partition_swap_seconds,
     )
@@ -173,19 +173,48 @@ def publish_pending_facts(
         run_id=run_id,
         fecha_id=fecha_id,
         rows_fact=rows_fact,
-        rows_aggregated=agg.rows_upserted,
         rows_carried_forward=rows_carried,
     )
     log.info(
         "publisher.pending_facts_published",
         **result.__dict__,
+        promo_legends_registered=promo_legends_registered,
         partition_swap_seconds=round(partition_swap_seconds, 3),
         insert_facts_seconds=round(insert_facts_seconds, 3),
-        aggregate_delete_seconds=round(agg.delete_seconds, 3),
-        aggregate_insert_seconds=round(agg.insert_seconds, 3),
         cleanup_seconds=round(cleanup_seconds, 3),
     )
     return result
+
+
+def _register_promo_legends(conn, *, fecha_id: int) -> int:
+    """Store the reading of each new promotion legend of the published day.
+
+    The API reads a promotion's requirement and validity from
+    ``promo_leyendas``; a day has few distinct legends, so reading each once
+    here keeps those regular expressions out of every price query.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO promo_leyendas (leyenda, condicion, vigencia_desde, vigencia_hasta)
+            SELECT
+                leyenda,
+                pipeline_promo_condition(leyenda),
+                pipeline_promo_valid_from(leyenda),
+                pipeline_promo_valid_until(leyenda)
+            FROM (
+                SELECT leyenda_promo1 FROM fact_precios
+                WHERE fecha_id = %s AND tiene_promo
+                UNION
+                SELECT leyenda_promo2 FROM fact_precios
+                WHERE fecha_id = %s AND tiene_promo
+            ) AS legends(leyenda)
+            WHERE leyenda IS NOT NULL
+            ON CONFLICT (leyenda) DO NOTHING
+            """,
+            (fecha_id, fecha_id),
+        )
+        return cur.rowcount
 
 
 def _find_carry_source(conn, *, run_id: int, fecha_id: int) -> int | None:

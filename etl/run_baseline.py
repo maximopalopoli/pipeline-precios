@@ -36,7 +36,6 @@ class RunBaseline:
     staged_rows_per_second: float | None
     publication_insert_facts_seconds: float | None = None
     publication_partition_swap_seconds: float | None = None
-    publication_aggregate_insert_seconds: float | None = None
 
     def as_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -51,8 +50,7 @@ _BASELINE_SQL = """
         run.rows_productos_selected, run.rows_productos_raw,
         run.rows_productos_valid, run.rows_productos_rejected,
         run.rows_fact_pending, run.rows_fact_published,
-        publication.insert_facts_seconds, publication.partition_swap_seconds,
-        publication.aggregate_insert_seconds
+        publication.insert_facts_seconds, publication.partition_swap_seconds
     FROM ingestion_runs AS run
     JOIN raw_files AS raw ON raw.id = run.raw_file_id
     LEFT JOIN ingestion_fact_load_metrics AS metrics ON metrics.run_id = run.id
@@ -94,7 +92,7 @@ def load_run_baseline(conn: Any, *, run_id: int) -> RunBaseline | None:
         source_size_bytes, chunk_size, fact_load_elapsed, fact_load_peak_rss, fact_load_chunks,
         rows_source, rows_selected, rows_raw, rows_valid,
         rows_rejected, rows_pending, rows_published,
-        publication_insert, publication_swap, publication_aggregate_insert,
+        publication_insert, publication_swap,
     ) = row
     elapsed = _as_float(duration_seconds)
     staged_rows_per_second = (
@@ -119,7 +117,6 @@ def load_run_baseline(conn: Any, *, run_id: int) -> RunBaseline | None:
         staged_rows_per_second=staged_rows_per_second,
         publication_insert_facts_seconds=_as_float(publication_insert),
         publication_partition_swap_seconds=_as_float(publication_swap),
-        publication_aggregate_insert_seconds=_as_float(publication_aggregate_insert),
     )
 
 
