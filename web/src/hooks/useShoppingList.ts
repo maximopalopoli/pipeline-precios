@@ -1,10 +1,10 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { GenericStorePrice } from '../lib/api';
+import type { Product } from '../lib/api';
 
 interface ShoppingListState {
   items: string[];
-  selections: Record<number, GenericStorePrice>; // item index → selected product
+  selections: Record<number, Product>; // item index → selected product
   currentStep: number; // 0 = build list, 1..N = select product, N+1 = summary
   lat: number | null;
   lon: number | null;
@@ -13,7 +13,7 @@ interface ShoppingListState {
   addItem: (term: string) => void;
   removeItem: (index: number) => void;
   clearItems: () => void;
-  setSelection: (index: number, product: GenericStorePrice) => void;
+  setSelection: (index: number, product: Product) => void;
   clearSelection: (index: number) => void;
   setStep: (step: number) => void;
   nextStep: () => void;
@@ -45,7 +45,7 @@ export const useShoppingList = create<ShoppingListState>()(
           const selections = { ...s.selections };
           delete selections[index];
           // Re-index selections after removal
-          const reindexed: Record<number, GenericStorePrice> = {};
+          const reindexed: Record<number, Product> = {};
           for (const [k, v] of Object.entries(selections)) {
             const ki = Number(k);
             reindexed[ki > index ? ki - 1 : ki] = v;

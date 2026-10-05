@@ -1,11 +1,10 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import {
-  fetchBuscadorGeneric,
-  fetchBuscadorGenericDates,
   fetchListTotals,
   geocode,
-  type GenericStorePrice,
+  searchProducts,
+  type Product,
   type StoreListTotal,
 } from '../lib/api';
 import { useShoppingList } from '../hooks/useShoppingList';
@@ -14,6 +13,7 @@ import { RadiusNotice } from '../components/filters/RadiusNotice';
 import { formatCurrency } from '../lib/constants';
 import { formatUnitPrice } from '../lib/unitPrice';
 import { PriceDate } from '../components/pricing/PriceDate';
+import { CoverageNotes } from '../components/pricing/CoverageNotes';
 
 // ── Step 0: Build shopping list ──
 
@@ -240,13 +240,14 @@ function BuildList() {
 
 // ── Step 1..N: Select product for each item ──
 
+const CHOICES_PER_PAGE = 20;
+
 function SelectProduct({ itemIndex }: { itemIndex: number }) {
   const { items, selections, setSelection, setStep, nextStep, prevStep, lat, lon, radius } =
     useShoppingList();
 
   const searchTerm = items[itemIndex];
   const currentSelection = selections[itemIndex] ?? null;
-  const [expandedChains, setExpandedChains] = useState<Set<string>>(new Set());
 
   const totalItems = items.length;
   const completedCount = Object.keys(selections).length;
@@ -256,40 +257,25 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
   const searchRadius = searchArea.radius;
   const locationParams = lat != null && lon != null ? { lat, lon, radius: searchRadius } : {};
 
-  // Get available dates
-  const { data: dates = [] } = useQuery({
-    queryKey: ['lista-dates', searchTerm],
-    queryFn: () => fetchBuscadorGenericDates(searchTerm),
-    enabled: !!searchTerm,
+  // Products ranked as the search ranks them, priced at nearby stores.
+  const {
+    data: pages,
+    isLoading,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useInfiniteQuery({
+    queryKey: ['lista-search', searchTerm, lat, lon, searchRadius],
+    queryFn: ({ pageParam }) =>
+      searchProducts({ q: searchTerm, ...locationParams, limit: CHOICES_PER_PAGE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (last, all) => (last.hay_mas ? all.length * CHOICES_PER_PAGE : undefined),
+    enabled: !!searchTerm && searchArea.ready,
   });
+  const results = pages?.pages.flatMap((page) => page.productos) ?? [];
+  const nearby = lat != null && lon != null;
 
-  const fechaId = dates.length > 0 ? dates[0].fecha_id : null;
-
-  // Search results
-  const { data: results = [], isLoading } = useQuery({
-    queryKey: ['lista-search', searchTerm, fechaId, lat, lon, searchRadius],
-    queryFn: () =>
-      fetchBuscadorGeneric({
-        q: searchTerm,
-        fecha_id: fechaId!,
-        ...locationParams,
-      }),
-    enabled: !!searchTerm && !!fechaId && searchArea.ready,
-  });
-
-  // Group results by chain
-  const chainGroups = groupByChain(results);
-
-  const toggleChain = (cadena: string) => {
-    setExpandedChains((prev) => {
-      const next = new Set(prev);
-      if (next.has(cadena)) next.delete(cadena);
-      else next.add(cadena);
-      return next;
-    });
-  };
-
-  const handleSelect = (product: GenericStorePrice) => {
+  const handleSelect = (product: Product) => {
     setSelection(itemIndex, product);
   };
 
@@ -341,11 +327,7 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
         </h2>
         {currentSelection && (
           <p className="text-sm text-blue-700 mt-1">
-            Seleccionado: {currentSelection.producto}
-            {currentSelection.marca ? ` — ${currentSelection.marca}` : ''}{' '}
-            en {currentSelection.cadena} ({currentSelection.sucursal}) —{' '}
-            <span className="font-medium">{formatCurrency(currentSelection.mejor_precio)}</span>
-            {' '}<PriceDate value={currentSelection.fecha_precio} />
+            Seleccionado: <span className="font-medium">{currentSelection.nombre}</span>
             <button
               onClick={() => useShoppingList.getState().clearSelection(itemIndex)}
               className="ml-2 text-blue-500 hover:text-blue-700 underline"
@@ -367,100 +349,77 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
       {/* Results */}
       {isLoading && <p className="text-sm text-slate-400">Cargando resultados...</p>}
 
-      {!isLoading && results.length === 0 && fechaId && (
+      {!isLoading && results.length === 0 && (
         <p className="text-sm text-slate-400">No se encontraron productos para "{searchTerm}".</p>
       )}
 
       {results.length > 0 && (
-        <div className="space-y-2">
-          {chainGroups.map((group) => (
-            <div key={group.cadena} className="rounded-lg border border-slate-200 overflow-hidden">
-              <button
-                onClick={() => toggleChain(group.cadena)}
-                className="w-full flex items-center justify-between px-4 py-3 bg-slate-50 hover:bg-slate-100 transition-colors text-left"
+        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+          {results.map((product) => {
+            const isSelected = currentSelection?.producto_sk === product.producto_sk;
+            return (
+              <li
+                key={product.producto_sk}
+                className={`flex items-center justify-between gap-3 px-4 py-2.5 text-sm ${
+                  isSelected ? 'bg-emerald-50' : ''
+                }`}
               >
-                <div>
-                  <span className="font-medium text-slate-900">{group.cadena}</span>
-                  <span className="ml-2 text-sm text-slate-500">
-                    ({group.count} {group.count === 1 ? 'resultado' : 'resultados'})
-                  </span>
+                <div className="flex-1">
+                  <p className="text-slate-800">{product.nombre}</p>
+                  <p className="text-xs text-slate-400">
+                    {product.nombre !== product.descripcion && `${product.descripcion} · `}
+                    {product.id_producto}
+                  </p>
+                  <CoverageNotes notes={product.cobertura} sucursales={product.sucursales} nearby={nearby} />
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className="text-sm font-medium text-emerald-700">
-                    desde {formatCurrency(group.min_precio)}
-                  </span>
-                  <span className="text-slate-400 text-xs">
-                    {expandedChains.has(group.cadena) ? '▲' : '▼'}
-                  </span>
-                </div>
-              </button>
-              {expandedChains.has(group.cadena) && (
-                <div className="divide-y divide-slate-100">
-                  {group.items.map((item, i) => {
-                    const isSelected =
-                      currentSelection?.producto === item.producto &&
-                      currentSelection?.sucursal === item.sucursal &&
-                      currentSelection?.cadena === item.cadena;
-                    return (
-                      <div
-                        key={i}
-                        className={`px-4 py-2.5 flex items-center justify-between text-sm ${
-                          isSelected ? 'bg-emerald-50' : ''
-                        }`}
-                      >
-                        <div className="flex-1">
-                          <span className="text-slate-800">{item.producto}</span>
-                          {item.marca && (
-                            <span className="ml-1.5 text-slate-400">— {item.marca}</span>
-                          )}
-                          <span className="ml-2 text-xs text-slate-400">
-                            {item.sucursal}, {item.localidad}
-                          </span>
+                <div className="text-right whitespace-nowrap">
+                  {product.precio_desde != null && product.fecha_precio_desde ? (
+                    <>
+                      <span className="text-slate-500">desde </span>
+                      <span className="font-medium text-slate-900">
+                        {formatCurrency(product.precio_desde)}
+                      </span>
+                      {product.precio_unitario_desde && (
+                        <div className="text-xs text-slate-500">
+                          {formatUnitPrice(product.precio_unitario_desde)}
                         </div>
-                        <div className="flex items-center gap-3">
-                          <div className="text-right whitespace-nowrap">
-                            <span className="font-medium text-slate-900">
-                              {formatCurrency(item.mejor_precio)}
-                            </span>
-                            {item.precio_lista !== item.mejor_precio && (
-                              <span className="ml-2 text-xs text-slate-400 line-through">
-                                {formatCurrency(item.precio_lista)}
-                              </span>
-                            )}
-                            {item.precio_unitario && (
-                              <div className="text-xs text-slate-500">
-                                {formatUnitPrice(item.precio_unitario)}
-                              </div>
-                            )}
-                            {item.precio_condicional != null && (
-                              <div
-                                className="text-xs text-amber-700"
-                                title={item.leyenda_condicional ?? undefined}
-                              >
-                                {formatCurrency(item.precio_condicional)} con condiciones
-                              </div>
-                            )}
-                            <div><PriceDate value={item.fecha_precio} /></div>
-                          </div>
-                          <button
-                            onClick={() => handleSelect(item)}
-                            className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
-                              isSelected
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-slate-100 text-slate-700 hover:bg-blue-100 hover:text-blue-700'
-                            }`}
-                          >
-                            {isSelected ? '✓ Elegido' : 'Elegir'}
-                          </button>
-                        </div>
+                      )}
+                      <div className="text-xs text-slate-500">
+                        en {product.sucursales} {product.sucursales === 1 ? 'local' : 'locales'}
+                        {nearby ? ' cerca' : ''}
                       </div>
-                    );
-                  })}
+                      <div><PriceDate value={product.fecha_precio_desde} /></div>
+                    </>
+                  ) : (
+                    <span className="text-xs text-slate-400">
+                      Ningún local{nearby ? ' cerca' : ''} lo tiene
+                    </span>
+                  )}
                 </div>
-              )}
-            </div>
-          ))}
-        </div>
+                <button
+                  onClick={() => handleSelect(product)}
+                  className={`rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+                    isSelected
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-100 text-slate-700 hover:bg-blue-100 hover:text-blue-700'
+                  }`}
+                >
+                  {isSelected ? '✓ Elegido' : 'Elegir'}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {hasNextPage && (
+        <button
+          onClick={() => fetchNextPage()}
+          disabled={isFetchingNextPage}
+          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+        >
+          {isFetchingNextPage ? 'Cargando...' : 'Ver más productos'}
+        </button>
       )}
 
       {/* Navigation */}
@@ -508,7 +467,7 @@ function Summary() {
     if (product && !names.has(product.producto_sk)) {
       names.set(
         product.producto_sk,
-        `${term}: ${product.producto}${product.marca ? ` — ${product.marca}` : ''}`,
+        `${term}: ${product.nombre}`,
       );
     }
   });
@@ -681,32 +640,6 @@ function StoreTotalCard({ store, names }: { store: StoreListTotal; names: Map<nu
       </details>
     </div>
   );
-}
-
-// ── Helpers ──
-
-interface ChainGroup {
-  cadena: string;
-  count: number;
-  min_precio: number;
-  items: GenericStorePrice[];
-}
-
-function groupByChain(rows: GenericStorePrice[]): ChainGroup[] {
-  const map = new Map<string, GenericStorePrice[]>();
-  for (const row of rows) {
-    const arr = map.get(row.cadena) || [];
-    arr.push(row);
-    map.set(row.cadena, arr);
-  }
-  return Array.from(map.entries())
-    .map(([cadena, items]) => ({
-      cadena,
-      count: items.length,
-      min_precio: Math.min(...items.map((i) => i.mejor_precio)),
-      items: items.sort((a, b) => a.mejor_precio - b.mejor_precio),
-    }))
-    .sort((a, b) => a.min_precio - b.min_precio);
 }
 
 // ── Main component ──

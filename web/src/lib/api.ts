@@ -206,45 +206,6 @@ export interface StorePricePage {
   precio_promedio: number | null;
 }
 
-// ── Generic Buscador (search by text across all matching products) ──
-export interface GenericStorePrice {
-  cadena: string;
-  producto_sk: number;
-  producto: string;
-  marca: string | null;
-  sucursal: string;
-  tipo: string;
-  localidad: string;
-  provincia: string;
-  precio_lista: number;
-  fecha_precio: string;
-  mejor_precio: number;
-  precio_promo: number | null;
-  leyenda_promo: string | null;
-  tiene_descuento: boolean;
-  /** Lower promotion that requires a condition; never part of mejor_precio. */
-  precio_condicional: number | null;
-  leyenda_condicional: string | null;
-  condicion: PromoCondition | null;
-  /** Store price per kg or l; null when it does not apply. */
-  precio_unitario: UnitPrice | null;
-  lat: number | null;
-  lon: number | null;
-}
-export const fetchBuscadorGenericDates = (q: string) =>
-  api.get<BuscadorDate[]>('/buscador/generic/dates', { params: { q } }).then(r => r.data);
-
-export const fetchBuscadorGeneric = (params: {
-  q: string;
-  fecha_id: number;
-  provincia?: string;
-  localidad?: string;
-  cadenas?: string[];
-  lat?: number;
-  lon?: number;
-  radius?: number;
-}) => api.get<GenericStorePrice[]>('/buscador/generic', { params }).then(r => r.data);
-
 // ── Ofertas ──
 export interface OfertaItem {
   producto: string;

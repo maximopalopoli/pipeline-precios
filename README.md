@@ -437,7 +437,9 @@ and each item's price and observation date. Stores are ranked by coverage
 first, then by total, so an incomplete basket never ranks above a complete
 one; it returns at most 50. Pharmacies and gas-station shops (`id_comercio`
 4, 19, 23 and 24) are left out of list totals but stay in single-product
-search.
+search. The list page picks each item's product from `GET
+/api/products/search`, ranked and paged like the search page, with its
+"from" price at nearby stores.
 
 The product-date, daily-offer and store-promotion routes read published
 facts and run metadata directly. The analytics aggregates (weekly variation

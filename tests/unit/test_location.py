@@ -7,7 +7,7 @@ from api.location import LAT_MAX, MAX_RADIUS_KM, adaptive_radius, optional_locat
 from api.main import app
 
 LOCATED_ROUTES = [
-    "/api/products/search", "/api/buscador", "/api/buscador/generic",
+    "/api/products/search", "/api/buscador",
     "/api/locales", "/api/location/radius", "/api/lista/totales",
 ]
 
