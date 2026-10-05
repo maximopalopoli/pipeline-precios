@@ -6,7 +6,6 @@ import {
   fetchBuscadorDates,
   fetchProduct,
   fetchSearchFacets,
-  geocode,
   searchProducts,
   type FacetValue,
   type Product,
@@ -15,8 +14,9 @@ import {
   type StorePrice,
 } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
-import { useSearchRadius } from '../hooks/useSearchRadius';
+import { useAddressLocation } from '../hooks/useAddressLocation';
 import { RadiusNotice } from '../components/filters/RadiusNotice';
+import { LocationFilter } from '../components/filters/LocationFilter';
 import { FilterPanel } from '../components/filters/FilterPanel';
 import { ProductSearch } from '../components/filters/ProductSearch';
 import { DataTable } from '../components/tables/DataTable';
@@ -185,31 +185,9 @@ export function Buscador() {
   const [sortByUnitPrice, setSortByUnitPrice] = useState(false);
 
   // ── Location filter ──
-  const [address, setAddress] = useState('');
-  const [city, setCity] = useState('Buenos Aires');
-  const [radius, setRadius] = useState(1);
-  const [geoTrigger, setGeoTrigger] = useState(0);
-  const [locationEnabled, setLocationEnabled] = useState(false);
-
-  const { data: geoResult, isFetching: isGeocoding } = useQuery({
-    queryKey: ['geocode', address, city, geoTrigger],
-    queryFn: () => geocode(address, city),
-    enabled: address.length > 3 && geoTrigger > 0,
-  });
-
-  const userLat = locationEnabled && geoResult?.lat ? geoResult.lat : null;
-  const userLon = locationEnabled && geoResult?.lon ? geoResult.lon : null;
-
-  const handleGeoSearch = () => {
-    setLocationEnabled(true);
-    setGeoTrigger((n) => n + 1);
-  };
-
-  const clearLocation = () => {
-    setLocationEnabled(false);
-    setAddress('');
-    setGeoTrigger(0);
-  };
+  const location = useAddressLocation();
+  const userLat = location.lat;
+  const userLon = location.lon;
 
   const handleSelectProduct = (p: Product | null) => {
     setProduct(p);
@@ -241,10 +219,8 @@ export function Buscador() {
   const selectedFechaId = fechaId ?? (activeDates.length > 0 ? activeDates[0].fecha_id : null);
 
   // ── Location params for API: the chosen radius, grown to reach three chains ──
-  const searchArea = useSearchRadius(userLat, userLon, radius);
-  const searchRadius = searchArea.radius;
-  const locationParams = userLat != null && userLon != null
-    ? { lat: userLat, lon: userLon, radius: searchRadius } : {};
+  const searchRadius = location.radius;
+  const locationParams = location.params;
 
   // ── Single-product results ──
   // Cheapest first, a page at a time; the summary covers every store.
@@ -270,7 +246,7 @@ export function Buscador() {
     initialPageParam: 0,
     getNextPageParam: (last, pages) =>
       last.hay_mas ? pages.length * STORES_PER_PAGE : undefined,
-    enabled: !!product && !!selectedFechaId && searchArea.ready,
+    enabled: !!product && !!selectedFechaId && location.ready,
   });
   const stores = storePages?.pages.flatMap((page) => page.sucursales) ?? [];
   const storeSummary = storePages?.pages[0];
@@ -302,7 +278,7 @@ export function Buscador() {
       const offset = pages.length * CARDS_PER_PAGE;
       return last.hay_mas && offset <= MAX_CARDS_OFFSET ? offset : undefined;
     },
-    enabled: !!genericQuery && searchArea.ready,
+    enabled: !!genericQuery && location.ready,
   });
   const cards = cardPages?.pages.flatMap((page) => page.productos) ?? [];
   const moreCards = cardPages?.pages.at(-1)?.hay_mas ?? false;
@@ -365,61 +341,7 @@ export function Buscador() {
             </div>
           )}
 
-          {/* Location filter */}
-          <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-slate-700">Filtrar por ubicacion</h3>
-              {locationEnabled && (
-                <button onClick={clearLocation} className="text-xs text-slate-400 hover:text-slate-600">
-                  Desactivar
-                </button>
-              )}
-            </div>
-            <input
-              type="text"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && address.length > 3) handleGeoSearch(); }}
-              placeholder="Av. Corrientes 1234"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <input
-              type="text"
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              placeholder="Ciudad"
-              className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-            <button
-              onClick={handleGeoSearch}
-              disabled={address.length < 3}
-              className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-            >
-              {isGeocoding ? 'Buscando...' : 'Buscar ubicacion'}
-            </button>
-            {locationEnabled && geoResult?.lat && (
-              <>
-                <p className="text-xs text-slate-500">
-                  Ubicacion: {geoResult.lat.toFixed(4)}, {geoResult.lon!.toFixed(4)}
-                </p>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Radio: {radius} km</label>
-                  <input
-                    type="range"
-                    min={0.5}
-                    max={10}
-                    step={0.5}
-                    value={radius}
-                    onChange={(e) => setRadius(Number(e.target.value))}
-                    className="w-full"
-                  />
-                </div>
-              </>
-            )}
-            {locationEnabled && geoResult && !geoResult.lat && (
-              <p className="text-xs text-red-500">No se encontro la direccion.</p>
-            )}
-          </div>
+          <LocationFilter location={location} />
         </div>
 
         {/* Results */}
@@ -433,14 +355,14 @@ export function Buscador() {
           {isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
 
           {/* Location active indicator */}
-          {locationEnabled && userLat != null && (product || genericQuery) && !isLoading && (
+          {location.located && (product || genericQuery) && !isLoading && (
             <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
               Mostrando resultados a menos de {searchRadius} km de tu ubicacion
               {((isGenericMode && cards.length > 0 && cards.every((c) => c.sucursales === 0))
                 || (!isGenericMode && stores.length === 0 && selectedFechaId)) && (
                 <span> — no hay locales cerca. Intenta aumentar el radio.</span>
               )}
-              <RadiusNotice area={searchArea.area} />
+              <RadiusNotice area={location.area} />
             </div>
           )}
 

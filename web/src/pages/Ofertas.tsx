@@ -1,8 +1,12 @@
+import { useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
 import { fetchOfertas, type OfertaItem } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
+import { useAddressLocation } from '../hooks/useAddressLocation';
 import { FilterPanel } from '../components/filters/FilterPanel';
+import { LocationFilter } from '../components/filters/LocationFilter';
+import { RadiusNotice } from '../components/filters/RadiusNotice';
 import { DataTable } from '../components/tables/DataTable';
 import { VariationBarChart } from '../components/charts/VariationBarChart';
 import { KpiCard } from '../components/layout/KpiCard';
@@ -47,20 +51,27 @@ const OFFERS_PER_PAGE = 50;
 
 export function Ofertas() {
   const { provincia, localidad, cadenas } = useFilters();
+  const location = useAddressLocation(2);
+  // Every offer in the country takes about 15 s, so it waits for a location,
+  // a province or an explicit request.
+  const [everywhere, setEverywhere] = useState(false);
+  const chosen = location.located || !!provincia || everywhere;
 
   // Largest discount first, a page at a time; the summary covers every offer.
   const { data: pages, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
-    queryKey: ['ofertas', provincia, localidad, cadenas],
+    queryKey: ['ofertas', provincia, localidad, cadenas, location.lat, location.lon, location.radius],
     queryFn: ({ pageParam }) =>
       fetchOfertas({
         provincia: provincia || undefined,
         localidad: localidad || undefined,
         cadenas: cadenas.length > 0 ? cadenas : undefined,
+        ...location.params,
         limit: OFFERS_PER_PAGE,
         offset: pageParam,
       }),
     initialPageParam: 0,
     getNextPageParam: (last, all) => (last.hay_mas ? all.length * OFFERS_PER_PAGE : undefined),
+    enabled: chosen && location.ready,
   });
 
   const data = pages?.pages[0];
@@ -75,16 +86,35 @@ export function Ofertas() {
       <h1 className="text-2xl font-bold text-slate-900">Ofertas del dia</h1>
 
       <div className="grid md:grid-cols-[280px_1fr] gap-6">
-        <FilterPanel showLocality />
+        <div className="space-y-4">
+          <LocationFilter location={location} title="Ofertas cerca de" />
+          <FilterPanel showLocality />
+        </div>
 
         <div className="space-y-4">
+          {!chosen && (
+            <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600 space-y-2">
+              <p>Ingresa una direccion para ver las ofertas de los locales cercanos, o elegi una provincia.</p>
+              <button onClick={() => setEverywhere(true)} className="text-blue-700 hover:underline">
+                Ver las ofertas de todo el pais (puede tardar)
+              </button>
+            </div>
+          )}
+
+          {location.located && (
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
+              Ofertas de locales a menos de {location.radius} km de tu ubicacion
+              <RadiusNotice area={location.area} />
+            </div>
+          )}
+
           {data?.fecha && (
             <p className="text-sm text-slate-500">
               Promociones observadas el {new Date(data.fecha).toLocaleDateString('es-AR')}
             </p>
           )}
 
-          {isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
+          {chosen && isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
 
           {items.length > 0 && (
             <>
