@@ -28,6 +28,9 @@ async def get_pool() -> asyncpg.Pool:
             password=os.environ["POSTGRES_PASSWORD"],
             min_size=2,
             max_size=10,
+            # The API runs short queries; compiling one took about 0.7 s, more
+            # than running it (a search's "from" prices: 0.84 s against 0.18 s).
+            server_settings={"jit": "off"},
         )
     return _pool
 

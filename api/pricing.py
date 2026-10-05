@@ -75,6 +75,25 @@ ANY_SLOT = "ps.cualquiera"
 STORE_PRICE = f"pipeline_store_price({_SLOT_ARGS}, {_ON_DATE})"
 
 
+def store_priced_facts(source: str, where: str, columns: str) -> str:
+    """Return a query of ``columns`` plus ``precio``, the store price of each fact.
+
+    ``source`` names the fact table as ``f``, with any joins ``where`` needs.
+    Without a promotion the store price is the list price, so only the few
+    rows with one (about 6% of a day) read their legends; reading them for
+    every row made a "from" price three times slower.
+    """
+    return f"""
+        SELECT {columns}, CASE WHEN f.precio_lista > 0 THEN f.precio_lista END AS precio
+        FROM {source}
+        WHERE {where} AND f.precio_promo1 IS NULL AND f.precio_promo2 IS NULL
+        UNION ALL
+        SELECT {columns}, {STORE_PRICE} AS precio
+        FROM {source}
+        {PROMO_JOINS}
+        WHERE {where} AND (f.precio_promo1 IS NOT NULL OR f.precio_promo2 IS NOT NULL)"""
+
+
 def promo_price_sql(slot: str) -> str:
     """Return the price of the promotion chosen by ``slot``, or NULL."""
     return f"CASE {slot} WHEN 1 THEN f.precio_promo1 WHEN 2 THEN f.precio_promo2 END"

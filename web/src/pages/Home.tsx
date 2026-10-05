@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { fetchHealth } from '../lib/api';
 import { KpiCard } from '../components/layout/KpiCard';
+import { QueryError } from '../components/layout/QueryError';
 import { formatPriceDate } from '../lib/priceDate';
 
 const NAV_CARDS = [
@@ -15,7 +16,8 @@ function formatCount(value: number | null) {
 }
 
 export function Home() {
-  const { data: health } = useQuery({
+  // Missing, stale and failed publications are announced by the layout's DataNotice.
+  const { data: health, isError, error, refetch } = useQuery({
     queryKey: ['health'], queryFn: fetchHealth, refetchInterval: 60_000,
   });
   const reconciliation = health?.reconciliacion;
@@ -32,15 +34,11 @@ export function Home() {
             Últimos precios publicados: {formatPriceDate(health.ultima_publicacion.fecha_datos)}
             {' · '}Ingesta completada: {new Date(health.ultima_publicacion.finished_at).toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}
           </p>
-        ) : health ? (
-          <p className="mt-1 text-sm text-slate-500">Todavía no hay precios publicados.</p>
         ) : null}
-        {health?.aviso_ingesta && (
-          <p className={`mt-2 rounded-md border px-3 py-2 text-sm ${health.aviso_ingesta.status === 'failed' ? 'border-red-200 bg-red-50 text-red-800' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
-            La ingesta del {formatPriceDate(health.aviso_ingesta.fecha_datos)}{' '}
-            {health.aviso_ingesta.status === 'failed' ? 'falló' : 'está en curso'}.
-            {health.ultima_publicacion && ' Se siguen mostrando los últimos precios publicados.'}
-          </p>
+        {isError && (
+          <div className="mt-2">
+            <QueryError what="el estado de los datos" error={error} onRetry={() => refetch()} />
+          </div>
         )}
       </div>
 

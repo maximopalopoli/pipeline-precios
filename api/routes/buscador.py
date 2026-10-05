@@ -1,18 +1,15 @@
 """Buscador endpoints — find cheapest store for a product."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from api.db import fetch
+from api.location import Location, optional_location
 from api.price_date import PRICE_DATE_SQL
 from api.pricing import OFFER_PRICE_COLUMNS, PROMO_JOINS, STORE_PRICE
+from api.store_filters import store_conditions
+from api.unit_price import with_unit_price
 
 router = APIRouter()
-
-
-def _distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
-    d_lat = (lat2 - lat1) * 111.0
-    d_lon = (lon2 - lon1) * 85.0
-    return (d_lat * d_lat + d_lon * d_lon) ** 0.5
 
 
 @router.get("/buscador/dates")
@@ -33,6 +30,12 @@ async def get_product_dates(producto_sk: int = Query(...)):
     ]
 
 
+# A product's stores are listed in pages; AMBA has a few thousand stores.
+MAX_STORES_PER_PAGE = 200
+MAX_STORE_OFFSET = 10000
+SUMMARY_KEYS = ("total", "precio_min", "precio_max", "precio_promedio")
+
+
 @router.get("/buscador")
 async def get_buscador(
     producto_sk: int = Query(...),
@@ -40,179 +43,80 @@ async def get_buscador(
     provincia: str | None = Query(None),
     localidad: str | None = Query(None),
     cadenas: list[str] | None = Query(None),
-    lat: float | None = Query(None),
-    lon: float | None = Query(None),
-    radius: float = Query(1, ge=0.5, le=50),
+    location: Location | None = Depends(optional_location),
+    limit: int = Query(50, ge=1, le=MAX_STORES_PER_PAGE),
+    offset: int = Query(0, ge=0, le=MAX_STORE_OFFSET),
 ):
+    """One page of a product's store prices, cheapest first.
+
+    Returns ``{"sucursales": [...], "total", "hay_mas", "precio_min",
+    "precio_max", "precio_promedio"}``.  The count and the price summary
+    cover every store the filters choose, not only the page.  Ties are
+    broken by store, so pages neither repeat nor skip one.
+    """
     conditions = ["f.producto_sk = $1", "f.fecha_id = $2"]
     params: list = [producto_sk, fecha_id]
-    idx = 3
-
-    if provincia:
-        conditions.append(f"pr.nombre = ${idx}")
-        params.append(provincia)
-        idx += 1
-
-    if localidad:
-        conditions.append(f"s.sucursales_localidad = ${idx}")
-        params.append(localidad)
-        idx += 1
-
-    if cadenas:
-        placeholders = ", ".join(f"${idx + i}" for i in range(len(cadenas)))
-        conditions.append(f"c.comercio_bandera_nombre IN ({placeholders})")
-        params.extend(cadenas)
-        idx += len(cadenas)
-
-    has_location = lat is not None and lon is not None
-    if has_location:
-        lat_range = radius / 111.0
-        lon_range = radius / 85.0
-        conditions.append(f"s.sucursales_latitud BETWEEN ${idx} AND ${idx + 1}")
-        params.extend([lat - lat_range, lat + lat_range])
-        idx += 2
-        conditions.append(f"s.sucursales_longitud BETWEEN ${idx} AND ${idx + 1}")
-        params.extend([lon - lon_range, lon + lon_range])
-        idx += 2
-
+    conditions += store_conditions(params, provincia, localidad, cadenas, location)
     where = " AND ".join(conditions)
+    params += [limit, offset]
+    limit_ref, offset_ref = f"${len(params) - 1}", f"${len(params)}"
 
     rows = await fetch(
         f"""
-        SELECT
-            c.comercio_bandera_nombre AS cadena,
-            s.sucursales_tipo         AS tipo,
-            s.sucursales_localidad    AS localidad,
-            pr.nombre                 AS provincia,
-            f.precio_lista,
-            {PRICE_DATE_SQL}          AS fecha_precio,
-            f.precio_lista - {STORE_PRICE} AS ahorro,
-            {OFFER_PRICE_COLUMNS},
-            s.sucursales_latitud      AS lat,
-            s.sucursales_longitud     AS lon,
-            s.sucursales_nombre       AS sucursal
-        FROM fact_precios f
-        JOIN dim_sucursal  s  ON f.sucursal_sk  = s.sucursal_sk
-        JOIN dim_comercio  c  ON s.comercio_sk  = c.comercio_sk
-        JOIN dim_provincia pr ON s.provincia_sk  = pr.provincia_sk
-        {PROMO_JOINS}
-        WHERE {where}
-        ORDER BY mejor_precio ASC
-        LIMIT 200
+        WITH ofertas AS (
+            SELECT
+                s.sucursal_sk,
+                c.comercio_bandera_nombre AS cadena,
+                s.sucursales_tipo         AS tipo,
+                s.sucursales_localidad    AS localidad,
+                pr.nombre                 AS provincia,
+                f.precio_lista,
+                {PRICE_DATE_SQL}          AS fecha_precio,
+                f.precio_lista - {STORE_PRICE} AS ahorro,
+                {OFFER_PRICE_COLUMNS},
+                s.sucursales_latitud      AS lat,
+                s.sucursales_longitud     AS lon,
+                s.sucursales_nombre       AS sucursal,
+                NULLIF(CONCAT_WS(' ', s.sucursales_calle, s.sucursales_numero), '') AS direccion,
+                s.id_comercio,
+                s.id_bandera,
+                s.id_sucursal,
+                p.contenido,
+                p.contenido_unidad
+            FROM fact_precios f
+            JOIN v_producto    p  ON f.producto_sk  = p.producto_sk
+            JOIN dim_sucursal  s  ON f.sucursal_sk  = s.sucursal_sk
+            JOIN dim_comercio  c  ON s.comercio_sk  = c.comercio_sk
+            JOIN dim_provincia pr ON s.provincia_sk  = pr.provincia_sk
+            {PROMO_JOINS}
+            WHERE {where}
+        ),
+        resumen AS (
+            SELECT COUNT(*)                         AS total,
+                   MIN(mejor_precio)                AS precio_min,
+                   MAX(mejor_precio)                AS precio_max,
+                   ROUND(AVG(mejor_precio), 2)      AS precio_promedio
+            FROM ofertas
+        )
+        -- The summary row is kept when the page is empty.
+        SELECT resumen.*, pagina.*
+        FROM resumen
+        LEFT JOIN LATERAL (
+            SELECT * FROM ofertas
+            ORDER BY mejor_precio NULLS LAST, sucursal_sk
+            LIMIT {limit_ref} OFFSET {offset_ref}
+        ) pagina ON TRUE
         """,
         *params,
     )
-    results = [dict(r) for r in rows]
-    if has_location:
-        results = [
-            r for r in results
-            if r["lat"] is not None and r["lon"] is not None
-            and _distance_km(lat, lon, float(r["lat"]), float(r["lon"])) <= radius
-        ]
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Generic search — search by text across all matching products
-# ---------------------------------------------------------------------------
-
-
-@router.get("/buscador/generic/dates")
-async def get_generic_dates(q: str = Query(..., min_length=2)):
-    rows = await fetch(
-        """
-        SELECT DISTINCT f.fecha_id, fe.fecha
-        FROM fact_precios f
-        JOIN v_producto p ON f.producto_sk = p.producto_sk
-        JOIN dim_fecha fe   ON f.fecha_id    = fe.fecha_id
-        WHERE p.productos_descripcion ILIKE $1
-        ORDER BY fe.fecha DESC
-        LIMIT 30
-        """,
-        f"%{q}%",
-    )
-    return [
-        {"fecha_id": r["fecha_id"], "fecha": r["fecha"].isoformat()}
+    summary = {key: rows[0][key] for key in SUMMARY_KEYS}
+    page = [
+        with_unit_price({k: v for k, v in r.items() if k not in SUMMARY_KEYS})
         for r in rows
+        if r["sucursal_sk"] is not None
     ]
-
-
-@router.get("/buscador/generic")
-async def get_buscador_generic(
-    q: str = Query(..., min_length=2),
-    fecha_id: int = Query(...),
-    provincia: str | None = Query(None),
-    localidad: str | None = Query(None),
-    cadenas: list[str] | None = Query(None),
-    lat: float | None = Query(None),
-    lon: float | None = Query(None),
-    radius: float = Query(1, ge=0.5, le=50),
-):
-    conditions = ["p.productos_descripcion ILIKE $1", "f.fecha_id = $2"]
-    params: list = [f"%{q}%", fecha_id]
-    idx = 3
-
-    if provincia:
-        conditions.append(f"pr.nombre = ${idx}")
-        params.append(provincia)
-        idx += 1
-
-    if localidad:
-        conditions.append(f"s.sucursales_localidad = ${idx}")
-        params.append(localidad)
-        idx += 1
-
-    if cadenas:
-        placeholders = ", ".join(f"${idx + i}" for i in range(len(cadenas)))
-        conditions.append(f"c.comercio_bandera_nombre IN ({placeholders})")
-        params.extend(cadenas)
-        idx += len(cadenas)
-
-    has_location = lat is not None and lon is not None
-    if has_location:
-        lat_range = radius / 111.0
-        lon_range = radius / 85.0
-        conditions.append(f"s.sucursales_latitud BETWEEN ${idx} AND ${idx + 1}")
-        params.extend([lat - lat_range, lat + lat_range])
-        idx += 2
-        conditions.append(f"s.sucursales_longitud BETWEEN ${idx} AND ${idx + 1}")
-        params.extend([lon - lon_range, lon + lon_range])
-        idx += 2
-
-    where = " AND ".join(conditions)
-
-    rows = await fetch(
-        f"""
-        SELECT
-            c.comercio_bandera_nombre AS cadena,
-            p.productos_descripcion   AS producto,
-            p.productos_marca         AS marca,
-            s.sucursales_nombre       AS sucursal,
-            s.sucursales_tipo         AS tipo,
-            s.sucursales_localidad    AS localidad,
-            pr.nombre                 AS provincia,
-            f.precio_lista,
-            {PRICE_DATE_SQL}          AS fecha_precio,
-            {OFFER_PRICE_COLUMNS},
-            s.sucursales_latitud      AS lat,
-            s.sucursales_longitud     AS lon
-        FROM fact_precios f
-        JOIN v_producto  p  ON f.producto_sk = p.producto_sk
-        JOIN dim_sucursal  s  ON f.sucursal_sk = s.sucursal_sk
-        JOIN dim_comercio  c  ON s.comercio_sk = c.comercio_sk
-        JOIN dim_provincia pr ON s.provincia_sk = pr.provincia_sk
-        {PROMO_JOINS}
-        WHERE {where}
-        ORDER BY c.comercio_bandera_nombre, mejor_precio ASC
-        LIMIT 1000
-        """,
-        *params,
-    )
-    results = [dict(r) for r in rows]
-    if has_location:
-        results = [
-            r for r in results
-            if r["lat"] is not None and r["lon"] is not None
-            and _distance_km(lat, lon, float(r["lat"]), float(r["lon"])) <= radius
-        ]
-    return results
+    return {
+        "sucursales": page,
+        **summary,
+        "hay_mas": offset + len(page) < summary["total"],
+    }

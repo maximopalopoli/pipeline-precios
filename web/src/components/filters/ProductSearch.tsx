@@ -1,6 +1,10 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { searchProducts, type Product } from '../../lib/api';
+import { formatCurrency } from '../../lib/constants';
+
+// Suggestions only; the full list is the cards of a search.
+const SUGGESTIONS = 10;
 
 interface ProductSearchProps {
   onSelect: (product: Product | null) => void;
@@ -21,7 +25,8 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
 
   const { data: products = [] } = useQuery({
     queryKey: ['products', debouncedQuery],
-    queryFn: () => searchProducts(debouncedQuery),
+    queryFn: () =>
+      searchProducts({ q: debouncedQuery, limit: SUGGESTIONS }).then((page) => page.productos),
     enabled: debouncedQuery.length >= 2,
   });
 
@@ -73,7 +78,7 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
         </label>
         <div className="flex items-center gap-2 rounded-md bg-blue-50 px-3 py-2 text-sm">
           <span className="flex-1">
-            {selected.descripcion} — {selected.marca || ''} ({selected.id_producto})
+            {selected.nombre} <span className="text-slate-500">({selected.id_producto})</span>
           </span>
           <button
             onClick={() => { onSelect(null); setQuery(''); }}
@@ -97,7 +102,7 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
         onChange={(e) => { setQuery(e.target.value); setIsOpen(true); }}
         onFocus={() => setIsOpen(true)}
         onKeyDown={handleKeyDown}
-        placeholder="Nombre, marca o EAN..."
+        placeholder="Nombre, marca o código de barras"
         className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       />
       {onSearchAll && query.length >= 2 && (
@@ -105,7 +110,7 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
           onClick={handleSearchAll}
           className="mt-1.5 w-full rounded-md bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 hover:bg-indigo-100 transition-colors"
         >
-          Buscar todos los "{query}"
+          Ver todos los "{query}"
         </button>
       )}
       {isOpen && products.length > 0 && (
@@ -116,7 +121,17 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
               onClick={() => { onSelect(p); setIsOpen(false); setQuery(''); }}
               className="cursor-pointer px-3 py-2 text-sm hover:bg-slate-100"
             >
-              {p.descripcion} — {p.marca || ''} <span className="text-slate-400">({p.id_producto})</span>
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-900">{p.nombre}</span>
+                {p.precio_desde != null && (
+                  <span className="whitespace-nowrap text-slate-500">
+                    desde {formatCurrency(p.precio_desde)}
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-slate-400">
+                {p.nombre !== p.descripcion && `${p.descripcion} · `}{p.id_producto}
+              </div>
             </li>
           ))}
         </ul>

@@ -239,6 +239,43 @@ Data rules the pipeline relies on:
   reading, so removing one restores the voted value. List what is left to
   review with
   `SELECT * FROM v_producto_conflictos_pendientes ORDER BY cadenas_fuente DESC`.
+- **Display name and search.** `v_producto.nombre` joins type, brand, variant
+  and size ("Leche La Serenisima entera 1 l"); an untyped product keeps its
+  description. `GET /products/search?q=` lists products priced in the latest
+  published day. Every query word must appear in any order, ignoring case and
+  accents. An exact EAN comes first, then products of the type the query
+  names, then those listed by more chains. Optional `tipo`, `marca`,
+  `contenido` and `unidad` (`g`, `ml`, `u`) filters narrow the results.
+  Each result carries `precio_desde`, its lowest store price (unconditional
+  promotions in force only), the observation date of that price, and
+  `sucursales`, how many stores carry it. With `lat`, `lon` and `radius` (km,
+  default 1), only nearby stores count; `provincia`, `localidad` and
+  repeated `cadenas` keys choose stores the same way. The order stays the
+  same. The response is one page, `{"productos": [...], "hay_mas": bool}`:
+  `limit` (default 50, at most 100) and `offset` (at most 1000) choose it,
+  and `hay_mas` says whether another page follows. Ties are broken by
+  product, so pages of one published day never repeat or skip a product.
+  `GET /products/search/facets` takes the same query and attribute
+  filters and returns `tipos`, `marcas` and `tamanos` with product counts;
+  each facet ignores its own filter and applies the others.
+  `GET /products/{producto_sk}` is the product detail: catalog name and
+  attributes, the description, brand and size as published (`publicado`),
+  whether a curated correction applies (`corregido`), and the source codes
+  (`codigos`: the EAN, or the chain code with its `id_comercio` and
+  `id_bandera`). Store offers from `GET /buscador` include each store's
+  address and its `id_comercio`, `id_bandera` and `id_sucursal`. They come
+  cheapest first, a page at a time (`limit` default 50, at most 200;
+  `offset` at most 10,000), as `{"sucursales", "total", "hay_mas",
+  "precio_min", "precio_max", "precio_promedio"}`. The count and the price
+  summary cover every store the filters choose, not only the page.
+  `GET /ofertas` lists the latest day's promotions, one row per product and
+  chain promotion with average prices and `sucursales`, the chain's stores
+  that carry it. It takes `provincia`, `localidad`, repeated `cadenas` keys
+  and optionally `lat`, `lon` and `radius`, and returns the largest
+  discounts first, a page at a time (`limit` default 50, at most 200;
+  `offset` at most 10,000), as `{"fecha", "items", "total", "hay_mas",
+  "descuento_promedio", "descuento_maximo"}`; the count and the discounts
+  summarize every offer, not only the page.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.
@@ -377,9 +414,40 @@ Stores are classified while `sucursales.csv` is staged:
 | `AR-B` without plausible coordinates | Unlocated: counted and left out, never guessed |
 
 Store discovery (`/api/locales` and the province, chain and locality filters)
-includes only stores with prices on the latest published day. Older
+includes only stores with prices on the latest published day.
+
+Every located route takes `lat`, `lon` and `radius` (km). The point must lie
+in Argentina, both coordinates come together, and the radius is 0.5–50 km.
+Distance is measured before any limit. `GET /api/location/radius` returns
+`radio_km`, the chosen radius grown through 1, 2, 5, 10, 20 and 50 km until
+grocery stores of three chain companies are within it. It also returns
+`cadenas` (the companies reached), `ampliado` and `suficiente`. Gas-station
+shops and pharmacies do not count. Older
 national facts may remain under fact retention without appearing as current
 stores.
+
+Search results and the product detail carry `cobertura`: `fraccionado_en_local`
+(a 13-digit code with GS1 prefix 2, weighed or cut in the store and numbered
+by each chain), `codigo_interno` (no valid EAN) and, on search results,
+`pocos_locales` (one or two of the chosen stores carry it).
+
+Prices per kg or l (`precio_unitario_desde` on search results,
+`precio_unitario` on store offers) are computed from the canonical package
+size in g or ml, never from `productos_precio_referencia`, which some chains
+fill with the list price. Products sold by the unit have none.
+
+`GET /api/lista/totales` takes the list as repeated `producto_sk` keys (up to
+50, a repeated product counts once) and a location. For each store within the
+radius with a price on the latest published day, it returns `total` (prices
+paid without any condition), `total_condicional` (meeting every conditional
+promotion, or null), `cubiertos` of `productos`, the missing `faltantes`
+and each item's price and observation date. Stores are ranked by coverage
+first, then by total, so an incomplete basket never ranks above a complete
+one; it returns at most 50. Pharmacies and gas-station shops (`id_comercio`
+4, 19, 23 and 24) are left out of list totals but stay in single-product
+search. The list page picks each item's product from `GET
+/api/products/search`, ranked and paged like the search page, with its
+"from" price at nearby stores.
 
 The product-date, daily-offer and store-promotion routes read published
 facts and run metadata directly. The analytics aggregates (weekly variation
@@ -773,8 +841,8 @@ A unit test fails when the ETL reads a setting the compose file does not pass.
 
 ### Web app
 
-Pages: Home, Buscador (price finder with map), BuscadorEAN (lookup by barcode),
-Lista (shopping list), Ofertas (daily promotions) and Locales (nearby store
+Pages: Home, Buscador (price finder with map; it also finds a product by its
+barcode, EAN-8 and UPC-A included), Lista (shopping list), Ofertas (daily promotions) and Locales (nearby store
 locator). Home shows the latest publication and the quality of the last
 ingestion. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
 TanStack Table/Query for data.

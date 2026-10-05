@@ -2,11 +2,20 @@
 
 from functools import lru_cache
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from geopy.exc import GeocoderTimedOut, GeocoderUnavailable
 from geopy.geocoders import Nominatim
 
 from api.db import fetch, fetchrow
+from api.location import (
+    Location,
+    adaptive_radius,
+    bind,
+    distance_km_sql,
+    nearest_companies_sql,
+    required_location,
+    within_sql,
+)
 from api.price_date import PRICE_DATE_SQL
 from api.published_stores import LATEST_PUBLISHED_FECHA_ID, STORE_HAS_PUBLISHED_PRICE
 from api.pricing import (
@@ -46,38 +55,32 @@ async def geocode(address: str = Query(...), city: str = Query("Buenos Aires")):
     return {"lat": coords[0], "lon": coords[1]}
 
 
+@router.get("/location/radius")
+async def get_radius(location: Location = Depends(required_location)):
+    """The radius to search around a point: the requested one, grown if needed.
+
+    It grows through 1, 2, 5, 10, 20 and 50 km until grocery stores of at
+    least three chain companies with a price in the latest published day are
+    within it.  ``cadenas`` counts those companies; ``suficiente`` is false
+    when even 50 km reaches fewer.
+    """
+    params: list = []
+    rows = await fetch(nearest_companies_sql(location, params), *params)
+    return adaptive_radius(location.radius, [float(r["km"]) for r in rows])
+
+
 @router.get("/locales")
 async def get_locales(
-    lat: float = Query(...),
-    lon: float = Query(...),
-    radius: float = Query(5, ge=1, le=50),
+    location: Location = Depends(required_location),
     cadenas: list[str] | None = Query(None),
 ):
-    lat_range = radius / 111.0
-    lon_range = radius / 85.0
-
-    conditions = [
-        STORE_HAS_PUBLISHED_PRICE,
-        "s.sucursales_latitud IS NOT NULL",
-        "s.sucursales_longitud IS NOT NULL",
-        "s.sucursales_latitud BETWEEN $1 AND $2",
-        "s.sucursales_longitud BETWEEN $3 AND $4",
-    ]
-    params: list = [
-        lat - lat_range,
-        lat + lat_range,
-        lon - lon_range,
-        lon + lon_range,
-    ]
-    idx = 5
-
+    """The nearest stores with a price in the latest published day."""
+    params: list = []
+    # Bound in the order the statement reads them.
+    distance = distance_km_sql(location, params)
+    conditions = [STORE_HAS_PUBLISHED_PRICE, within_sql(location, params)]
     if cadenas:
-        placeholders = ", ".join(f"${idx + i}" for i in range(len(cadenas)))
-        conditions.append(f"c.comercio_bandera_nombre IN ({placeholders})")
-        params.extend(cadenas)
-        idx += len(cadenas)
-
-    where = " AND ".join(conditions)
+        conditions.append(f"c.comercio_bandera_nombre = ANY({bind(params, cadenas)}::text[])")
 
     rows = await fetch(
         f"""
@@ -92,25 +95,17 @@ async def get_locales(
             s.sucursales_latitud      AS lat,
             s.sucursales_longitud     AS lon,
             pr.nombre                 AS provincia,
-            ROUND(
-                SQRT(
-                    POW((s.sucursales_latitud - {lat}) * 111.0, 2) +
-                    POW((s.sucursales_longitud - {lon}) * 85.0, 2)
-                )::numeric, 1
-            ) AS distancia_km
+            ROUND({distance}::numeric, 1) AS distancia_km
         FROM dim_sucursal s
         JOIN dim_comercio  c  ON s.comercio_sk  = c.comercio_sk
         JOIN dim_provincia pr ON s.provincia_sk  = pr.provincia_sk
-        WHERE {where}
-        ORDER BY distancia_km ASC
+        WHERE {" AND ".join(conditions)}
+        ORDER BY distancia_km, s.sucursal_sk
         LIMIT 100
         """,
         *params,
     )
-
-    # Post-filter by actual distance
-    results = [dict(r) for r in rows if float(r["distancia_km"]) <= radius]
-    return results
+    return [dict(r) for r in rows]
 
 
 @router.get("/locales/{sucursal_sk}/promos")

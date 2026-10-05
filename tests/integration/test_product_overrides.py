@@ -1,14 +1,11 @@
 """Curated overrides correct the voted product attributes when reading."""
 
-import asyncio
-import re
 from decimal import Decimal
 from pathlib import Path
 
 import psycopg
 import pytest
 
-from api.routes import products
 
 IDENTITY = "ean:7791234567898"
 SEED = Path(__file__).parent.parent.parent / "db" / "seeds" / "seed_producto_overrides.sql"
@@ -131,26 +128,6 @@ def test_an_override_settles_only_its_own_conflict(pg_conn, product):
 def test_invalid_overrides_are_rejected(pg_conn, product, columns):
     with pytest.raises(psycopg.errors.CheckViolation):
         _override(pg_conn, **columns)
-
-
-def test_product_search_returns_the_corrected_attributes(pg_conn, product, monkeypatch):
-    _override(pg_conn, descripcion="Leche entera 1 l", marca="LA SERENISIMA")
-
-    async def fetch(sql: str, *params):
-        with pg_conn.cursor() as cur:
-            # asyncpg reuses $1; name the placeholders so psycopg can too.
-            cur.execute(
-                re.sub(r"\$(\d+)", r"%(p\1)s", sql),
-                {f"p{i}": value for i, value in enumerate(params, start=1)},
-            )
-            columns = [column.name for column in cur.description]
-            return [dict(zip(columns, row)) for row in cur.fetchall()]
-
-    monkeypatch.setattr(products, "fetch", fetch)
-
-    [found] = asyncio.run(products.search_products("entera"))
-
-    assert (found["descripcion"], found["marca"]) == ("Leche entera 1 l", "LA SERENISIMA")
 
 
 def _load_seed(pg_conn, path):

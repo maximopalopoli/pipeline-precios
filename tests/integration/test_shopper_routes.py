@@ -59,8 +59,8 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
             """
             INSERT INTO dim_sucursal (
                 id_comercio, id_bandera, id_sucursal, comercio_sk,
-                provincia_sk, sucursales_localidad
-            ) VALUES (12, 1, 1, %s, %s, 'Palermo')
+                provincia_sk, sucursales_localidad, sucursales_calle, sucursales_numero
+            ) VALUES (12, 1, 7, %s, %s, 'Palermo', 'Av. Santa Fe', '3253')
             RETURNING sucursal_sk
             """,
             (comercio_sk, provincia_sk),
@@ -69,8 +69,11 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
         cur.execute(
             """
             INSERT INTO dim_producto (
-                producto_identity, id_producto, productos_descripcion, productos_marca
-            ) VALUES ('ean:7791234567895', '7791234567895', 'Leche entera 1 l', 'Marca')
+                producto_identity, id_producto, productos_descripcion, productos_marca,
+                contenido, contenido_unidad
+            ) VALUES (
+                'ean:7791234567895', '7791234567895', 'Leche entera 1 l', 'Marca', 1000, 'ml'
+            )
             RETURNING producto_sk
             """
         )
@@ -125,21 +128,32 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
     assert asyncio.run(buscador.get_product_dates(producto_sk)) == [
         {"fecha_id": fecha_id, "fecha": "2026-03-17"}
     ]
-    store_offers = asyncio.run(
+    store_page = asyncio.run(
         buscador.get_buscador(
             producto_sk=producto_sk, fecha_id=fecha_id,
             provincia=None, localidad=None, cadenas=None,
-            lat=None, lon=None, radius=5,
+            location=None, limit=50, offset=0,
         )
     )
+    assert (store_page["total"], store_page["hay_mas"]) == (1, False)
+    store_offers = store_page["sucursales"]
     assert len(store_offers) == 1
     assert store_offers[0]["mejor_precio"] == Decimal("80.00")
     assert store_offers[0]["leyenda_promo"] == "20% de descuento"
     assert store_offers[0]["precio_condicional"] == Decimal("60.00")
     assert store_offers[0]["leyenda_condicional"] == "3X2 LECHES"
     assert store_offers[0]["condicion"] == "cantidad"
+    # Source codes identify the store: id_sucursal is unique only in its chain.
+    assert store_offers[0]["direccion"] == "Av. Santa Fe 3253"
+    assert (
+        store_offers[0]["id_comercio"], store_offers[0]["id_bandera"], store_offers[0]["id_sucursal"]
+    ) == (12, 1, 7)
+    # Per litre, from the store price: the conditional promotion is apart.
+    assert store_offers[0]["precio_unitario"] == {"precio": Decimal("80.00"), "unidad": "l"}
     offers = asyncio.run(
-        ofertas.get_ofertas(provincia=None, localidad=None, cadenas=None)
+        ofertas.get_ofertas(
+            provincia=None, localidad=None, cadenas=None, location=None, limit=50, offset=0,
+        )
     )
     assert offers["fecha"] == "2026-03-17"
     assert len(offers["items"]) == 1

@@ -6,7 +6,6 @@ import { Buscador } from './pages/Buscador';
 import { Ofertas } from './pages/Ofertas';
 import { Locales } from './pages/Locales';
 import { Lista } from './pages/Lista';
-import { BuscadorEAN } from './pages/BuscadorEAN';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -28,7 +27,6 @@ export default function App() {
             <Route path="ofertas" element={<Ofertas />} />
             <Route path="locales" element={<Locales />} />
             <Route path="lista" element={<Lista />} />
-            <Route path="comparador-ean" element={<BuscadorEAN />} />
           </Route>
         </Routes>
       </BrowserRouter>
