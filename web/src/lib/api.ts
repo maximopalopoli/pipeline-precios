@@ -208,7 +208,11 @@ export interface StorePricePage {
 
 // ── Ofertas ──
 export interface OfertaItem {
+  producto_sk: number;
+  /** Display name of the product. */
   producto: string;
+  /** Description as the chains publish it. */
+  descripcion: string;
   marca: string | null;
   cadena: string;
   /** Source-provided promotion conditions; null means they were not supplied. */
@@ -219,15 +223,27 @@ export interface OfertaItem {
   /** Requirement of this promotion; null when it states none. */
   condicion: PromoCondition | null;
   descuento_pct: number;
+  /** Stores of the chain with this promotion, whose prices are averaged. */
+  sucursales: number;
 }
+/** One page of offers; the count and discounts summarize every offer. */
 export interface OfertasResponse {
   fecha: string | null;
   items: OfertaItem[];
+  total: number;
+  hay_mas: boolean;
+  descuento_promedio: number | null;
+  descuento_maximo: number | null;
 }
 export const fetchOfertas = (params: {
   provincia?: string;
   localidad?: string;
   cadenas?: string[];
+  lat?: number;
+  lon?: number;
+  radius?: number;
+  limit?: number;
+  offset?: number;
 }) => api.get<OfertasResponse>('/ofertas', { params }).then(r => r.data);
 
 // ── Locales ──

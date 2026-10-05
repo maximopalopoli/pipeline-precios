@@ -268,6 +268,14 @@ Data rules the pipeline relies on:
   `offset` at most 10,000), as `{"sucursales", "total", "hay_mas",
   "precio_min", "precio_max", "precio_promedio"}`. The count and the price
   summary cover every store the filters choose, not only the page.
+  `GET /ofertas` lists the latest day's promotions, one row per product and
+  chain promotion with average prices and `sucursales`, the chain's stores
+  that carry it. It takes `provincia`, `localidad`, repeated `cadenas` keys
+  and optionally `lat`, `lon` and `radius`, and returns the largest
+  discounts first, a page at a time (`limit` default 50, at most 200;
+  `offset` at most 10,000), as `{"fecha", "items", "total", "hay_mas",
+  "descuento_promedio", "descuento_maximo"}`; the count and the discounts
+  summarize every offer, not only the page.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
 import { fetchOfertas, type OfertaItem } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
@@ -12,7 +12,17 @@ import { formatCurrency, formatPercent } from '../lib/constants';
 
 const col = createColumnHelper<OfertaItem>();
 const columns = [
-  col.accessor('producto', { header: 'Producto' }),
+  col.accessor('producto', {
+    header: 'Producto',
+    cell: (info) => (
+      <>
+        <span>{info.getValue()}</span>
+        {info.getValue() !== info.row.original.descripcion && (
+          <span className="block text-xs text-slate-400">{info.row.original.descripcion}</span>
+        )}
+      </>
+    ),
+  }),
   col.accessor('marca', { header: 'Marca' }),
   col.accessor('cadena', { header: 'Cadena' }),
   col.accessor('precio_lista', { header: 'Precio lista', cell: (info) => formatCurrency(info.getValue()) }),
@@ -30,22 +40,31 @@ const columns = [
     ),
   }),
   col.accessor('descuento_pct', { header: 'Descuento %', cell: (info) => formatPercent(info.getValue()) }),
+  col.accessor('sucursales', { header: 'Locales' }),
 ];
+
+const OFFERS_PER_PAGE = 50;
 
 export function Ofertas() {
   const { provincia, localidad, cadenas } = useFilters();
 
-  const { data, isLoading } = useQuery({
+  // Largest discount first, a page at a time; the summary covers every offer.
+  const { data: pages, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useInfiniteQuery({
     queryKey: ['ofertas', provincia, localidad, cadenas],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       fetchOfertas({
         provincia: provincia || undefined,
         localidad: localidad || undefined,
         cadenas: cadenas.length > 0 ? cadenas : undefined,
+        limit: OFFERS_PER_PAGE,
+        offset: pageParam,
       }),
+    initialPageParam: 0,
+    getNextPageParam: (last, all) => (last.hay_mas ? all.length * OFFERS_PER_PAGE : undefined),
   });
 
-  const items = data?.items ?? [];
+  const data = pages?.pages[0];
+  const items = pages?.pages.flatMap((page) => page.items) ?? [];
   const chartData = items.slice(0, 20).map((i) => ({
     label: `${i.producto.slice(0, 35)} — ${i.cadena.slice(0, 15)}`,
     value: i.descuento_pct,
@@ -70,19 +89,35 @@ export function Ofertas() {
           {items.length > 0 && (
             <>
               <div className="grid grid-cols-3 gap-4">
-                <KpiCard label="Productos en oferta" value={String(items.length)} />
+                <KpiCard label="Ofertas" value={String(data?.total ?? items.length)} />
                 <KpiCard
                   label="Descuento promedio"
-                  value={formatPercent(items.reduce((s, i) => s + i.descuento_pct, 0) / items.length)}
+                  value={data?.descuento_promedio != null ? formatPercent(data.descuento_promedio) : '—'}
                 />
                 <KpiCard
                   label="Mayor descuento"
-                  value={formatPercent(Math.max(...items.map((i) => i.descuento_pct)))}
+                  value={data?.descuento_maximo != null ? formatPercent(data.descuento_maximo) : '—'}
                 />
               </div>
 
               <h2 className="text-lg font-semibold text-slate-800">Mejores ofertas</h2>
               <DataTable data={items} columns={columns} />
+              <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                <span>
+                  {items.length === data?.total
+                    ? `${items.length} ${items.length === 1 ? 'oferta' : 'ofertas'}`
+                    : `Las ${items.length} de mayor descuento, de ${data?.total} ofertas`}
+                </span>
+                {hasNextPage && (
+                  <button
+                    onClick={() => fetchNextPage()}
+                    disabled={isFetchingNextPage}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    {isFetchingNextPage ? 'Cargando...' : 'Ver más ofertas'}
+                  </button>
+                )}
+              </div>
 
               <h2 className="text-lg font-semibold text-slate-800">Top descuentos</h2>
               <VariationBarChart data={chartData} colorMode="green" />

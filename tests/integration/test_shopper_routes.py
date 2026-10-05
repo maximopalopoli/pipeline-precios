@@ -151,7 +151,9 @@ def test_shopper_dates_and_promotions_read_published_facts(pg_conn, monkeypatch)
     # Per litre, from the store price: the conditional promotion is apart.
     assert store_offers[0]["precio_unitario"] == {"precio": Decimal("80.00"), "unidad": "l"}
     offers = asyncio.run(
-        ofertas.get_ofertas(provincia=None, localidad=None, cadenas=None)
+        ofertas.get_ofertas(
+            provincia=None, localidad=None, cadenas=None, location=None, limit=50, offset=0,
+        )
     )
     assert offers["fecha"] == "2026-03-17"
     assert len(offers["items"]) == 1
