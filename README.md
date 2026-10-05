@@ -823,8 +823,8 @@ A unit test fails when the ETL reads a setting the compose file does not pass.
 
 ### Web app
 
-Pages: Home, Buscador (price finder with map), BuscadorEAN (lookup by barcode),
-Lista (shopping list), Ofertas (daily promotions) and Locales (nearby store
+Pages: Home, Buscador (price finder with map; it also finds a product by its
+barcode, EAN-8 and UPC-A included), Lista (shopping list), Ofertas (daily promotions) and Locales (nearby store
 locator). Home shows the latest publication and the quality of the last
 ingestion. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
 TanStack Table/Query for data.

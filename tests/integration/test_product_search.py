@@ -253,6 +253,13 @@ def test_an_exact_ean_comes_first(catalog):
     assert [row["id_producto"] for row in _search("7790000000028")] == ["7790000000028"]
 
 
+def test_a_scanned_code_is_found_without_its_leading_zeros(catalog):
+    catalog.add_product("ean:0000077900124", "PILAS X 2", "DURACELL", None, None, 2, "u", 1)
+    catalog.price("ean:0000077900124", 1, 10)
+
+    assert [row["id_producto"] for row in _search("7790-0124")] == ["0000077900124"]
+
+
 def test_a_query_of_short_words_finds_the_type_it_names(catalog):
     assert _names("té") == ["Té Green Hills x 50"]
     assert _search("de") == []

@@ -101,7 +101,7 @@ export function ProductSearch({ onSelect, onSearchAll, selected, genericQuery }:
         onChange={(e) => { setQuery(e.target.value); setIsOpen(true); }}
         onFocus={() => setIsOpen(true)}
         onKeyDown={handleKeyDown}
-        placeholder="Nombre, marca o EAN..."
+        placeholder="Nombre, marca o código de barras"
         className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
       />
       {onSearchAll && query.length >= 2 && (

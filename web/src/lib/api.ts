@@ -225,49 +225,6 @@ export const fetchBuscadorGeneric = (params: {
   radius?: number;
 }) => api.get<GenericStorePrice[]>('/buscador/generic', { params }).then(r => r.data);
 
-// ── EAN Buscador (compare same product across chains) ──
-export interface EanStorePrice {
-  producto_sk: number;
-  id_producto: string;
-  producto: string;
-  marca: string | null;
-  cantidad: string | null;
-  unidad: string | null;
-  cadena: string;
-  sucursal_sk: number;
-  sucursal: string;
-  tipo: string;
-  calle: string | null;
-  numero: string | null;
-  localidad: string;
-  provincia: string;
-  precio_lista: number;
-  fecha_precio: string;
-  mejor_precio: number;
-  precio_promo: number | null;
-  leyenda_promo: string | null;
-  tiene_descuento: boolean;
-  /** Lower promotion that requires a condition; never part of mejor_precio. */
-  precio_condicional: number | null;
-  leyenda_condicional: string | null;
-  condicion: PromoCondition | null;
-  lat: number | null;
-  lon: number | null;
-}
-export const fetchBuscadorEanDates = (q: string) =>
-  api.get<BuscadorDate[]>('/buscador/ean/dates', { params: { q } }).then(r => r.data);
-
-export const fetchBuscadorEan = (params: {
-  q: string;
-  fecha_id: number;
-  provincia?: string;
-  localidad?: string;
-  cadenas?: string[];
-  lat?: number;
-  lon?: number;
-  radius?: number;
-}) => api.get<EanStorePrice[]>('/buscador/ean', { params }).then(r => r.data);
-
 // ── Ofertas ──
 export interface OfertaItem {
   producto: string;

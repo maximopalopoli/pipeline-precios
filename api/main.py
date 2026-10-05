@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from api.db import close_pool, get_pool
 from api.routes import (
     buscador,
-    buscador_ean,
     filters,
     health,
     lista,
@@ -40,5 +39,4 @@ app.include_router(products.router, prefix="/api")
 app.include_router(buscador.router, prefix="/api")
 app.include_router(ofertas.router, prefix="/api")
 app.include_router(locales.router, prefix="/api")
-app.include_router(buscador_ean.router, prefix="/api")
 app.include_router(lista.router, prefix="/api")

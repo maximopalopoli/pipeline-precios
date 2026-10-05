@@ -25,6 +25,21 @@ MAX_WORDS = 8
 TRIGRAM_LENGTH = 3
 # Facet values listed per attribute, the most common first.
 MAX_FACET_VALUES = 20
+# SEPA zero-pads every product code to 13 digits, so a scanned EAN-8 or a
+# 12-digit UPC-A is stored with leading zeros.
+BARCODE_LENGTHS = range(8, 14)
+
+
+def barcode(q: str) -> str | None:
+    """The 13-digit product code a query spells, or ``None``.
+
+    Spaces and hyphens between digits are ignored; EAN-8 and UPC-A codes are
+    padded with leading zeros as SEPA publishes them.
+    """
+    digits = re.sub(r"[\s-]+", "", q)
+    if digits.isascii() and digits.isdigit() and len(digits) in BARCODE_LENGTHS:
+        return digits.zfill(13)
+    return None
 
 
 def query_words(q: str) -> list[str]:
@@ -48,7 +63,7 @@ class _Matching:
     def __init__(self, q: str):
         self.q = q
         self.words = query_words(q)
-        self.ean = q.strip() if q.strip().isdigit() else None
+        self.ean = barcode(q)
         self.params: list = []
         self._query_ref: str | None = None
         # The product the query spells as an EAN, if any.
