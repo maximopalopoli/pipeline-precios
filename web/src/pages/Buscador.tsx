@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
-import { createColumnHelper } from '@tanstack/react-table';
+import { Link } from 'react-router-dom';
 import {
   fetchBuscador,
   fetchBuscadorDates,
@@ -15,13 +15,12 @@ import {
 } from '../lib/api';
 import { useFilters } from '../hooks/useFilters';
 import { useAddressLocation } from '../hooks/useAddressLocation';
+import { useShoppingList } from '../hooks/useShoppingList';
 import { RadiusNotice } from '../components/filters/RadiusNotice';
 import { LocationFilter } from '../components/filters/LocationFilter';
 import { FilterPanel } from '../components/filters/FilterPanel';
 import { ProductSearch } from '../components/filters/ProductSearch';
-import { DataTable } from '../components/tables/DataTable';
 import { PriceMap } from '../components/maps/PriceMap';
-import { KpiCard } from '../components/layout/KpiCard';
 import { QueryError } from '../components/layout/QueryError';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { PriceDate } from '../components/pricing/PriceDate';
@@ -29,77 +28,90 @@ import { CoverageNotes, FEW_STORES } from '../components/pricing/CoverageNotes';
 import { formatCurrency } from '../lib/constants';
 import { byUnitPrice, formatUnitPrice } from '../lib/unitPrice';
 
-// ── Single-product table columns ──
 const CARDS_PER_PAGE = 50;
 const STORES_PER_PAGE = 50;
 // The API's deepest page offset; past it the search should be narrowed.
 const MAX_CARDS_OFFSET = 1000;
 
-const col = createColumnHelper<StorePrice>();
-const columns = [
-  col.accessor('cadena', { header: 'Cadena' }),
-  col.accessor('sucursal', {
-    header: 'Sucursal',
-    cell: (info) => (
-      <>
-        <span>{info.getValue()}</span>
-        {info.row.original.direccion && (
-          <span className="block text-xs text-slate-400">{info.row.original.direccion}</span>
+// ── One store's offer, cheapest first; the first one is highlighted ──
+function StoreOffer({ store, cheapest }: { store: StorePrice; cheapest: boolean }) {
+  const reduced = store.mejor_precio < store.precio_lista;
+  return (
+    <li
+      className={`flex items-start justify-between gap-4 rounded-lg border p-3 ${
+        cheapest ? 'border-emerald-300 bg-emerald-50' : 'border-slate-200 bg-white'
+      }`}
+    >
+      <div className="min-w-0 space-y-0.5">
+        {cheapest && <p className="text-xs font-semibold text-emerald-800">Más barato</p>}
+        <p className="font-medium text-slate-900">
+          {store.cadena} <span className="font-normal text-slate-500">· {store.sucursal}</span>
+        </p>
+        <p className="text-xs text-slate-500">
+          {store.direccion ? `${store.direccion}, ` : ''}{store.localidad}
+        </p>
+        <PromotionDetails
+          tieneDescuento={store.tiene_descuento}
+          leyendaPromo={store.leyenda_promo}
+          precioCondicional={store.precio_condicional}
+          leyendaCondicional={store.leyenda_condicional}
+          condicionAparte={store.condicion}
+          compact
+        />
+      </div>
+      <div className="shrink-0 text-right">
+        <p className={`text-lg font-bold ${cheapest ? 'text-emerald-800' : 'text-slate-900'}`}>
+          {formatCurrency(store.mejor_precio)}
+        </p>
+        {reduced && (
+          <p className="text-xs text-slate-400 line-through">{formatCurrency(store.precio_lista)}</p>
         )}
-      </>
-    ),
-  }),
-  col.accessor('tipo', { header: 'Tipo' }),
-  col.accessor('localidad', { header: 'Localidad' }),
-  col.accessor('provincia', { header: 'Provincia' }),
-  col.accessor('precio_lista', { header: 'Precio lista', cell: (info) => formatCurrency(info.getValue()) }),
-  col.accessor('mejor_precio', { header: 'Mejor precio', cell: (info) => formatCurrency(info.getValue()) }),
-  col.accessor('precio_unitario', {
-    header: 'Por kg / l',
-    cell: (info) => {
-      const value = info.getValue();
-      return value ? formatUnitPrice(value) : '—';
-    },
-    enableSorting: false,
-  }),
-  col.accessor('fecha_precio', { header: 'Fecha', cell: (info) => <PriceDate value={info.getValue()} /> }),
-  col.accessor('ahorro', { header: 'Ahorro', cell: (info) => formatCurrency(info.getValue()) }),
-  col.display({
-    id: 'promocion',
-    header: 'Condiciones',
-    cell: (info) => (
-      <PromotionDetails
-        tieneDescuento={info.row.original.tiene_descuento}
-        leyendaPromo={info.row.original.leyenda_promo}
-        precioCondicional={info.row.original.precio_condicional}
-        leyendaCondicional={info.row.original.leyenda_condicional}
-        condicionAparte={info.row.original.condicion}
-        compact
-      />
-    ),
-  }),
-  col.display({
-    id: 'codigos',
-    header: 'Códigos',
-    cell: (info) => {
-      const { id_comercio, id_bandera, id_sucursal } = info.row.original;
-      return (
-        <span className="font-mono text-xs text-slate-500" title="comercio-bandera-sucursal">
-          {id_comercio}-{id_bandera}-{id_sucursal}
-        </span>
-      );
-    },
-  }),
-];
+        {store.precio_unitario && (
+          <p className="text-xs text-slate-600">{formatUnitPrice(store.precio_unitario)}</p>
+        )}
+        <PriceDate value={store.fecha_precio} />
+      </div>
+    </li>
+  );
+}
+
+// ── Add the product to the shopping list, or say it is there ──
+function AddToList({ product }: { product: Product }) {
+  const addProduct = useShoppingList((s) => s.addProduct);
+  const inList = useShoppingList((s) =>
+    Object.values(s.selections).some((p) => p.producto_sk === product.producto_sk),
+  );
+  if (inList) {
+    return (
+      <p className="text-sm text-emerald-700">
+        ✓ Está en tu lista ·{' '}
+        <Link to="/lista" className="underline hover:text-emerald-900">Ver lista</Link>
+      </p>
+    );
+  }
+  return (
+    <button
+      onClick={() => addProduct(product)}
+      className="rounded-md bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+    >
+      Agregar a la lista
+    </button>
+  );
+}
 
 // ── Product detail header: catalog name, published text and source codes ──
-function ProductHeader({ detail, stores, nearby }: { detail: ProductDetail; stores?: number; nearby: boolean }) {
+function ProductHeader({
+  detail, product, stores, nearby,
+}: { detail: ProductDetail; product: Product; stores?: number; nearby: boolean }) {
   const { publicado, codigos } = detail;
   const few = stores != null && stores > 0 && stores < FEW_STORES;
   const publishedSize = [publicado.cantidad, publicado.unidad].filter(Boolean).join(' ');
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-2">
-      <h2 className="text-lg font-semibold text-slate-900">{detail.nombre}</h2>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h2 className="text-lg font-semibold text-slate-900">{detail.nombre}</h2>
+        <AddToList product={product} />
+      </div>
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
         <dt className="text-slate-500">Publicado como</dt>
         <dd className="text-slate-800">
@@ -343,7 +355,6 @@ export function Buscador() {
   const isGenericMode = !!genericQuery;
   const nearby = userLat != null && userLon != null;
   const storesChosen = nearby || !!provincia || !!localidad || cadenas.length > 0;
-  const cheapest = !isGenericMode && stores.length > 0 ? stores[0] : null;
 
   return (
     <div className="space-y-6">
@@ -422,6 +433,7 @@ export function Buscador() {
           {!isGenericMode && detail && detail.producto_sk === product?.producto_sk && (
             <ProductHeader
               detail={detail}
+              product={product}
               stores={isLoadingSingle ? undefined : storeSummary?.total}
               nearby={nearby}
             />
@@ -434,78 +446,50 @@ export function Buscador() {
             <p className="text-sm text-slate-400">No hay precios de este producto para los filtros elegidos.</p>
           )}
 
-          {/* ── Single-product results ── */}
-          {!isGenericMode && cheapest && (
-            <>
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                <p className="text-sm text-emerald-800">
-                  <strong>Mejor precio:</strong> {cheapest.cadena} — {cheapest.sucursal} ({cheapest.localidad})
-                </p>
-                  <p className="text-lg font-bold text-emerald-900">
-                    {formatCurrency(cheapest.mejor_precio)}
-                  {cheapest.ahorro > 0 && (
-                    <span className="ml-2 text-sm font-normal">
-                      (ahorro {formatCurrency(cheapest.ahorro)} vs lista)
-                    </span>
-                  )}
-                </p>
-                <PromotionDetails
-                  tieneDescuento={cheapest.tiene_descuento}
-                  leyendaPromo={cheapest.leyenda_promo}
-                  precioCondicional={cheapest.precio_condicional}
-                  leyendaCondicional={cheapest.leyenda_condicional}
-                  condicionAparte={cheapest.condicion}
-                />
-                <PriceDate value={cheapest.fecha_precio} />
+          {/* ── Single-product results: stores cheapest first ── */}
+          {!isGenericMode && stores.length > 0 && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-lg font-semibold text-slate-800">
+                  {nearby ? 'Dónde está más barato cerca tuyo' : 'Dónde está más barato'}
+                </h2>
+                <label className="flex items-center gap-2 text-sm text-slate-600">
+                  <input
+                    type="checkbox"
+                    checked={showMap}
+                    onChange={(e) => setShowMap(e.target.checked)}
+                    className="rounded"
+                  />
+                  Ver mapa
+                </label>
               </div>
-
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <KpiCard label="Locales" value={String(storeSummary?.total ?? stores.length)} />
-                <KpiCard label="Precio min." value={formatCurrency(storeSummary?.precio_min ?? cheapest.mejor_precio)} />
-                <KpiCard label="Precio max." value={formatCurrency(storeSummary?.precio_max ?? cheapest.mejor_precio)} />
-                <KpiCard
-                  label="Precio prom."
-                  value={formatCurrency(storeSummary?.precio_promedio ?? cheapest.mejor_precio)}
-                />
+              {showMap && <PriceMap stores={stores} />}
+              <ol className="space-y-2">
+                {stores.map((store, i) => (
+                  <StoreOffer key={store.sucursal_sk} store={store} cheapest={i === 0} />
+                ))}
+              </ol>
+              <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-600">
+                <span>
+                  {stores.length === storeSummary?.total
+                    ? `${stores.length} ${stores.length === 1 ? 'local' : 'locales'}`
+                    : `Los ${stores.length} más baratos de ${storeSummary?.total} locales`}
+                  {showMap && hasMoreStores ? '; el mapa muestra solo estos' : ''}
+                </span>
+                {hasMoreStores && (
+                  <button
+                    onClick={() => fetchMoreStores()}
+                    disabled={isFetchingMoreStores}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                  >
+                    {isFetchingMoreStores ? 'Cargando...' : 'Ver más locales'}
+                  </button>
+                )}
+                {isMoreStoresError && (
+                  <QueryError compact what="más locales" error={storesError} onRetry={() => fetchMoreStores()} />
+                )}
               </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <h2 className="text-lg font-semibold text-slate-800">Precios por local</h2>
-                  <label className="flex items-center gap-2 text-sm text-slate-600">
-                    <input
-                      type="checkbox"
-                      checked={showMap}
-                      onChange={(e) => setShowMap(e.target.checked)}
-                      className="rounded"
-                    />
-                    Ver mapa
-                  </label>
-                </div>
-                {showMap && <PriceMap stores={stores} />}
-                <DataTable data={stores} columns={columns} />
-                <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-600">
-                  <span>
-                    {stores.length === storeSummary?.total
-                      ? `${stores.length} ${stores.length === 1 ? 'local' : 'locales'}`
-                      : `Los ${stores.length} más baratos de ${storeSummary?.total} locales`}
-                    {showMap && hasMoreStores ? '; el mapa muestra solo estos' : ''}
-                  </span>
-                  {hasMoreStores && (
-                    <button
-                      onClick={() => fetchMoreStores()}
-                      disabled={isFetchingMoreStores}
-                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                    >
-                      {isFetchingMoreStores ? 'Cargando...' : 'Ver más locales'}
-                    </button>
-                  )}
-                  {isMoreStoresError && (
-                    <QueryError compact what="más locales" error={storesError} onRetry={() => fetchMoreStores()} />
-                  )}
-                </div>
-              </div>
-            </>
+            </div>
           )}
 
           {/* ── The type the search names, chosen for the shopper ── */}

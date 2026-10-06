@@ -477,9 +477,10 @@ function Summary() {
   items.forEach((term, i) => {
     const product = selections[i];
     if (product && !names.has(product.producto_sk)) {
+      // A product added from the search is its own term.
       names.set(
         product.producto_sk,
-        `${term}: ${product.nombre}`,
+        term === product.nombre ? term : `${term}: ${product.nombre}`,
       );
     }
   });

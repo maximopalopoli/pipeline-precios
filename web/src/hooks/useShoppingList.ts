@@ -11,6 +11,8 @@ interface ShoppingListState {
   radius: number;
 
   addItem: (term: string) => void;
+  /** Add an item already chosen as this product, unless the list has it. */
+  addProduct: (product: Product) => void;
   removeItem: (index: number) => void;
   clearItems: () => void;
   setSelection: (index: number, product: Product) => void;
@@ -39,6 +41,14 @@ export const useShoppingList = create<ShoppingListState>()(
         if (!trimmed) return;
         set((s) => ({ items: [...s.items, trimmed] }));
       },
+      addProduct: (product) =>
+        set((s) => {
+          if (Object.values(s.selections).some((p) => p.producto_sk === product.producto_sk)) return s;
+          return {
+            items: [...s.items, product.nombre],
+            selections: { ...s.selections, [s.items.length]: product },
+          };
+        }),
       removeItem: (index) =>
         set((s) => {
           const items = s.items.filter((_, i) => i !== index);
@@ -71,7 +81,14 @@ export const useShoppingList = create<ShoppingListState>()(
     }),
     {
       name: 'shopping-list',
-      partialize: (state) => ({ items: state.items, radius: state.radius, lat: state.lat, lon: state.lon }),
+      // Selections are kept so that a product added from the search stays chosen.
+      partialize: (state) => ({
+        items: state.items,
+        selections: state.selections,
+        radius: state.radius,
+        lat: state.lat,
+        lon: state.lon,
+      }),
     },
   ),
 );

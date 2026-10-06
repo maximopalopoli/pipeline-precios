@@ -856,8 +856,9 @@ A unit test fails when the ETL reads a setting the compose file does not pass.
 ### Web app
 
 Pages: Buscador, the home page (location first, then a price finder with map;
-it also finds a product by its barcode, EAN-8 and UPC-A included), Lista
-(shopping list), Ofertas (daily promotions), Locales (nearby store locator) and
+it also finds a product by its barcode, EAN-8 and UPC-A included; a product
+lists its stores cheapest first and can be added to the list), Lista
+(shopping list, kept in the browser with its chosen products), Ofertas (daily promotions), Locales (nearby store locator) and
 Estado (`/estado`, linked at the foot of the sidebar), which shows the latest
 publication and the quality of the last ingestion. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
 TanStack Table/Query for data.
