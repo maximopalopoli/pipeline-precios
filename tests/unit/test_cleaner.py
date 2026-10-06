@@ -5,6 +5,7 @@ from decimal import Decimal
 import pandas as pd
 import pytest
 
+from etl.quality.checks import _VALID_PROVINCIAS as QUALITY_PROVINCIAS
 from etl.transform.cleaner import (
     clean_comercios,
     clean_productos,
@@ -143,6 +144,11 @@ class TestCleanSucursales:
         r = clean_sucursales(_df(_sucursal(sucursales_provincia="AR-ZZ")))
         assert len(r.rejected) == 1
         assert "sucursales_provincia" in r.rejected[0]["reason"]
+
+    @pytest.mark.parametrize("provincia", sorted(QUALITY_PROVINCIAS))
+    def test_every_argentine_provincia_accepted(self, provincia):
+        r = clean_sucursales(_df(_sucursal(sucursales_provincia=provincia)))
+        assert len(r.clean) == 1
 
     def test_missing_provincia_rejected(self):
         r = clean_sucursales(_df(_sucursal(sucursales_provincia="")))

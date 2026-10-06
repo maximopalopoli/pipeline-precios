@@ -33,7 +33,7 @@ _LON_MIN, _LON_MAX = -73.5, -53.5
 # ── Valid provincia ISO codes ─────────────────────────────────────────────────
 
 _VALID_PROVINCIAS = {
-    "AR-B", "AR-C", "AR-D", "AR-E", "AR-F", "AR-G", "AR-H",
+    "AR-A", "AR-B", "AR-C", "AR-D", "AR-E", "AR-F", "AR-G", "AR-H",
     "AR-J", "AR-K", "AR-L", "AR-M", "AR-N", "AR-P", "AR-Q",
     "AR-R", "AR-S", "AR-T", "AR-U", "AR-V", "AR-W", "AR-X",
     "AR-Y", "AR-Z",
