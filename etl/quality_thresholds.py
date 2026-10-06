@@ -130,6 +130,7 @@ def check_rejection_thresholds(
         rows_without_keys=counts.rows_without_keys,
         rows_store_unlisted=rows_unlisted,
         **{f"{name}_share": round(share, 6) for name, share in shares.items()},
+        **{f"{name}_limit": limit for name, limit in limits_by_share.items()},
         passed=not exceeded,
     )
     if exceeded:

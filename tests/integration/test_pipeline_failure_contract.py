@@ -240,7 +240,7 @@ def test_main_exits_nonzero_when_the_pipeline_fails(monkeypatch):
     def fail_pipeline(**kwargs):
         raise RuntimeError("pipeline failed")
 
-    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(pipeline, "configure_logging", lambda **_: None)
     monkeypatch.setattr(pipeline, "run", fail_pipeline)
     monkeypatch.setattr(sys, "argv", ["run_pipeline"])
 

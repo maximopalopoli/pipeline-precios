@@ -42,6 +42,7 @@ env -u SEPA_DEV_CHAIN_KEYS -u SEPA_DEV_MAX_PRODUCT_ROWS \
   .venv/bin/python -m etl.run_pipeline \
     --fecha "$run_date" \
     --zip-path "$archive_path" \
+    --verbose \
   2>&1 | tee "$log_path"
 
 echo "Full replay completed. Next commands:" >&2

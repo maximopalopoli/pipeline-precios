@@ -1,6 +1,9 @@
 -include .env
 export
 
+# VERBOSE=1 prints every ingestion event instead of the milestones.
+LOG_FLAGS := $(if $(VERBOSE), --verbose)
+
 .PHONY: help setup install up down restart logs db api web dev ingest ingest-date ingest-bounded replay-bounded restore-date benchmark-chunks check-benchmark-regression etl-baseline compare-etl-baselines audit-queries test test-unit test-integration lint clean
 
 help: ## Show this help
@@ -53,18 +56,18 @@ dev: db ## Start DB + API + frontend for local development
 
 # Pipeline
 
-ingest: ## Run ETL pipeline for today's data
-	.venv/bin/python -m etl.run_pipeline
+ingest: ## Run ETL pipeline for today's data (VERBOSE=1 prints every event)
+	.venv/bin/python -m etl.run_pipeline$(LOG_FLAGS)
 
 ingest-date: ## Run ETL pipeline for a specific date (usage: make ingest-date DATE=2026-03-17)
-	.venv/bin/python -m etl.run_pipeline --fecha $(DATE)
+	.venv/bin/python -m etl.run_pipeline$(LOG_FLAGS) --fecha $(DATE)
 
 ingest-bounded: ## Run an isolated local partial ingestion (DATE=... and one DEV_* bound required)
 	@test -n "$(DATE)" || (echo "DATE is required, for example DATE=2026-03-17"; exit 2)
 	@test -n "$(DEV_CHAIN_KEYS)$(DEV_MAX_PRODUCT_ROWS)" || (echo "Set DEV_CHAIN_KEYS and/or DEV_MAX_PRODUCT_ROWS"; exit 2)
 	SEPA_DEV_CHAIN_KEYS='$(DEV_CHAIN_KEYS)' SEPA_DEV_MAX_PRODUCT_ROWS='$(DEV_MAX_PRODUCT_ROWS)' \
 	SEPA_FACT_CHUNK_SIZE='$(FACT_CHUNK_SIZE)' \
-		.venv/bin/python -m etl.run_pipeline --fecha $(DATE)
+		.venv/bin/python -m etl.run_pipeline$(LOG_FLAGS) --fecha $(DATE)
 
 replay-bounded: ## Replay a local ZIP without downloading (ZIP=..., DATE=..., and one DEV_* bound required)
 	@test -n "$(ZIP)" || (echo "ZIP is required, for example ZIP=data/sepa.zip"; exit 2)
@@ -72,11 +75,11 @@ replay-bounded: ## Replay a local ZIP without downloading (ZIP=..., DATE=..., an
 	@test -n "$(DEV_CHAIN_KEYS)$(DEV_MAX_PRODUCT_ROWS)" || (echo "Set DEV_CHAIN_KEYS and/or DEV_MAX_PRODUCT_ROWS"; exit 2)
 	SEPA_DEV_CHAIN_KEYS='$(DEV_CHAIN_KEYS)' SEPA_DEV_MAX_PRODUCT_ROWS='$(DEV_MAX_PRODUCT_ROWS)' \
 	SEPA_FACT_CHUNK_SIZE='$(FACT_CHUNK_SIZE)' \
-		.venv/bin/python -m etl.run_pipeline --fecha $(DATE) --zip-path $(ZIP)
+		.venv/bin/python -m etl.run_pipeline$(LOG_FLAGS) --fecha $(DATE) --zip-path $(ZIP)
 
 restore-date: ## Re-ingest a day from its archived source ZIP (usage: make restore-date DATE=2026-09-25)
 	@test -n "$(DATE)" || (echo "DATE is required, for example DATE=2026-09-25"; exit 2)
-	.venv/bin/python -m etl.run_pipeline --fecha $(DATE) --from-archive
+	.venv/bin/python -m etl.run_pipeline$(LOG_FLAGS) --fecha $(DATE) --from-archive
 
 benchmark-chunks: ## Repeat bounded local replays (ZIP= DATE= CHUNK_SIZES=... REPEATS=3 and one DEV_* bound required)
 	@test -n "$(ZIP)$(DATE)$(CHUNK_SIZES)" || (echo "ZIP, DATE and CHUNK_SIZES are required"; exit 2)

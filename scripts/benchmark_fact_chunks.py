@@ -75,6 +75,7 @@ def _run_replay(
         str(zip_path),
         "--fact-chunk-size",
         str(chunk_size),
+        "--verbose",
     ]
     for comercio, bandera in policy.chain_keys:
         command.extend(["--dev-chain-key", f"{comercio}:{bandera}"])

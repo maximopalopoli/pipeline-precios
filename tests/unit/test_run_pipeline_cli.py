@@ -12,7 +12,7 @@ from etl.ingestion_run import IngestionResult
 
 def test_cli_passes_explicit_development_bounds_to_the_pipeline(monkeypatch):
     captured = {}
-    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(pipeline, "configure_logging", lambda **_: None)
     monkeypatch.setattr(
         pipeline,
         "run",
@@ -50,7 +50,7 @@ def test_cli_passes_explicit_development_bounds_to_the_pipeline(monkeypatch):
 
 
 def test_cli_rejects_a_nonpositive_product_bound(monkeypatch):
-    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(pipeline, "configure_logging", lambda **_: None)
     monkeypatch.setattr(sys, "argv", ["run_pipeline", "--dev-max-product-rows", "0"])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -60,7 +60,7 @@ def test_cli_rejects_a_nonpositive_product_bound(monkeypatch):
 
 
 def test_cli_rejects_a_nonpositive_fact_chunk_size(monkeypatch):
-    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(pipeline, "configure_logging", lambda **_: None)
     monkeypatch.setattr(sys, "argv", ["run_pipeline", "--fact-chunk-size", "0"])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -71,7 +71,7 @@ def test_cli_rejects_a_nonpositive_fact_chunk_size(monkeypatch):
 
 def test_cli_passes_a_local_archive_replay_to_the_pipeline(monkeypatch):
     captured = {}
-    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(pipeline, "configure_logging", lambda **_: None)
     monkeypatch.setattr(
         pipeline,
         "run",
@@ -91,7 +91,7 @@ def test_cli_passes_a_local_archive_replay_to_the_pipeline(monkeypatch):
 
 
 def test_cli_requires_a_date_for_local_archive_replay(monkeypatch):
-    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(pipeline, "configure_logging", lambda **_: None)
     monkeypatch.setattr(sys, "argv", ["run_pipeline", "--zip-path", "data/source.zip"])
 
     with pytest.raises(SystemExit) as exc_info:
@@ -102,7 +102,7 @@ def test_cli_requires_a_date_for_local_archive_replay(monkeypatch):
 
 def test_cli_passes_an_archive_restore_to_the_pipeline(monkeypatch):
     captured = {}
-    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(pipeline, "configure_logging", lambda **_: None)
     monkeypatch.setattr(
         pipeline,
         "run",
@@ -136,7 +136,7 @@ def test_cli_passes_an_archive_restore_to_the_pipeline(monkeypatch):
     ids=["without-date", "with-zip-path"],
 )
 def test_cli_rejects_an_invalid_archive_restore(monkeypatch, argv):
-    monkeypatch.setattr(pipeline, "_configure_logging", lambda: None)
+    monkeypatch.setattr(pipeline, "configure_logging", lambda **_: None)
     monkeypatch.setattr(sys, "argv", argv)
 
     with pytest.raises(SystemExit) as exc_info:

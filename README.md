@@ -635,6 +635,17 @@ The API exposes these fields as `reconciliacion` in `GET /api/health`, next to
 the run's `regional_scope`; the home page displays the latest available summary. Older runs predate these counters,
 so their reconciliation is `null` rather than a failed or incomplete status.
 
+### Log output
+
+The CLI prints one line per milestone: the run header with the path of its
+full log, each stage with its row counts and duration, fact progress every 20%
+with the estimated time left, the loss limits and the outcome. Warnings and
+errors that no milestone summarizes are printed as they happen. Every event,
+including the per-chunk ones described below, is written to
+`logs/ingest-<timestamp>.log` (not versioned). `make ingest VERBOSE=1` (or
+`--verbose`) prints every event to the terminal instead. Airflow task logs keep
+every event.
+
 ### Performance telemetry
 
 The CLI and Airflow emit structured events for `download`, `staging`, `quality`,

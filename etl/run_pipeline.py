@@ -69,6 +69,7 @@ from etl.ingestion_processing import (
     stream_pending_product_facts,
 )
 from etl.load.publisher import complete_partial_run, publish_pending_facts
+from etl.log_output import configure_logging, default_log_path
 from etl.performance import StageTimer, items_per_second, process_max_rss_bytes
 from etl.quality import checks as quality_checks
 from etl.quality import reporters
@@ -88,20 +89,6 @@ from etl.source_archive import inspect_source_archive_date, validate_source_arch
 # ---------------------------------------------------------------------------
 # Logging setup
 # ---------------------------------------------------------------------------
-
-
-def _configure_logging() -> None:
-    structlog.configure(
-        processors=[
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.PositionalArgumentsFormatter(),
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.dev.ConsoleRenderer(),
-        ],
-        wrapper_class=structlog.BoundLogger,
-        context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
-    )
 
 
 log = structlog.get_logger(__name__)
@@ -188,6 +175,19 @@ def run(
             "and SEPA_DEV_MAX_PRODUCT_ROWS"
         )
     fecha = resolve_ingestion_date(fecha)
+    if from_archive:
+        source = "archive"
+    elif source_archive is not None:
+        source = "local"
+    else:
+        source = "remote"
+    log.info(
+        "pipeline.started",
+        fecha=str(fecha),
+        source=source,
+        regional_scope=scope_name,
+        is_partial=development_policy.enabled,
+    )
 
     conn = _db_connect()
     t0 = time.perf_counter()
@@ -200,12 +200,6 @@ def run(
         _ensure_seeds(conn)
 
         # ── 1. Download ──────────────────────────────────────────────────────
-        if from_archive:
-            source = "archive"
-        elif source_archive is not None:
-            source = "local"
-        else:
-            source = "remote"
         active_timer = StageTimer(log, "download")
         active_timer.start(source=source)
         try:
@@ -439,6 +433,7 @@ def run(
 
         active_timer.finish(
             rows_fact=publication.rows_fact,
+            rows_carried_forward=publication.rows_carried_forward,
             is_partial=development_policy.enabled,
             rows_fact_pending=reconciliation.rows_fact_pending,
             rows_fact_published=reconciliation.rows_fact_published,
@@ -577,8 +572,6 @@ def run(
 
 
 def main() -> None:
-    _configure_logging()
-
     parser = argparse.ArgumentParser(
         description="Run the SEPA price pipeline for a given date."
     )
@@ -629,7 +622,13 @@ def main() -> None:
         metavar="N",
         help="Rows processed per product-fact batch (default: SEPA_FACT_CHUNK_SIZE or 300000).",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print every log event instead of the milestones; the full log file has them either way.",
+    )
     args = parser.parse_args()
+    configure_logging(verbose=args.verbose, log_path=default_log_path())
 
     if args.zip_path is not None and args.fecha is None:
         parser.error("--zip-path requires --fecha so the source date can be validated")

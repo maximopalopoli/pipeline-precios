@@ -12,7 +12,8 @@ from time import perf_counter
 from uuid import uuid4
 
 from etl.performance import process_max_rss_bytes
-from etl.run_pipeline import _db_connect, _configure_logging
+from etl.log_output import configure_logging
+from etl.run_pipeline import _db_connect
 from etl.staging import loader
 
 
@@ -28,7 +29,7 @@ def main() -> None:
     if args.copy_chunk_rows <= 0:
         parser.error("--copy-chunk-rows must be positive")
 
-    _configure_logging()
+    configure_logging(verbose=True, log_path=None)
     conn = _db_connect()
     raw_file_id: int | None = None
     run_id: int | None = None
