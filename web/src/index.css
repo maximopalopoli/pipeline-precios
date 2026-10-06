@@ -41,6 +41,12 @@ body {
 .size-range::-moz-range-track {
   background: transparent;
 }
+.size-range:focus {
+  outline: none;
+}
 .size-range:focus-visible::-webkit-slider-thumb {
+  outline: 2px solid #93c5fd;
+}
+.size-range:focus-visible::-moz-range-thumb {
   outline: 2px solid #93c5fd;
 }

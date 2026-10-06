@@ -210,6 +210,8 @@ export function Buscador() {
   const location = useAddressLocation();
   const userLat = location.lat;
   const userLon = location.lon;
+  const nearby = userLat != null && userLon != null;
+  const storesChosen = nearby || cadenas.length > 0;
 
   const handleSelectProduct = (p: Product | null) => {
     latestSearch.current += 1;
@@ -412,8 +414,6 @@ export function Buscador() {
 
   const isLoading = isLoadingSingle || isLoadingCards || resolvingType;
   const isGenericMode = !!genericQuery;
-  const nearby = userLat != null && userLon != null;
-  const storesChosen = nearby || cadenas.length > 0;
 
   return (
     <div className="space-y-6">
