@@ -419,6 +419,13 @@ Stores are classified while `sucursales.csv` is staged:
 
 Store discovery (`/api/locales` and the province, chain and locality filters)
 includes only stores with prices on the latest published day.
+`GET /api/filters/chain-options` lists the chains as `{valor, nombre,
+sucursales}`, most stores first: `valor` is the published banner name that the
+`cadenas` filter takes, and `nombre` is the name shoppers know ("Coto",
+"Carrefour Market"), from `api/chain_names.py`. With `lat`, `lon` and `radius`
+it lists only the chains with a store in that radius and counts those stores.
+The search page offers these chains as chips next to a location bar; it has no
+province or locality filter.
 
 Every located route takes `lat`, `lon` and `radius` (km). The point must lie
 in Argentina, both coordinates come together, and the radius is 0.5–50 km.

@@ -4,21 +4,20 @@ import { Link } from 'react-router-dom';
 import {
   fetchBuscador,
   fetchBuscadorDates,
+  fetchChainOptions,
   fetchProduct,
   fetchSearchFacets,
   searchProducts,
+  type ChainOption,
   type FacetValue,
   type Product,
   type ProductAttributeFilters,
   type ProductDetail,
   type StorePrice,
 } from '../lib/api';
-import { useFilters } from '../hooks/useFilters';
 import { useAddressLocation } from '../hooks/useAddressLocation';
 import { useShoppingList } from '../hooks/useShoppingList';
-import { RadiusNotice } from '../components/filters/RadiusNotice';
-import { LocationFilter } from '../components/filters/LocationFilter';
-import { FilterPanel } from '../components/filters/FilterPanel';
+import { LocationBar } from '../components/filters/LocationBar';
 import { ProductSearch } from '../components/filters/ProductSearch';
 import { PriceMap } from '../components/maps/PriceMap';
 import { QueryError } from '../components/layout/QueryError';
@@ -186,7 +185,8 @@ function FacetChips<T extends FacetValue>({
 }
 
 export function Buscador() {
-  const { provincia, localidad, cadenas } = useFilters();
+  // Chains the shopper buys at; several can be chosen.
+  const [cadenas, setCadenas] = useState<string[]>([]);
 
   // Two mutually exclusive modes: one product, or the cards of a search
   const [product, setProduct] = useState<Product | null>(null);
@@ -276,13 +276,11 @@ export function Buscador() {
     isFetchingNextPage: isFetchingMoreStores,
     isFetchNextPageError: isMoreStoresError,
   } = useInfiniteQuery({
-    queryKey: ['buscador', product?.producto_sk, selectedFechaId, provincia, localidad, cadenas, userLat, userLon, searchRadius],
+    queryKey: ['buscador', product?.producto_sk, selectedFechaId, cadenas, userLat, userLon, searchRadius],
     queryFn: ({ pageParam }) =>
       fetchBuscador({
         producto_sk: product!.producto_sk,
         fecha_id: selectedFechaId!,
-        provincia: provincia || undefined,
-        localidad: localidad || undefined,
         cadenas: cadenas.length > 0 ? cadenas : undefined,
         ...locationParams,
         limit: STORES_PER_PAGE,
@@ -309,13 +307,11 @@ export function Buscador() {
     isFetchingNextPage,
     isFetchNextPageError: isMoreCardsError,
   } = useInfiniteQuery({
-    queryKey: ['product-cards', genericQuery, attributes, provincia, localidad, cadenas, userLat, userLon, searchRadius],
+    queryKey: ['product-cards', genericQuery, attributes, cadenas, userLat, userLon, searchRadius],
     queryFn: ({ pageParam }) =>
       searchProducts({
         q: genericQuery!,
         ...attributes,
-        provincia: provincia || undefined,
-        localidad: localidad || undefined,
         cadenas: cadenas.length > 0 ? cadenas : undefined,
         ...locationParams,
         limit: CARDS_PER_PAGE,
@@ -359,10 +355,51 @@ export function Buscador() {
       return { ...current, marca: marca.length > 0 ? marca : undefined };
     });
 
+  // Chains near the location; a chosen chain stays listed to clear it.
+  const { data: chainOptions = [] } = useQuery({
+    queryKey: ['chain-options', locationParams],
+    queryFn: () => fetchChainOptions(locationParams),
+    enabled: location.ready,
+  });
+  const chainChoices: ChainOption[] = [
+    ...chainOptions,
+    ...cadenas
+      .filter((valor) => !chainOptions.some((option) => option.valor === valor))
+      .map((valor) => ({ valor, nombre: valor, sucursales: 0 })),
+  ];
+  const toggleChain = (valor: string) =>
+    setCadenas((current) =>
+      current.includes(valor) ? current.filter((c) => c !== valor) : [...current, valor],
+    );
+  const chainChips = chainChoices.length > 0 && (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs font-medium text-slate-500 mr-1">Cadena</span>
+      {chainChoices.map((option) => {
+        const selected = cadenas.includes(option.valor);
+        return (
+          <button
+            key={option.valor}
+            onClick={() => toggleChain(option.valor)}
+            aria-pressed={selected}
+            title={`${option.sucursales} ${option.sucursales === 1 ? 'local' : 'locales'}${nearby ? ' cerca' : ''}`}
+            className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
+              selected
+                ? 'border-blue-600 bg-blue-600 text-white'
+                : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
+            }`}
+          >
+            {option.nombre}{' '}
+            <span className={selected ? 'text-blue-100' : 'text-slate-400'}>{option.sucursales}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+
   const isLoading = isLoadingSingle || isLoadingCards || resolvingType;
   const isGenericMode = !!genericQuery;
   const nearby = userLat != null && userLon != null;
-  const storesChosen = nearby || !!provincia || !!localidad || cadenas.length > 0;
+  const storesChosen = nearby || cadenas.length > 0;
 
   return (
     <div className="space-y-6">
@@ -373,149 +410,149 @@ export function Buscador() {
         </p>
       </div>
 
-      <div className="grid md:grid-cols-[280px_1fr] gap-6">
-        {/* Location first, then the search, then the narrower filters */}
-        <div className="space-y-4">
-          <LocationFilter location={location} title="Tu ubicación" />
-          <ProductSearch
-            onSelect={handleSelectProduct}
-            onSearchAll={handleSearchAll}
-            selected={product}
-            genericQuery={genericQuery}
+      {/* Location, then the search, above full-width results */}
+      <div className="space-y-3">
+        <LocationBar location={location} />
+        <ProductSearch
+          onSelect={handleSelectProduct}
+          onSearchAll={handleSearchAll}
+          selected={product}
+          genericQuery={genericQuery}
+        />
+      </div>
+
+      {/* Results */}
+      <div className="space-y-4">
+        {!product && !genericQuery && (
+          <p className="text-sm text-slate-400">
+            Escribí un producto, por ejemplo "leche", y presioná Enter para ver todos los resultados,
+            o elegí uno de la lista para ver sus precios por local.
+          </p>
+        )}
+
+        {isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
+
+        {!isGenericMode && product && datesError && (
+          <QueryError what="las fechas del producto" error={datesError} onRetry={() => refetchDates()} />
+        )}
+        {!isGenericMode && storesError && !storePages && (
+          <QueryError what="los precios del producto" error={storesError} onRetry={() => refetchStores()} />
+        )}
+        {isGenericMode && cardsError && !cardPages && (
+          <QueryError what="los productos" error={cardsError} onRetry={() => refetchCards()} />
+        )}
+
+        {location.located && !isLoading
+          && ((isGenericMode && cards.length > 0 && cards.every((c) => c.sucursales === 0))
+            || (!isGenericMode && storePages && stores.length === 0)) && (
+          <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            Ningún local a menos de {searchRadius} km lo tiene. Probá con un radio mayor.
+          </p>
+        )}
+
+        {/* ── Single-product detail ── */}
+        {!isGenericMode && detail && detail.producto_sk === product?.producto_sk && (
+          <ProductHeader
+            detail={detail}
+            product={product}
+            stores={isLoadingSingle ? undefined : storeSummary?.total}
+            nearby={nearby}
           />
+        )}
 
-          {activeDates.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Fecha</label>
-              <select
-                value={selectedFechaId ?? ''}
-                onChange={(e) => setFechaId(Number(e.target.value))}
-                className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-              >
-                {activeDates.map((d) => (
-                  <option key={d.fecha_id} value={d.fecha_id}>
-                    {d.fecha}
-                  </option>
-                ))}
-              </select>
+        {!isGenericMode && product && datesLoaded && dates.length === 0 && (
+          <p className="text-sm text-slate-400">Este producto no tiene precios publicados.</p>
+        )}
+        {!isGenericMode && storePages && stores.length === 0 && !location.located && (
+          <p className="text-sm text-slate-400">No hay precios de este producto para los filtros elegidos.</p>
+        )}
+
+        {!isGenericMode && product && (
+          <div className="space-y-2">
+            {activeDates.length > 1 && (
+              <label className="flex items-center gap-2 text-sm text-slate-600">
+                Precios del día
+                <select
+                  value={selectedFechaId ?? ''}
+                  onChange={(e) => setFechaId(Number(e.target.value))}
+                  className="rounded-md border border-slate-300 px-2 py-1 text-sm"
+                >
+                  {activeDates.map((d) => (
+                    <option key={d.fecha_id} value={d.fecha_id}>
+                      {d.fecha}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {chainChips}
+          </div>
+        )}
+
+        {/* ── Single-product results: stores cheapest first ── */}
+        {!isGenericMode && stores.length > 0 && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg font-semibold text-slate-800">
+                {nearby ? 'Dónde está más barato cerca tuyo' : 'Dónde está más barato'}
+              </h2>
+              <label className="flex items-center gap-2 text-sm text-slate-600">
+                <input
+                  type="checkbox"
+                  checked={showMap}
+                  onChange={(e) => setShowMap(e.target.checked)}
+                  className="rounded"
+                />
+                Ver mapa
+              </label>
             </div>
-          )}
-
-          <FilterPanel showLocality />
-        </div>
-
-        {/* Results */}
-        <div className="space-y-4">
-          {!product && !genericQuery && (
-            <p className="text-sm text-slate-400">
-              Escribí un producto, por ejemplo "leche", y presioná Enter para ver todos los resultados,
-              o elegí uno de la lista para ver sus precios por local.
-            </p>
-          )}
-
-          {isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
-
-          {!isGenericMode && product && datesError && (
-            <QueryError what="las fechas del producto" error={datesError} onRetry={() => refetchDates()} />
-          )}
-          {!isGenericMode && storesError && !storePages && (
-            <QueryError what="los precios del producto" error={storesError} onRetry={() => refetchStores()} />
-          )}
-          {isGenericMode && cardsError && !cardPages && (
-            <QueryError what="los productos" error={cardsError} onRetry={() => refetchCards()} />
-          )}
-
-          {/* Location active indicator */}
-          {location.located && (product || genericQuery) && !isLoading && (
-            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-800">
-              Mostrando resultados a menos de {searchRadius} km de tu ubicacion
-              {((isGenericMode && cards.length > 0 && cards.every((c) => c.sucursales === 0))
-                || (!isGenericMode && storePages && stores.length === 0)) && (
-                <span> — no hay locales cerca. Intenta aumentar el radio.</span>
+            {showMap && <PriceMap stores={stores} />}
+            <ol className="space-y-2">
+              {stores.map((store, i) => (
+                <StoreOffer key={store.sucursal_sk} store={store} cheapest={i === 0} />
+              ))}
+            </ol>
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-600">
+              <span>
+                {stores.length === storeSummary?.total
+                  ? `${stores.length} ${stores.length === 1 ? 'local' : 'locales'}`
+                  : `Los ${stores.length} más baratos de ${storeSummary?.total} locales`}
+                {showMap && hasMoreStores ? '; el mapa muestra solo estos' : ''}
+              </span>
+              {hasMoreStores && (
+                <button
+                  onClick={() => fetchMoreStores()}
+                  disabled={isFetchingMoreStores}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+                >
+                  {isFetchingMoreStores ? 'Cargando...' : 'Ver más locales'}
+                </button>
               )}
-              <RadiusNotice area={location.area} />
+              {isMoreStoresError && (
+                <QueryError compact what="más locales" error={storesError} onRetry={() => fetchMoreStores()} />
+              )}
             </div>
-          )}
+          </div>
+        )}
 
-          {/* ── Single-product detail ── */}
-          {!isGenericMode && detail && detail.producto_sk === product?.producto_sk && (
-            <ProductHeader
-              detail={detail}
-              product={product}
-              stores={isLoadingSingle ? undefined : storeSummary?.total}
-              nearby={nearby}
-            />
-          )}
+        {/* ── The type the search names, chosen for the shopper ── */}
+        {isGenericMode && !resolvingType && namedTipo && attributes.tipo === namedTipo && (
+          <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700">
+            Mostrando solo <strong>{namedTipo}</strong>.{' '}
+            <button
+              onClick={() => toggleAttributes(true, { tipo: namedTipo })}
+              className="text-blue-700 underline hover:text-blue-900"
+            >
+              Ver todo lo que coincide con "{genericQuery}"
+            </button>
+          </div>
+        )}
 
-          {!isGenericMode && product && datesLoaded && dates.length === 0 && (
-            <p className="text-sm text-slate-400">Este producto no tiene precios publicados.</p>
-          )}
-          {!isGenericMode && storePages && stores.length === 0 && !location.located && (
-            <p className="text-sm text-slate-400">No hay precios de este producto para los filtros elegidos.</p>
-          )}
-
-          {/* ── Single-product results: stores cheapest first ── */}
-          {!isGenericMode && stores.length > 0 && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <h2 className="text-lg font-semibold text-slate-800">
-                  {nearby ? 'Dónde está más barato cerca tuyo' : 'Dónde está más barato'}
-                </h2>
-                <label className="flex items-center gap-2 text-sm text-slate-600">
-                  <input
-                    type="checkbox"
-                    checked={showMap}
-                    onChange={(e) => setShowMap(e.target.checked)}
-                    className="rounded"
-                  />
-                  Ver mapa
-                </label>
-              </div>
-              {showMap && <PriceMap stores={stores} />}
-              <ol className="space-y-2">
-                {stores.map((store, i) => (
-                  <StoreOffer key={store.sucursal_sk} store={store} cheapest={i === 0} />
-                ))}
-              </ol>
-              <div className="mt-2 flex flex-wrap items-center gap-3 text-sm text-slate-600">
-                <span>
-                  {stores.length === storeSummary?.total
-                    ? `${stores.length} ${stores.length === 1 ? 'local' : 'locales'}`
-                    : `Los ${stores.length} más baratos de ${storeSummary?.total} locales`}
-                  {showMap && hasMoreStores ? '; el mapa muestra solo estos' : ''}
-                </span>
-                {hasMoreStores && (
-                  <button
-                    onClick={() => fetchMoreStores()}
-                    disabled={isFetchingMoreStores}
-                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                  >
-                    {isFetchingMoreStores ? 'Cargando...' : 'Ver más locales'}
-                  </button>
-                )}
-                {isMoreStoresError && (
-                  <QueryError compact what="más locales" error={storesError} onRetry={() => fetchMoreStores()} />
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* ── The type the search names, chosen for the shopper ── */}
-          {isGenericMode && !resolvingType && namedTipo && attributes.tipo === namedTipo && (
-            <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700">
-              Mostrando solo <strong>{namedTipo}</strong>.{' '}
-              <button
-                onClick={() => toggleAttributes(true, { tipo: namedTipo })}
-                className="text-blue-700 underline hover:text-blue-900"
-              >
-                Ver todo lo que coincide con "{genericQuery}"
-              </button>
-            </div>
-          )}
-
-          {/* ── Facets ── */}
-          {isGenericMode && facets && (
-            <div className="space-y-2">
+        {/* ── Facets ── */}
+        {isGenericMode && (facets || chainChips) && (
+          <div className="space-y-2">
+            {facets && (
+              <>
               <FacetChips
                 label="Tipo"
                 values={facets.tipos}
@@ -539,93 +576,95 @@ export function Buscador() {
                   )
                 }
               />
-            </div>
-          )}
+              </>
+            )}
+            {chainChips}
+          </div>
+        )}
 
-          {/* ── Product cards ── */}
-          {isGenericMode && comparable && (
-            <label className="flex items-center gap-2 text-sm text-slate-600">
-              <input
-                type="checkbox"
-                checked={sortByUnitPrice}
-                onChange={(e) => setSortByUnitPrice(e.target.checked)}
-                className="rounded"
-              />
-              Ordenar estos resultados por precio por kg o litro
-            </label>
-          )}
-          {isGenericMode && cards.length > 0 && (
-            <div className="grid sm:grid-cols-2 gap-3">
-              {shownCards.map((card) => (
-                <button
-                  key={card.producto_sk}
-                  onClick={() => handleSelectProduct(card)}
-                  className="rounded-lg border border-slate-200 bg-white p-4 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
-                >
-                  <p className="font-medium text-slate-900">{card.nombre}</p>
-                  <p className="text-xs text-slate-400">
-                    {card.nombre !== card.descripcion && `${card.descripcion} · `}{card.id_producto}
-                  </p>
-                  {card.precio_desde != null && card.fecha_precio_desde ? (
-                    <>
-                      <p className="mt-2 text-sm text-slate-600">
-                        desde{' '}
-                        <span className="text-lg font-bold text-emerald-700">
-                          {formatCurrency(card.precio_desde)}
-                        </span>
-                      </p>
-                      {card.precio_unitario_desde && (
-                        <p className="text-xs text-slate-600">
-                          {formatUnitPrice(card.precio_unitario_desde)}
-                        </p>
-                      )}
-                      <p className="text-xs text-slate-500">
-                        en {card.sucursales} {card.sucursales === 1 ? 'local' : 'locales'}
-                        {storesChosen && (nearby ? ' cerca' : ' de tu selección')}
-                      </p>
-                      <PriceDate value={card.fecha_precio_desde} />
-                    </>
-                  ) : (
-                    <p className="mt-2 text-sm text-slate-400">
-                      Ningún local{nearby ? ' cerca' : storesChosen ? ' de tu selección' : ''} lo tiene.
+        {/* ── Product cards ── */}
+        {isGenericMode && comparable && (
+          <label className="flex items-center gap-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              checked={sortByUnitPrice}
+              onChange={(e) => setSortByUnitPrice(e.target.checked)}
+              className="rounded"
+            />
+            Ordenar estos resultados por precio por kg o litro
+          </label>
+        )}
+        {isGenericMode && cards.length > 0 && (
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {shownCards.map((card) => (
+              <button
+                key={card.producto_sk}
+                onClick={() => handleSelectProduct(card)}
+                className="rounded-lg border border-slate-200 bg-white p-4 text-left hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+              >
+                <p className="font-medium text-slate-900">{card.nombre}</p>
+                <p className="text-xs text-slate-400">
+                  {card.nombre !== card.descripcion && `${card.descripcion} · `}{card.id_producto}
+                </p>
+                {card.precio_desde != null && card.fecha_precio_desde ? (
+                  <>
+                    <p className="mt-2 text-sm text-slate-600">
+                      desde{' '}
+                      <span className="text-lg font-bold text-emerald-700">
+                        {formatCurrency(card.precio_desde)}
+                      </span>
                     </p>
-                  )}
-                  <CoverageNotes notes={card.cobertura} sucursales={card.sucursales} nearby={nearby} />
-                </button>
-              ))}
-            </div>
-          )}
+                    {card.precio_unitario_desde && (
+                      <p className="text-xs text-slate-600">
+                        {formatUnitPrice(card.precio_unitario_desde)}
+                      </p>
+                    )}
+                    <p className="text-xs text-slate-500">
+                      en {card.sucursales} {card.sucursales === 1 ? 'local' : 'locales'}
+                      {storesChosen && (nearby ? ' cerca' : ' de tu selección')}
+                    </p>
+                    <PriceDate value={card.fecha_precio_desde} />
+                  </>
+                ) : (
+                  <p className="mt-2 text-sm text-slate-400">
+                    Ningún local{nearby ? ' cerca' : storesChosen ? ' de tu selección' : ''} lo tiene.
+                  </p>
+                )}
+                <CoverageNotes notes={card.cobertura} sucursales={card.sucursales} nearby={nearby} />
+              </button>
+            ))}
+          </div>
+        )}
 
-          {isGenericMode && cards.length > 0 && (
-            <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
-              <span>
-                {cards.length} {cards.length === 1 ? 'producto' : 'productos'}
-                {moreCards ? ' — hay más' : ''}
-              </span>
-              {hasNextPage && (
-                <button
-                  onClick={() => fetchNextPage()}
-                  disabled={isFetchingNextPage}
-                  className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
-                >
-                  {isFetchingNextPage ? 'Cargando...' : 'Ver más resultados'}
-                </button>
-              )}
-              {isMoreCardsError && (
-                <QueryError compact what="más resultados" error={cardsError} onRetry={() => fetchNextPage()} />
-              )}
-              {moreCards && !hasNextPage && (
-                <span>Usá los filtros de tipo, marca o tamaño para acotar la búsqueda.</span>
-              )}
-            </div>
-          )}
+        {isGenericMode && cards.length > 0 && (
+          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600">
+            <span>
+              {cards.length} {cards.length === 1 ? 'producto' : 'productos'}
+              {moreCards ? ' — hay más' : ''}
+            </span>
+            {hasNextPage && (
+              <button
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {isFetchingNextPage ? 'Cargando...' : 'Ver más resultados'}
+              </button>
+            )}
+            {isMoreCardsError && (
+              <QueryError compact what="más resultados" error={cardsError} onRetry={() => fetchNextPage()} />
+            )}
+            {moreCards && !hasNextPage && (
+              <span>Usá los filtros de tipo, marca o tamaño para acotar la búsqueda.</span>
+            )}
+          </div>
+        )}
 
-          {isGenericMode && cardPages && cards.length === 0 && (
-            <p className="text-sm text-slate-400">
-              No se encontraron productos para "{genericQuery}".
-            </p>
-          )}
-        </div>
+        {isGenericMode && cardPages && cards.length === 0 && (
+          <p className="text-sm text-slate-400">
+            No se encontraron productos para "{genericQuery}".
+          </p>
+        )}
       </div>
     </div>
   );

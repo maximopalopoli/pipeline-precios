@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from api.location import KM_PER_DEGREE_LAT, KM_PER_DEGREE_LON, Location
-from api.routes import buscador, locales
+from api.routes import buscador, filters, locales
 from etl.load.warehouse_loader import _ensure_partition
 
 FECHA_ID = 20260317
@@ -118,6 +118,7 @@ def day(pg_conn, monkeypatch):
 
     monkeypatch.setattr(buscador, "fetch", fetch)
     monkeypatch.setattr(locales, "fetch", fetch)
+    monkeypatch.setattr(filters, "fetch", fetch)
     return Day(pg_conn)
 
 
@@ -211,3 +212,20 @@ def test_a_sparse_area_reports_the_chains_the_largest_radius_reaches(day):
     day.store(12, 60)
 
     assert _radius(1) == {"radio_km": 50, "cadenas": 1, "ampliado": True, "suficiente": False}
+
+
+def test_chain_options_list_the_chains_near_the_location_by_known_name(day):
+    day.store(12, 0.3)
+    day.store(12, 0.6)
+    day.store(15, 0.8)
+    day.store(9, 5)
+    day.store(10, 0.4, price=None)
+
+    near = asyncio.run(filters.get_chain_options(Location(*OBELISCO, 1)))
+    assert near == [
+        {"valor": "Cadena 12", "nombre": "Coto", "sucursales": 2},
+        {"valor": "Cadena 15", "nombre": "Día", "sucursales": 1},
+    ]
+    # Without a location every chain with a price is listed.
+    everywhere = asyncio.run(filters.get_chain_options(None))
+    assert [option["nombre"] for option in everywhere] == ["Coto", "Cadena 9", "Día"]

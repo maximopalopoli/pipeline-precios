@@ -6,6 +6,15 @@ const api = axios.create({ baseURL: '/api', paramsSerializer: { indexes: null } 
 // ── Filter endpoints ──
 export const fetchProvinces = () => api.get<string[]>('/filters/provinces').then(r => r.data);
 export const fetchChains = () => api.get<string[]>('/filters/chains').then(r => r.data);
+/** A chain to filter by: `valor` for the `cadenas` filters, `nombre` to show. */
+export interface ChainOption {
+  valor: string;
+  nombre: string;
+  /** Its stores near the location, or everywhere without one. */
+  sucursales: number;
+}
+export const fetchChainOptions = (params: { lat?: number; lon?: number; radius?: number }) =>
+  api.get<ChainOption[]>('/filters/chain-options', { params }).then(r => r.data);
 export const fetchLocalities = (province: string) =>
   api.get<string[]>('/filters/localities', { params: { province } }).then(r => r.data);
 
