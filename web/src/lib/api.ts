@@ -51,7 +51,10 @@ export interface ProductAttributeFilters {
   /** Products of any of these brands. */
   marca?: string[];
   contenido?: number;
-  unidad?: 'g' | 'ml' | 'u';
+  /** Sizes between these, inclusive, in ``unidad``. */
+  contenido_min?: number;
+  contenido_max?: number;
+  unidad?: SizeUnit;
 }
 export const searchProducts = (params: ProductAttributeFilters & {
   q: string;
@@ -112,9 +115,10 @@ export interface FacetValue {
   valor: string;
   productos: number;
 }
+export type SizeUnit = 'g' | 'ml' | 'u';
 export interface SizeFacetValue extends FacetValue {
   contenido: number;
-  unidad: 'g' | 'ml' | 'u';
+  unidad: SizeUnit;
 }
 /** Choices that narrow a search; each counts with the other filters applied. */
 export interface SearchFacets {

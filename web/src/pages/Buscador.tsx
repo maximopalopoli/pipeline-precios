@@ -18,6 +18,7 @@ import {
 import { useAddressLocation } from '../hooks/useAddressLocation';
 import { useShoppingList } from '../hooks/useShoppingList';
 import { LocationBar } from '../components/filters/LocationBar';
+import { SizeRange, type SizeSelection } from '../components/filters/SizeRange';
 import { ProductSearch } from '../components/filters/ProductSearch';
 import { PriceMap } from '../components/maps/PriceMap';
 import { QueryError } from '../components/layout/QueryError';
@@ -28,6 +29,8 @@ import { formatCurrency } from '../lib/constants';
 import { byUnitPrice, formatUnitPrice } from '../lib/unitPrice';
 
 const CARDS_PER_PAGE = 50;
+// Up to this many sizes are chips ("500 ml", "1 l"); more make a range bar.
+const MAX_SIZE_CHIPS = 5;
 const STORES_PER_PAGE = 50;
 // The API's deepest page offset; past it the search should be narrowed.
 const MAX_CARDS_OFFSET = 1000;
@@ -347,6 +350,17 @@ export function Buscador() {
       return selected ? cleared : { ...cleared, ...chosen };
     });
 
+  // A size chip and a size range replace each other.
+  const setSize = (size: SizeSelection & { contenido?: number }) =>
+    setAttributes((current) => ({
+      ...current,
+      contenido: undefined,
+      contenido_min: undefined,
+      contenido_max: undefined,
+      unidad: undefined,
+      ...size,
+    }));
+
   // Brands add up, to compare them; clicking a chosen brand removes it.
   const toggleBrand = (brand: string) =>
     setAttributes((current) => {
@@ -565,17 +579,22 @@ export function Buscador() {
                 isSelected={(v) => attributes.marca?.includes(v.valor) ?? false}
                 onToggle={(v) => toggleBrand(v.valor)}
               />
-              <FacetChips
-                label="Tamaño"
-                values={facets.tamanos}
-                isSelected={(v) => attributes.contenido === v.contenido && attributes.unidad === v.unidad}
-                onToggle={(v) =>
-                  toggleAttributes(
-                    attributes.contenido === v.contenido && attributes.unidad === v.unidad,
-                    { contenido: v.contenido, unidad: v.unidad },
-                  )
-                }
-              />
+              {facets.tamanos.length > MAX_SIZE_CHIPS ? (
+                <SizeRange sizes={facets.tamanos} selection={attributes} onChange={setSize} />
+              ) : (
+                <FacetChips
+                  label="Tamaño"
+                  values={facets.tamanos}
+                  isSelected={(v) => attributes.contenido === v.contenido && attributes.unidad === v.unidad}
+                  onToggle={(v) =>
+                    setSize(
+                      attributes.contenido === v.contenido && attributes.unidad === v.unidad
+                        ? {}
+                        : { contenido: v.contenido, unidad: v.unidad },
+                    )
+                  }
+                />
+              )}
               </>
             )}
             {chainChips}

@@ -25,6 +25,8 @@ MAX_WORDS = 8
 TRIGRAM_LENGTH = 3
 # Facet values listed per attribute, the most common first.
 MAX_FACET_VALUES = 20
+# Sizes are all listed, so that a range covers them; this only bounds the reply.
+MAX_SIZE_FACET_VALUES = 500
 # Search results are paged; deeper pages mean the query should be narrowed.
 MAX_SEARCH_OFFSET = 1000
 # SEPA zero-pads every product code to 13 digits, so a scanned EAN-8 or a
@@ -131,7 +133,9 @@ class _Matching:
             self._query_ref = self.param(self.q)
         return self._query_ref
 
-    def attribute_filters(self, tipo, marca, contenido, unidad) -> dict[str, str]:
+    def attribute_filters(
+        self, tipo, marca, contenido, unidad, contenido_min=None, contenido_max=None
+    ) -> dict[str, str]:
         """Conditions of the attribute filters given, keyed by facet."""
         filters = {}
         if tipo:
@@ -146,6 +150,10 @@ class _Matching:
         sizes = []
         if contenido is not None:
             sizes.append(f"p.contenido = {self.param(contenido)}")
+        if contenido_min is not None:
+            sizes.append(f"p.contenido >= {self.param(contenido_min)}")
+        if contenido_max is not None:
+            sizes.append(f"p.contenido <= {self.param(contenido_max)}")
         if unidad:
             sizes.append(f"p.contenido_unidad = {self.param(unidad)}")
         if sizes:
@@ -168,6 +176,8 @@ async def search_products(
     tipo: str | None = Query(None),
     marca: list[str] | None = Query(None),
     contenido: Decimal | None = Query(None, gt=0),
+    contenido_min: Decimal | None = Query(None, gt=0),
+    contenido_max: Decimal | None = Query(None, gt=0),
     unidad: Literal["g", "ml", "u"] | None = Query(None),
     provincia: str | None = Query(None),
     localidad: str | None = Query(None),
@@ -201,7 +211,9 @@ async def search_products(
     q_ref = matching.query()
     conditions = [
         *matching.conditions,
-        *matching.attribute_filters(tipo, marca, contenido, unidad).values(),
+        *matching.attribute_filters(
+            tipo, marca, contenido, unidad, contenido_min, contenido_max
+        ).values(),
     ]
 
     # Each result's prices are read after ranking, for the returned page only.
@@ -297,6 +309,8 @@ async def search_facets(
     tipo: str | None = Query(None),
     marca: list[str] | None = Query(None),
     contenido: Decimal | None = Query(None, gt=0),
+    contenido_min: Decimal | None = Query(None, gt=0),
+    contenido_max: Decimal | None = Query(None, gt=0),
     unidad: Literal["g", "ml", "u"] | None = Query(None),
 ):
     """Types, brands and sizes of the products a search lists, to narrow it.
@@ -306,7 +320,9 @@ async def search_facets(
     keeps the other brands available.  Brands are grouped without regard to
     case or accents ("Cepita" and "CEPITA"), under their most common
     spelling as the product names write it.  A blank brand and a single unit,
-    which names leave out, are not choices.
+    which names leave out, are not choices.  Every size is listed, not only
+    the most common, so that a client can offer a range between them
+    (``contenido_min`` and ``contenido_max`` with a ``unidad``).
 
     ``tipo_nombrado`` is the type the query names ("leche" for "leche
     entera", not for "dulce de leche"), when it is among the listed types;
@@ -316,20 +332,23 @@ async def search_facets(
     matching = _Matching(q)
     if matching.empty:
         return empty
-    filters = matching.attribute_filters(tipo, marca, contenido, unidad)
+    filters = matching.attribute_filters(
+        tipo, marca, contenido, unidad, contenido_min, contenido_max
+    )
 
     def others(facet: str) -> str:
         return " AND ".join(c for name, c in filters.items() if name != facet) or "TRUE"
 
-    # facet: (filter it ignores, grouping keys, label, size and unit columns)
+    # facet: (filter it ignores, grouping keys, label, size and unit columns, limit)
     facet_queries = {
-        "tipos": ("tipo", ["p.tipo"], "p.tipo", "NULL::numeric", "NULL::text"),
+        "tipos": ("tipo", ["p.tipo"], "p.tipo", "NULL::numeric", "NULL::text", MAX_FACET_VALUES),
         "marcas": (
             "marca",
             ["NULLIF(pipeline_normalize_text(p.productos_marca), '')"],
             "INITCAP(MODE() WITHIN GROUP (ORDER BY BTRIM(p.productos_marca)))",
             "NULL::numeric",
             "NULL::text",
+            MAX_FACET_VALUES,
         ),
         "tamanos": (
             "tamano",
@@ -337,10 +356,11 @@ async def search_facets(
             "pipeline_format_size(p.contenido, p.contenido_unidad)",
             "p.contenido",
             "p.contenido_unidad",
+            MAX_SIZE_FACET_VALUES,
         ),
     }
     selects = []
-    for kind, (facet, keys, label, size, unit) in facet_queries.items():
+    for kind, (facet, keys, label, size, unit, limit) in facet_queries.items():
         selects.append(
             f"""(
             SELECT '{kind}' AS faceta, {label} AS valor, {size} AS contenido,
@@ -350,7 +370,7 @@ async def search_facets(
             GROUP BY {", ".join(keys)}
             HAVING {label} IS NOT NULL
             ORDER BY productos DESC, valor
-            LIMIT {MAX_FACET_VALUES}
+            LIMIT {limit}
         )"""
         )
 

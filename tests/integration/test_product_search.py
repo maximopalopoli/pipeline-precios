@@ -180,14 +180,17 @@ def catalog(pg_conn, monkeypatch):
 
 
 def _facets(q, **filters):
-    filters = {"tipo": None, "marca": None, "contenido": None, "unidad": None, **filters}
+    filters = {
+        "tipo": None, "marca": None, "contenido": None, "contenido_min": None,
+        "contenido_max": None, "unidad": None, **filters,
+    }
     return asyncio.run(products.search_facets(q, **filters))
 
 
 def _page(q, **filters):
     filters = {
-        "tipo": None, "marca": None, "contenido": None, "unidad": None,
-        "provincia": None, "localidad": None, "cadenas": None,
+        "tipo": None, "marca": None, "contenido": None, "contenido_min": None,
+        "contenido_max": None, "unidad": None, "provincia": None, "localidad": None, "cadenas": None,
         "location": None, "limit": 50, "offset": 0, **filters,
     }
     return asyncio.run(products.search_products(q, **filters))
@@ -291,6 +294,12 @@ def test_a_query_of_short_words_finds_the_type_it_names(catalog):
             ["Leche La Serenisima entera 1 l", "Dulce de leche La Serenisima 400 g"],
         ),
         ({"contenido": Decimal("1000"), "unidad": "ml"}, ["Leche La Serenisima entera 1 l"]),
+        (
+            {"contenido_min": Decimal("100"), "contenido_max": Decimal("400"), "unidad": "g"},
+            ["Galletitas Mana 145 g", "Dulce de leche La Serenisima 400 g"],
+        ),
+        ({"contenido_min": Decimal("200"), "unidad": "g"}, ["Dulce de leche La Serenisima 400 g"]),
+        ({"contenido_max": Decimal("200"), "unidad": "g"}, ["Galletitas Mana 145 g"]),
     ],
 )
 def test_filters_narrow_the_results(catalog, filters, names):
@@ -416,6 +425,17 @@ def test_several_brands_list_the_products_of_any_of_them(catalog):
     }
     # Choosing brands keeps every brand available, to add another.
     assert _values(_facets("leche", marca=["mana"])["marcas"]) == [("La Serenisima", 2), ("Mana", 1)]
+
+
+def test_every_size_is_listed_so_that_a_range_covers_them(catalog):
+    for size in range(100, 100 + products.MAX_FACET_VALUES + 5):
+        identity = f"12:1:{size}"
+        catalog.add_product(identity, "GALLETITAS DE PRUEBA", "MANA", "galletitas", None, size, "g", 1)
+        catalog.price(identity, 1, 100)
+
+    sizes = _facets("galletitas", contenido_min=Decimal("120"), unidad="g")["tamanos"]
+
+    assert len(sizes) == products.MAX_FACET_VALUES + 5 + 1
 
 
 def test_a_facet_ignores_its_own_filter_and_applies_the_others(catalog):

@@ -246,7 +246,8 @@ Data rules the pipeline relies on:
   accents. An exact EAN comes first, then products of the type the query
   names, then those listed by more chains. Optional `tipo`, `marca`,
   `contenido` and `unidad` (`g`, `ml`, `u`) filters narrow the results;
-  repeated `marca` keys list the products of any of those brands.
+  repeated `marca` keys list the products of any of those brands, and
+  `contenido_min` and `contenido_max` keep the sizes between them.
   Each result carries `precio_desde`, its lowest store price (unconditional
   promotions in force only), the observation date of that price, and
   `sucursales`, how many stores carry it. With `lat`, `lon` and `radius` (km,
@@ -258,7 +259,10 @@ Data rules the pipeline relies on:
   product, so pages of one published day never repeat or skip a product.
   `GET /products/search/facets` takes the same query and attribute
   filters and returns `tipos`, `marcas` and `tamanos` with product counts;
-  each facet ignores its own filter and applies the others. `tipo_nombrado`
+  each facet ignores its own filter and applies the others. Types and brands
+  list the 20 most common; sizes are all listed. The web shows up to five
+  sizes as chips and more as a range bar that stops only at listed sizes,
+  one unit at a time. `tipo_nombrado`
   is the type the query names ("leche" for "leche entera"), when it is among
   the listed types; the web chooses it before listing cards, so a search for
   milk lists milk, and the shopper can clear it to see every match.
