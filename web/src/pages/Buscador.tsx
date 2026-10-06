@@ -318,12 +318,17 @@ export function Buscador() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-slate-900">Buscador de Precios</h1>
+      <div>
+        <h1 className="text-2xl font-bold text-slate-900">Compará precios cerca tuyo</h1>
+        <p className="text-slate-500">
+          Indicá dónde estás y buscá un producto para ver en qué supermercados cercanos está más barato.
+        </p>
+      </div>
 
       <div className="grid md:grid-cols-[280px_1fr] gap-6">
-        {/* Filters sidebar */}
+        {/* Location first, then the search, then the narrower filters */}
         <div className="space-y-4">
-          <FilterPanel showLocality />
+          <LocationFilter location={location} title="Tu ubicación" />
           <ProductSearch
             onSelect={handleSelectProduct}
             onSearchAll={handleSearchAll}
@@ -348,14 +353,15 @@ export function Buscador() {
             </div>
           )}
 
-          <LocationFilter location={location} />
+          <FilterPanel showLocality />
         </div>
 
         {/* Results */}
         <div className="space-y-4">
           {!product && !genericQuery && (
             <p className="text-sm text-slate-400">
-              Busca un producto para ver precios, o presiona Enter para buscar todos los resultados.
+              Escribí un producto, por ejemplo "leche", y presioná Enter para ver todos los resultados,
+              o elegí uno de la lista para ver sus precios por local.
             </p>
           )}
 

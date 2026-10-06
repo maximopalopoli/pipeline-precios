@@ -2,8 +2,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { DataNotice } from './DataNotice';
 
 const NAV_ITEMS = [
-  { to: '/', label: 'Inicio', icon: '📊' },
-  { to: '/buscador', label: 'Buscador', icon: '🔍' },
+  { to: '/', label: 'Buscador', icon: '🔍' },
   { to: '/ofertas', label: 'Ofertas', icon: '🏷️' },
   { to: '/locales', label: 'Locales', icon: '📍' },
   { to: '/lista', label: 'Lista de Compras', icon: '🛒' },
@@ -13,7 +12,7 @@ export function AppLayout() {
   return (
     <div className="flex min-h-screen">
       {/* Sidebar */}
-      <aside className="w-56 shrink-0 border-r border-slate-200 bg-white">
+      <aside className="flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white">
         <div className="p-4 border-b border-slate-200">
           <h1 className="text-lg font-bold text-slate-900">SEPA Precios</h1>
           <p className="text-xs text-slate-500">Comparador de precios</p>
@@ -37,6 +36,17 @@ export function AppLayout() {
             </NavLink>
           ))}
         </nav>
+        {/* For whoever runs the ingestion, not part of shopping. */}
+        <NavLink
+          to="/estado"
+          className={({ isActive }) =>
+            `mt-auto border-t border-slate-200 px-5 py-3 text-xs ${
+              isActive ? 'text-slate-900 font-medium' : 'text-slate-400 hover:text-slate-600'
+            }`
+          }
+        >
+          Estado de los datos
+        </NavLink>
       </aside>
 
       {/* Main content */}
