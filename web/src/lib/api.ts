@@ -39,7 +39,8 @@ export type CoverageNote = 'fraccionado_en_local' | 'codigo_interno' | 'pocos_lo
 /** Attributes that narrow a search to some of its products. */
 export interface ProductAttributeFilters {
   tipo?: string;
-  marca?: string;
+  /** Products of any of these brands. */
+  marca?: string[];
   contenido?: number;
   unidad?: 'g' | 'ml' | 'u';
 }

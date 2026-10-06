@@ -245,7 +245,8 @@ Data rules the pipeline relies on:
   published day. Every query word must appear in any order, ignoring case and
   accents. An exact EAN comes first, then products of the type the query
   names, then those listed by more chains. Optional `tipo`, `marca`,
-  `contenido` and `unidad` (`g`, `ml`, `u`) filters narrow the results.
+  `contenido` and `unidad` (`g`, `ml`, `u`) filters narrow the results;
+  repeated `marca` keys list the products of any of those brands.
   Each result carries `precio_desde`, its lowest store price (unconditional
   promotions in force only), the observation date of that price, and
   `sucursales`, how many stores carry it. With `lat`, `lon` and `radius` (km,

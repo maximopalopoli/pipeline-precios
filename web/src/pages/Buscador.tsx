@@ -148,7 +148,7 @@ function ProductHeader({
   );
 }
 
-// ── Facet chips: one choice per facet, clicked again to clear ──
+// ── Facet chips: a chosen value is clicked again to clear it ──
 function FacetChips<T extends FacetValue>({
   label,
   values,
@@ -351,6 +351,14 @@ export function Buscador() {
       return selected ? cleared : { ...cleared, ...chosen };
     });
 
+  // Brands add up, to compare them; clicking a chosen brand removes it.
+  const toggleBrand = (brand: string) =>
+    setAttributes((current) => {
+      const brands = current.marca ?? [];
+      const marca = brands.includes(brand) ? brands.filter((b) => b !== brand) : [...brands, brand];
+      return { ...current, marca: marca.length > 0 ? marca : undefined };
+    });
+
   const isLoading = isLoadingSingle || isLoadingCards || resolvingType;
   const isGenericMode = !!genericQuery;
   const nearby = userLat != null && userLon != null;
@@ -517,8 +525,8 @@ export function Buscador() {
               <FacetChips
                 label="Marca"
                 values={facets.marcas}
-                isSelected={(v) => attributes.marca === v.valor}
-                onToggle={(v) => toggleAttributes(attributes.marca === v.valor, { marca: v.valor })}
+                isSelected={(v) => attributes.marca?.includes(v.valor) ?? false}
+                onToggle={(v) => toggleBrand(v.valor)}
               />
               <FacetChips
                 label="Tamaño"

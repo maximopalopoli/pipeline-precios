@@ -137,9 +137,11 @@ class _Matching:
         if tipo:
             filters["tipo"] = f"p.tipo = {self.param(tipo)}"
         if marca:
+            # Any of the brands chosen, to compare them side by side.
             filters["marca"] = (
-                "pipeline_normalize_text(p.productos_marca) = "
-                f"pipeline_normalize_text({self.param(marca)})"
+                "pipeline_normalize_text(p.productos_marca) = ANY(ARRAY("
+                f"SELECT pipeline_normalize_text(m) FROM UNNEST({self.param(marca)}::text[]) AS m"
+                "))"
             )
         sizes = []
         if contenido is not None:
@@ -164,7 +166,7 @@ class _Matching:
 async def search_products(
     q: str = Query(..., min_length=1),
     tipo: str | None = Query(None),
-    marca: str | None = Query(None),
+    marca: list[str] | None = Query(None),
     contenido: Decimal | None = Query(None, gt=0),
     unidad: Literal["g", "ml", "u"] | None = Query(None),
     provincia: str | None = Query(None),
@@ -293,7 +295,7 @@ async def search_products(
 async def search_facets(
     q: str = Query(..., min_length=1),
     tipo: str | None = Query(None),
-    marca: str | None = Query(None),
+    marca: list[str] | None = Query(None),
     contenido: Decimal | None = Query(None, gt=0),
     unidad: Literal["g", "ml", "u"] | None = Query(None),
 ):

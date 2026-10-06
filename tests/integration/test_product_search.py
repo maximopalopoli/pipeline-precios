@@ -287,7 +287,7 @@ def test_a_query_of_short_words_finds_the_type_it_names(catalog):
     [
         ({"tipo": "dulce de leche"}, ["Dulce de leche La Serenisima 400 g"]),
         (
-            {"marca": "la serenísima"},
+            {"marca": ["la serenísima"]},
             ["Leche La Serenisima entera 1 l", "Dulce de leche La Serenisima 400 g"],
         ),
         ({"contenido": Decimal("1000"), "unidad": "ml"}, ["Leche La Serenisima entera 1 l"]),
@@ -407,11 +407,19 @@ def test_brands_are_grouped_without_regard_to_case_or_accents(catalog):
 
     # Three products write it in capitals, one with an accent.
     assert _values(_facets("leche")["marcas"]) == [("La Serenisima", 4), ("Mana", 1)]
-    assert len(_search("leche", marca="la serenisima")) == 4
+    assert len(_search("leche", marca=["la serenisima"])) == 4
+
+
+def test_several_brands_list_the_products_of_any_of_them(catalog):
+    assert {product["marca"] for product in _search("leche", marca=["la serenisima", "Maná"])} == {
+        "LA SERENISIMA", "MANA"
+    }
+    # Choosing brands keeps every brand available, to add another.
+    assert _values(_facets("leche", marca=["mana"])["marcas"]) == [("La Serenisima", 2), ("Mana", 1)]
 
 
 def test_a_facet_ignores_its_own_filter_and_applies_the_others(catalog):
-    facets = _facets("leche", tipo="leche", marca="mana")
+    facets = _facets("leche", tipo="leche", marca=["mana"])
 
     # Every type of the brand, every brand of the type.
     assert _values(facets["tipos"]) == [("galletitas", 1)]
@@ -428,8 +436,8 @@ def test_facets_name_the_type_the_query_names(catalog):
 
 def test_a_named_type_the_search_does_not_list_is_not_named(catalog):
     # Mana sells no milk, so choosing milk would empty the search.
-    assert _values(_facets("leche", marca="mana")["tipos"]) == [("galletitas", 1)]
-    assert _facets("leche", marca="mana")["tipo_nombrado"] is None
+    assert _values(_facets("leche", marca=["mana"])["tipos"]) == [("galletitas", 1)]
+    assert _facets("leche", marca=["mana"])["tipo_nombrado"] is None
 
 
 def test_a_blank_brand_and_a_single_unit_are_not_choices(catalog):
