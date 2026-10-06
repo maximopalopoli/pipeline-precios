@@ -419,6 +419,19 @@ def test_a_facet_ignores_its_own_filter_and_applies_the_others(catalog):
     assert facets["tamanos"] == []
 
 
+def test_facets_name_the_type_the_query_names(catalog):
+    assert _facets("leche")["tipo_nombrado"] == "leche"
+    assert _facets("dulce de leche")["tipo_nombrado"] == "dulce de leche"
+    # A brand names no type.
+    assert _facets("serenisima")["tipo_nombrado"] is None
+
+
+def test_a_named_type_the_search_does_not_list_is_not_named(catalog):
+    # Mana sells no milk, so choosing milk would empty the search.
+    assert _values(_facets("leche", marca="mana")["tipos"]) == [("galletitas", 1)]
+    assert _facets("leche", marca="mana")["tipo_nombrado"] is None
+
+
 def test_a_blank_brand_and_a_single_unit_are_not_choices(catalog):
     catalog.add_product("ean:7790000000110", "TE X 1", " ", "té", None, 1, "u", 1)
     catalog.price("ean:7790000000110", 1, 10)

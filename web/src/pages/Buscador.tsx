@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useRef, useState } from 'react';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
 import {
   fetchBuscador,
@@ -180,6 +180,12 @@ export function Buscador() {
   const [product, setProduct] = useState<Product | null>(null);
   const [genericQuery, setGenericQuery] = useState<string | null>(null);
   const [attributes, setAttributes] = useState<ProductAttributeFilters>({});
+  // The type a search names is chosen before its cards load ("leche" lists
+  // milk); the shopper can clear it to see every match.
+  const [namedTipo, setNamedTipo] = useState<string | null>(null);
+  const [resolvingType, setResolvingType] = useState(false);
+  const latestSearch = useRef(0);
+  const queryClient = useQueryClient();
 
   const [fechaId, setFechaId] = useState<number | null>(null);
   const [showMap, setShowMap] = useState(false);
@@ -191,16 +197,39 @@ export function Buscador() {
   const userLon = location.lon;
 
   const handleSelectProduct = (p: Product | null) => {
+    latestSearch.current += 1;
+    setResolvingType(false);
     setProduct(p);
     setGenericQuery(null);
     setFechaId(null);
   };
 
-  const handleSearchAll = (q: string) => {
+  const handleSearchAll = async (q: string) => {
+    const search = ++latestSearch.current;
     setGenericQuery(q || null);
     setAttributes({});
+    setNamedTipo(null);
     setProduct(null);
     setFechaId(null);
+    if (!q) {
+      setResolvingType(false);
+      return;
+    }
+    setResolvingType(true);
+    let tipo: string | null = null;
+    try {
+      const facets = await queryClient.fetchQuery({
+        queryKey: ['search-facets', q, {}],
+        queryFn: () => fetchSearchFacets({ q }),
+      });
+      tipo = facets.tipo_nombrado;
+    } catch {
+      // Without the facets the cards still list every match.
+    }
+    if (search !== latestSearch.current) return;
+    setNamedTipo(tipo);
+    if (tipo) setAttributes({ tipo });
+    setResolvingType(false);
   };
 
   // ── Dates ──
@@ -285,7 +314,7 @@ export function Buscador() {
       const offset = pages.length * CARDS_PER_PAGE;
       return last.hay_mas && offset <= MAX_CARDS_OFFSET ? offset : undefined;
     },
-    enabled: !!genericQuery && location.ready,
+    enabled: !!genericQuery && !resolvingType && location.ready,
   });
   const cards = cardPages?.pages.flatMap((page) => page.productos) ?? [];
   const moreCards = cardPages?.pages.at(-1)?.hay_mas ?? false;
@@ -299,7 +328,7 @@ export function Buscador() {
   const { data: facets } = useQuery({
     queryKey: ['search-facets', genericQuery, attributes],
     queryFn: () => fetchSearchFacets({ q: genericQuery!, ...attributes }),
-    enabled: !!genericQuery,
+    enabled: !!genericQuery && !resolvingType,
     placeholderData: (previous) => previous,
   });
 
@@ -310,7 +339,7 @@ export function Buscador() {
       return selected ? cleared : { ...cleared, ...chosen };
     });
 
-  const isLoading = isLoadingSingle || isLoadingCards;
+  const isLoading = isLoadingSingle || isLoadingCards || resolvingType;
   const isGenericMode = !!genericQuery;
   const nearby = userLat != null && userLon != null;
   const storesChosen = nearby || !!provincia || !!localidad || cadenas.length > 0;
@@ -477,6 +506,19 @@ export function Buscador() {
                 </div>
               </div>
             </>
+          )}
+
+          {/* ── The type the search names, chosen for the shopper ── */}
+          {isGenericMode && !resolvingType && namedTipo && attributes.tipo === namedTipo && (
+            <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700">
+              Mostrando solo <strong>{namedTipo}</strong>.{' '}
+              <button
+                onClick={() => toggleAttributes(true, { tipo: namedTipo })}
+                className="text-blue-700 underline hover:text-blue-900"
+              >
+                Ver todo lo que coincide con "{genericQuery}"
+              </button>
+            </div>
           )}
 
           {/* ── Facets ── */}

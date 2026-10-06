@@ -257,7 +257,10 @@ Data rules the pipeline relies on:
   product, so pages of one published day never repeat or skip a product.
   `GET /products/search/facets` takes the same query and attribute
   filters and returns `tipos`, `marcas` and `tamanos` with product counts;
-  each facet ignores its own filter and applies the others.
+  each facet ignores its own filter and applies the others. `tipo_nombrado`
+  is the type the query names ("leche" for "leche entera"), when it is among
+  the listed types; the web chooses it before listing cards, so a search for
+  milk lists milk, and the shopper can clear it to see every match.
   `GET /products/{producto_sk}` is the product detail: catalog name and
   attributes, the description, brand and size as published (`publicado`),
   whether a curated correction applies (`corregido`), and the source codes

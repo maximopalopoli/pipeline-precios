@@ -111,6 +111,8 @@ export interface SearchFacets {
   tipos: FacetValue[];
   marcas: FacetValue[];
   tamanos: SizeFacetValue[];
+  /** The type the query names, when the search lists it ("leche"). */
+  tipo_nombrado: string | null;
 }
 export const fetchSearchFacets = (params: ProductAttributeFilters & { q: string }) =>
   api.get<SearchFacets>('/products/search/facets', { params }).then(r => r.data);

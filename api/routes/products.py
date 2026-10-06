@@ -305,8 +305,12 @@ async def search_facets(
     case or accents ("Cepita" and "CEPITA"), under their most common
     spelling as the product names write it.  A blank brand and a single unit,
     which names leave out, are not choices.
+
+    ``tipo_nombrado`` is the type the query names ("leche" for "leche
+    entera", not for "dulce de leche"), when it is among the listed types;
+    the client can choose it so that a search for milk lists milk.
     """
-    empty = {"tipos": [], "marcas": [], "tamanos": []}
+    empty = {"tipos": [], "marcas": [], "tamanos": [], "tipo_nombrado": None}
     matching = _Matching(q)
     if matching.empty:
         return empty
@@ -348,6 +352,13 @@ async def search_facets(
         )"""
         )
 
+    selects.append(
+        f"""(
+            SELECT 'tipo_nombrado', pipeline_product_type({matching.query()}),
+                   NULL::numeric, NULL::text, 0::bigint
+        )"""
+    )
+
     rows = await fetch(
         f"""
         WITH {matching.candidates_cte()},
@@ -359,11 +370,17 @@ async def search_facets(
         *matching.params,
     )
     facets = empty
+    named = None
     for r in rows:
+        if r["faceta"] == "tipo_nombrado":
+            named = r["valor"]
+            continue
         value = {"valor": r["valor"], "productos": r["productos"]}
         if r["faceta"] == "tamanos":
             value |= {"contenido": r["contenido"], "unidad": r["unidad"]}
         facets[r["faceta"]].append(value)
+    if any(value["valor"] == named for value in facets["tipos"]):
+        facets["tipo_nombrado"] = named
     return facets
 
 
