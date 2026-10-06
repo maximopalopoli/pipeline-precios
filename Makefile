@@ -29,6 +29,12 @@ db: ## Start PostgreSQL and apply pending migrations and seeds
 
 up: ## Start all services (PostgreSQL + Airflow + API + Web)
 	docker compose up -d
+	@echo ""
+	@echo "Services are up:"
+	@echo "  Web         http://localhost:3000  (installs dependencies first; may take a minute)"
+	@echo "  API         http://localhost:8000  (docs at /docs)"
+	@echo "  Airflow     http://localhost:8080"
+	@echo "  PostgreSQL  localhost:5432"
 
 down: ## Stop all services
 	docker compose stop
