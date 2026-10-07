@@ -2,7 +2,8 @@ import { useState } from 'react';
 import type { AddressLocation } from '../../hooks/useAddressLocation';
 import { RadiusNotice } from './RadiusNotice';
 
-const RADII_KM = [0.5, 1, 2, 3, 5, 10];
+// The radius stops; the API may grow the first one up to 50 km.
+const RADII_KM = [0.5, 1, 2, 3, 5, 10, 20, 50];
 
 /**
  * The shopper's location as a full-width bar: an address form until it is
@@ -24,18 +25,7 @@ export function LocationBar({ location }: { location: AddressLocation }) {
             📍 <strong>{location.address}</strong>
             {location.city && `, ${location.city}`}
           </span>
-          <label className="flex items-center gap-1.5 text-slate-600">
-            Radio
-            <select
-              value={location.chosenRadius}
-              onChange={(e) => location.setRadius(Number(e.target.value))}
-              className="rounded-md border border-slate-300 px-1.5 py-0.5"
-            >
-              {RADII_KM.map((km) => (
-                <option key={km} value={km}>{km} km</option>
-              ))}
-            </select>
-          </label>
+          <RadiusSlider radius={location.radius} onChange={location.setRadius} />
           <button
             onClick={() => {
               setDraftAddress(location.address);
@@ -107,4 +97,45 @@ export function LocationBar({ location }: { location: AddressLocation }) {
       {location.notFound && <p className="mt-2 text-xs text-red-500">No se encontró la dirección.</p>}
     </form>
   );
+}
+
+/**
+ * The radius as a bar from 0.5 to 50 km, stopping at the usual distances.
+ * It shows the radius searched, grown or not, and is applied on release.
+ */
+function RadiusSlider({ radius, onChange }: { radius: number; onChange: (km: number) => void }) {
+  const [dragged, setDragged] = useState<number | null>(null);
+  const index = dragged ?? nearestIndex(radius);
+  const commit = () => {
+    if (dragged === null) return;
+    setDragged(null);
+    if (RADII_KM[dragged] !== radius) onChange(RADII_KM[dragged]);
+  };
+  return (
+    <label className="flex min-w-56 flex-1 items-center gap-2 text-slate-600 sm:max-w-xs">
+      Radio
+      <input
+        type="range"
+        min={0}
+        max={RADII_KM.length - 1}
+        value={index}
+        onChange={(e) => setDragged(Number(e.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        aria-valuetext={`${RADII_KM[index]} km`}
+        className="flex-1 accent-blue-600"
+      />
+      <span className="w-12 whitespace-nowrap text-right text-slate-800">
+        {RADII_KM[index].toLocaleString('es-AR')} km
+      </span>
+    </label>
+  );
+}
+
+function nearestIndex(km: number): number {
+  let best = 0;
+  RADII_KM.forEach((r, i) => {
+    if (Math.abs(r - km) < Math.abs(RADII_KM[best] - km)) best = i;
+  });
+  return best;
 }

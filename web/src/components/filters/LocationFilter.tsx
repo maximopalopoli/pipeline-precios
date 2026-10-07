@@ -8,7 +8,7 @@ export function LocationFilter({
   location: AddressLocation;
   title?: string;
 }) {
-  const { address, setAddress, city, setCity, chosenRadius, setRadius } = location;
+  const { address, setAddress, city, setCity, setRadius } = location;
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
       <div className="flex items-center justify-between">
@@ -47,13 +47,13 @@ export function LocationFilter({
             Ubicacion: {location.lat!.toFixed(4)}, {location.lon!.toFixed(4)}
           </p>
           <div>
-            <label className="block text-xs text-slate-500 mb-1">Radio: {chosenRadius} km</label>
+            <label className="block text-xs text-slate-500 mb-1">Radio: {location.radius} km</label>
             <input
               type="range"
               min={0.5}
               max={10}
               step={0.5}
-              value={chosenRadius}
+              value={location.radius}
               onChange={(e) => setRadius(Number(e.target.value))}
               className="w-full"
             />

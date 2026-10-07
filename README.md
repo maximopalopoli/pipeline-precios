@@ -437,7 +437,8 @@ Distance is measured before any limit. `GET /api/location/radius` returns
 `radio_km`, the chosen radius grown through 1, 2, 5, 10, 20 and 50 km until
 grocery stores of three chain companies are within it. It also returns
 `cadenas` (the companies reached), `ampliado` and `suficiente`. Gas-station
-shops and pharmacies do not count. Older
+shops and pharmacies do not count. The web grows only the first radius around an
+address; a radius the shopper sets on the slider is kept as set. Older
 national facts may remain under fact retention without appearing as current
 stores.
 

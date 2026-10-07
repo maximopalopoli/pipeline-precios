@@ -6,14 +6,16 @@ import { useSearchRadius } from './useSearchRadius';
 /**
  * A location typed as an address, with the radius around it.
  *
- * `lat` and `lon` are set once the address resolves; `radius` is the chosen
- * one grown to reach three grocery chains, and `params` the located filter
- * the API routes take (empty without a location).
+ * `lat` and `lon` are set once the address resolves; `radius` is the initial
+ * one grown to reach three grocery chains until the shopper sets one, which
+ * is then kept as set. `params` is the located filter the API routes take
+ * (empty without a location).
  */
 export function useAddressLocation(initialRadius = 1) {
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('Buenos Aires');
-  const [chosenRadius, setRadius] = useState(initialRadius);
+  const [chosenRadius, setChosenRadius] = useState(initialRadius);
+  const [radiusSet, setRadiusSet] = useState(false);
   const [geoTrigger, setGeoTrigger] = useState(0);
   const [enabled, setEnabled] = useState(false);
 
@@ -25,7 +27,7 @@ export function useAddressLocation(initialRadius = 1) {
 
   const lat = enabled && geoResult?.lat ? geoResult.lat : null;
   const lon = enabled && geoResult?.lon ? geoResult.lon : null;
-  const searchArea = useSearchRadius(lat, lon, chosenRadius);
+  const searchArea = useSearchRadius(lat, lon, chosenRadius, !radiusSet);
   const located = lat != null && lon != null;
 
   return {
@@ -34,7 +36,10 @@ export function useAddressLocation(initialRadius = 1) {
     city,
     setCity,
     chosenRadius,
-    setRadius,
+    setRadius: (radius: number) => {
+      setChosenRadius(radius);
+      setRadiusSet(true);
+    },
     enabled,
     isGeocoding,
     /** The address was looked up and not found. */
