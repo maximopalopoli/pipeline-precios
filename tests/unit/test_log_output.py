@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 import io
+import json
 
 import pytest
 import structlog
@@ -143,8 +144,7 @@ def test_full_log_writer_keeps_every_event():
     writer = FullLogWriter(stream)
     event = {"event": "pipeline.chunk.throughput", "level": "info", "rows": 300_000}
     assert writer(None, "info", event) is event
-    assert "pipeline.chunk.throughput" in stream.getvalue()
-    assert "rows=300000" in stream.getvalue()
+    assert json.loads(stream.getvalue()) == event
 
 
 def test_configure_logging_prints_milestones_and_files_everything(tmp_path, capsys):

@@ -1,6 +1,6 @@
-"""Contract shared by the CLI and Airflow ingestion entry points.
+"""Contract that decides whether a downloaded raw file is ingested.
 
-Both entry points decide whether a downloaded raw file may be processed from
+The pipeline decides whether a downloaded raw file may be processed from
 ``ingestion_runs``.  A file is skipped only after at least one successful
 publication.  Failed or interrupted attempts remain eligible for a retry.
 """
@@ -40,7 +40,7 @@ def _create_run(
         return cur.fetchone()[0]
 
 
-def test_new_raw_file_is_eligible_for_both_entrypoints(pg_conn):
+def test_new_raw_file_is_eligible(pg_conn):
     raw_file_id = _create_raw_file(pg_conn, "entrypoint-new")
     pg_conn.commit()
 
@@ -63,7 +63,7 @@ def test_running_raw_file_is_not_treated_as_a_completed_ingestion(pg_conn):
     assert should_process_raw_file(pg_conn, raw_file_id) is True
 
 
-def test_completed_raw_file_is_the_only_case_both_entrypoints_skip(pg_conn):
+def test_completed_raw_file_is_the_only_case_skipped(pg_conn):
     raw_file_id = _create_raw_file(pg_conn, "entrypoint-completed")
     _create_run(pg_conn, raw_file_id, "failed")
     _create_run(pg_conn, raw_file_id, "completed")

@@ -1,6 +1,6 @@
 """Storage-footprint telemetry stays cheap and handles absent partitions."""
 
-from etl.storage_metrics import StorageFootprint, collect_storage_footprint
+from benchmarks.storage import StorageFootprint, collect_storage_footprint
 
 
 class _Cursor:

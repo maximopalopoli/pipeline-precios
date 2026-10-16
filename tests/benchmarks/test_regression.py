@@ -1,6 +1,6 @@
 import pytest
 
-from etl.benchmark_regression import compare_benchmark_reports
+from benchmarks.regression import compare_benchmark_reports
 
 
 def _report(*, elapsed: float = 10, rss: int = 100, fecha: str = "2026-09-22"):

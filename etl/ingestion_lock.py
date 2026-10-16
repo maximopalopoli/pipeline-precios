@@ -45,10 +45,11 @@ def acquire_ingestion_lock(
     owner: str,
     lease: timedelta = DEFAULT_INGESTION_LOCK_LEASE,
 ) -> IngestionLock:
-    """Reserve ``fecha_datos`` for one lifecycle spanning CLI or Airflow.
+    """Reserve ``fecha_datos`` for one ingestion lifecycle.
 
     The reservation is committed immediately so it remains active across the
-    separate database connections used by Airflow tasks. A later execution can
+    auxiliary database connections used while streaming facts, and keeps a
+    scheduled run and a manual one apart. A later execution can
     replace an expired lease, recovering from a process that terminated before
     its failure handler could release the date.
     """

@@ -83,7 +83,6 @@ from etl.regional_scope import scope_from_environment
 from etl.retention_policy import from_environment
 from etl.staging_retention import apply_staging_retention
 from etl.staging import loader as staging_loader
-from etl.storage_metrics import collect_storage_footprint
 from etl.source_archive import inspect_source_archive_date, validate_source_archive_date
 
 # ---------------------------------------------------------------------------
@@ -319,11 +318,6 @@ def run(
             rows_productos_out_of_scope=stg.rows_productos_out_of_scope,
             rows_productos_store_unlisted=stg.rows_productos_store_unlisted,
         )
-        logger.info(
-            "pipeline.storage_footprint",
-            stage="staging",
-            **collect_storage_footprint(conn, run_id=run_id).__dict__,
-        )
 
         # ── 4. Quality checks ────────────────────────────────────────────────
         active_timer = StageTimer(logger, "quality")
@@ -391,7 +385,7 @@ def run(
             commit_every_chunks=pending_commit_every_chunks,
             heartbeat=lambda: renew_ingestion_lock(conn, ingestion_lock),
         )
-        fact_load_elapsed_seconds = active_timer.finish(
+        active_timer.finish(
             chunks=product_load.chunks,
             chunk_size=fact_chunk_size,
             rows_fact=product_load.rows_fact,
@@ -399,14 +393,6 @@ def run(
             rows_rejected=product_load.rows_rejected,
             rows_without_keys=product_load.rows_without_keys,
             rows_deduplicated=product_load.rows_deduplicated,
-        )
-        from etl.fact_load_metrics import record_fact_load_metrics
-
-        record_fact_load_metrics(
-            conn,
-            run_id=run_id,
-            elapsed_seconds=fact_load_elapsed_seconds,
-            chunks=product_load.chunks,
         )
         conn.commit()
 
@@ -441,11 +427,6 @@ def run(
             rows_rejected=reconciliation.rows_rejected,
             rows_without_keys=reconciliation.rows_without_keys,
             rows_deduplicated=reconciliation.rows_deduplicated,
-        )
-        logger.info(
-            "pipeline.storage_footprint",
-            stage="publication",
-            **collect_storage_footprint(conn, run_id=run_id).__dict__,
         )
 
         elapsed_total_seconds = time.perf_counter() - t0

@@ -1,57 +1,3 @@
-x-airflow-common: &airflow-common
-  image: apache/airflow:2.10.5-python3.11
-  environment:
-    POSTGRES_USER: "${POSTGRES_USER:-sepa}"
-    POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-changeme}"
-    POSTGRES_DB: "${POSTGRES_DB:-sepa_pipeline}"
-    AIRFLOW_ADMIN_USER: "${AIRFLOW_ADMIN_USER:-admin}"
-    AIRFLOW_ADMIN_PASSWORD: "${AIRFLOW_ADMIN_PASSWORD:-admin}"
-    AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
-    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-sepa}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-sepa_pipeline}
-    AIRFLOW__CORE__FERNET_KEY: ""
-    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-changeme}
-    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
-    AIRFLOW__SCHEDULER__JOB_HEARTBEAT_SEC: "30"
-    AIRFLOW__SCHEDULER__LOCAL_TASK_JOB_HEARTBEAT_SEC: "30"
-    _PIP_ADDITIONAL_REQUIREMENTS: "pandas>=2.2 psycopg2-binary>=2.9 structlog>=24.0 requests>=2.32"
-    PYTHONPATH: /opt/airflow
-    # Production ingestion settings from .env; blank means unset. The partial
-    # development bounds (SEPA_DEV_*) are left out on purpose so a local .env
-    # can never turn the scheduled ingestion into one that publishes nothing,
-    # and SEPA_ARCHIVE_DIR is a host path: the archive is data/archive, so
-    # mount another disk there to keep it off the database disk.
-    SEPA_REGIONAL_SCOPE: "${SEPA_REGIONAL_SCOPE:-}"
-    SEPA_FACT_CHUNK_SIZE: "${SEPA_FACT_CHUNK_SIZE:-}"
-    SEPA_FACT_RETENTION_DAYS: "${SEPA_FACT_RETENTION_DAYS:-}"
-    SEPA_STAGING_RETENTION_DAYS: "${SEPA_STAGING_RETENTION_DAYS:-}"
-    SEPA_RAW_RETENTION_DAYS: "${SEPA_RAW_RETENTION_DAYS:-}"
-    SEPA_REJECTED_SAMPLE_ROWS: "${SEPA_REJECTED_SAMPLE_ROWS:-}"
-    SEPA_MAX_REJECTED_SHARE: "${SEPA_MAX_REJECTED_SHARE:-}"
-    SEPA_MAX_WITHOUT_KEYS_SHARE: "${SEPA_MAX_WITHOUT_KEYS_SHARE:-}"
-    SEPA_MAX_STORE_UNLISTED_SHARE: "${SEPA_MAX_STORE_UNLISTED_SHARE:-}"
-    SEPA_MIN_PRODUCT_ROWS: "${SEPA_MIN_PRODUCT_ROWS:-}"
-    SEPA_MAX_ROW_COUNT_DRIFT: "${SEPA_MAX_ROW_COUNT_DRIFT:-}"
-    ALERT_EMAIL_TO: "${ALERT_EMAIL_TO:-}"
-    ALERT_EMAIL_FROM: "${ALERT_EMAIL_FROM:-}"
-    SMTP_HOST: "${SMTP_HOST:-}"
-    SMTP_PORT: "${SMTP_PORT:-}"
-    SMTP_USER: "${SMTP_USER:-}"
-    SMTP_PASSWORD: "${SMTP_PASSWORD:-}"
-    SMTP_USE_TLS: "${SMTP_USE_TLS:-}"
-  volumes:
-    - ./dags:/opt/airflow/dags
-    - ./etl:/opt/airflow/etl
-    - ./models:/opt/airflow/models
-    - ./data:/opt/airflow/data
-    - airflow_logs:/opt/airflow/logs
-  depends_on:
-    postgres:
-      condition: service_healthy
-    migrate:
-      condition: service_completed_successfully
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -83,60 +29,6 @@ services:
       postgres:
         condition: service_healthy
     restart: "no"
-
-  airflow-init:
-    <<: *airflow-common
-    entrypoint: /bin/bash
-    command:
-      - -c
-      - |
-        airflow db migrate
-        airflow users create \
-          --username $${AIRFLOW_ADMIN_USER:-admin} \
-          --password $${AIRFLOW_ADMIN_PASSWORD:-admin} \
-          --firstname Admin \
-          --lastname User \
-          --role Admin \
-          --email admin@example.com || true
-        airflow connections add postgres_default \
-          --conn-type postgres \
-          --conn-host postgres \
-          --conn-port 5432 \
-          --conn-login $${POSTGRES_USER} \
-          --conn-password $${POSTGRES_PASSWORD} \
-          --conn-schema $${POSTGRES_DB} || true
-        airflow variables set sepa_raw_dir /opt/airflow/data
-    restart: "no"
-
-  airflow-webserver:
-    <<: *airflow-common
-    command: webserver
-    ports:
-      - "8080:8080"
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    depends_on:
-      airflow-init:
-        condition: service_completed_successfully
-    restart: unless-stopped
-
-  airflow-scheduler:
-    <<: *airflow-common
-    command: scheduler
-    healthcheck:
-      test: ["CMD", "airflow", "jobs", "check", "--job-type", "SchedulerJob", "--hostname", "$${HOSTNAME}"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    depends_on:
-      airflow-init:
-        condition: service_completed_successfully
-    restart: unless-stopped
 
   api:
     build: .
@@ -172,4 +64,3 @@ services:
 
 volumes:
   postgres_data:
-  airflow_logs:

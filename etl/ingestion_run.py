@@ -85,21 +85,6 @@ def should_process_raw_file(
     )
 
 
-def is_partial_run(conn, run_id: int) -> bool:
-    """Return the persisted publication mode for one ingestion run.
-
-    Airflow tasks run in separate worker processes. Reading this value from the
-    run record prevents an environment change between tasks from turning a
-    bounded staging load into a full publication (or the reverse).
-    """
-    with conn.cursor() as cur:
-        cur.execute("SELECT is_partial FROM ingestion_runs WHERE id = %s", (run_id,))
-        row = cur.fetchone()
-    if row is None:
-        raise ValueError(f"Ingestion run {run_id} does not exist.")
-    return bool(row[0])
-
-
 def open_ingestion_run(
     conn,
     raw_file_id: int,
@@ -155,6 +140,7 @@ def open_ingestion_run(
         raise ValueError(f"Raw file {raw_file_id} does not exist.")
     run_id: int = row[0]
     delete_superseded_partial_pending(conn, run_id=run_id)
+    delete_superseded_failed_pending(conn, run_id=run_id)
     conn.commit()
     return run_id
 
@@ -164,9 +150,9 @@ def delete_superseded_partial_pending(conn, *, run_id: int) -> int:
 
     A partial run never publishes, so its pending facts would otherwise stay
     forever.  The newest completed partial run keeps its rows for local
-    inspection until another partial run completes.  Running and failed runs
-    are never touched, so a retry still finds its rows.  The caller owns the
-    transaction.
+    inspection until another partial run completes.  Running runs are never
+    touched, and failed runs are left to ``delete_superseded_failed_pending``.
+    The caller owns the transaction.
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -199,6 +185,56 @@ def delete_superseded_partial_pending(conn, *, run_id: int) -> int:
             "ingestion_run.partial_pending_deleted",
             run_id=run_id,
             partial_run_ids=partial_run_ids,
+            rows_deleted=rows_deleted,
+        )
+    return rows_deleted
+
+
+def delete_superseded_failed_pending(conn, *, run_id: int) -> int:
+    """Delete pending facts of failed runs whose date a later run published.
+
+    A retry opens a new run that writes its own pending facts, so a failed
+    run's rows only serve to diagnose it.  Once a later full run of the same
+    declared date completes, nothing reads them again.  Failed runs of a date
+    not yet published keep their rows.  The caller owns the transaction.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT failed.id
+            FROM ingestion_runs AS failed
+            JOIN raw_files AS failed_raw ON failed_raw.id = failed.raw_file_id
+            WHERE failed.status = 'failed'
+              AND EXISTS (
+                  SELECT 1
+                  FROM ingestion_runs AS published
+                  JOIN raw_files AS published_raw
+                    ON published_raw.id = published.raw_file_id
+                  WHERE published.status = 'completed'
+                    AND published.is_partial = FALSE
+                    AND published.id > failed.id
+                    AND published_raw.fecha_datos = failed_raw.fecha_datos
+              )
+              AND EXISTS (
+                  SELECT 1 FROM pending_fact_precios AS pending
+                  WHERE pending.run_id = failed.id
+              )
+            ORDER BY failed.id
+            """
+        )
+        failed_run_ids = [row[0] for row in cur.fetchall()]
+        if not failed_run_ids:
+            return 0
+        cur.execute(
+            "DELETE FROM pending_fact_precios WHERE run_id = ANY(%s)",
+            (failed_run_ids,),
+        )
+        rows_deleted = cur.rowcount
+    if rows_deleted:
+        log.info(
+            "ingestion_run.failed_pending_deleted",
+            run_id=run_id,
+            failed_run_ids=failed_run_ids,
             rows_deleted=rows_deleted,
         )
     return rows_deleted

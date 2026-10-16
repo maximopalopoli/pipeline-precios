@@ -1,7 +1,7 @@
 """Run repeatable bounded replays and print chunk-size benchmark medians.
 
 Usage:
-    python scripts/benchmark_fact_chunks.py --zip-path data/sepa.zip \\
+    python -m benchmarks.fact_chunks --zip-path data/sepa.zip \\
       --fecha 2026-09-22 --chain-keys 12:1 --max-product-rows 50000 \\
       --chunk-sizes 5000,10000 --repetitions 3
 """
@@ -17,9 +17,9 @@ from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
-from etl.benchmark_summary import summarize_chunk_benchmarks
+from benchmarks.summary import summarize_chunk_benchmarks
 from etl.development_ingestion import DevelopmentIngestionPolicy, with_cli_overrides
-from etl.run_baseline import load_run_baseline
+from benchmarks.run_baseline import load_run_baseline
 from etl.run_pipeline import _db_connect
 
 

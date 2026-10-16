@@ -1,7 +1,7 @@
 """Fail only when a comparable ETL benchmark report regresses materially.
 
 Usage:
-    python scripts/check_benchmark_regression.py baseline.json candidate.json
+    python -m benchmarks.check_regression baseline.json candidate.json
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import json
 import sys
 from pathlib import Path
 
-from etl.benchmark_regression import compare_benchmark_reports
+from benchmarks.regression import compare_benchmark_reports
 
 
 def _load_report(path: Path) -> dict[str, object]:

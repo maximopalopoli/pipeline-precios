@@ -1,4 +1,4 @@
-from etl.query_audit import AuditQuery, _summarize_plan
+from benchmarks.query_audit import AuditQuery, _summarize_plan
 
 
 def test_summarize_plan_keeps_cost_timing_rows_and_buffer_evidence():

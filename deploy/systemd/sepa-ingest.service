@@ -1,0 +1,15 @@
+[Unit]
+Description=SEPA daily price ingestion
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust the user and checkout path to the server.
+User=sepa
+WorkingDirectory=/opt/pipeline-precios
+EnvironmentFile=/opt/pipeline-precios/.env
+ExecStart=/opt/pipeline-precios/deploy/run-ingest.sh
+# Three attempts and two 15-minute waits fit well within this limit. A killed
+# run leaves its date lock to expire with its lease.
+TimeoutStartSec=3h

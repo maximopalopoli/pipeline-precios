@@ -1,7 +1,7 @@
 """Audit representative warehouse query plans with PostgreSQL evidence.
 
 Usage:
-    python scripts/benchmark_queries.py [fecha_id]
+    python -m benchmarks.audit_queries [fecha_id]
 """
 
 from __future__ import annotations
@@ -9,14 +9,14 @@ from __future__ import annotations
 import json
 import sys
 
-from etl.query_audit import audit_queries, representative_queries
+from benchmarks.query_audit import audit_queries, representative_queries
 from etl.run_pipeline import _db_connect
 
 
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     if len(args) > 1:
-        print("usage: benchmark_queries.py [fecha_id]", file=sys.stderr)
+        print("usage: python -m benchmarks.audit_queries [fecha_id]", file=sys.stderr)
         return 2
     fecha_id = int(args[0]) if args else None
     conn = _db_connect()

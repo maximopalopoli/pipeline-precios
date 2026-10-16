@@ -1,7 +1,7 @@
 """Print comparable completed ETL replays for a selected ingestion run.
 
 Usage:
-    python scripts/compare_ingestion_baselines.py RUN_ID
+    python -m benchmarks.compare_baselines RUN_ID
 """
 
 from __future__ import annotations
@@ -11,14 +11,14 @@ import sys
 
 import psycopg2
 
-from etl.run_baseline import load_comparable_run_baselines
+from benchmarks.run_baseline import load_comparable_run_baselines
 from etl.run_pipeline import _db_connect
 
 
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
     if len(args) != 1:
-        print("usage: compare_ingestion_baselines.py RUN_ID", file=sys.stderr)
+        print("usage: python -m benchmarks.compare_baselines RUN_ID", file=sys.stderr)
         return 2
     run_id = int(args[0])
     conn = _db_connect()

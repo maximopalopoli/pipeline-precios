@@ -10,7 +10,6 @@ import structlog
 from etl.load.warehouse_loader import _ensure_partition
 from etl.reconciliation import ProductReconciliation, record_product_reconciliation
 from etl.quality_thresholds import check_rejection_thresholds
-from etl.publication_metrics import record_publication_metrics
 
 log = structlog.get_logger(__name__)
 
@@ -159,15 +158,6 @@ def publish_pending_facts(
             raise ValueError(f"Cannot publish unknown ingestion run {run_id}")
         cur.execute("DELETE FROM pending_fact_precios WHERE run_id = %s", (run_id,))
         cleanup_seconds = perf_counter() - started_at
-
-    record_publication_metrics(
-        conn,
-        run_id=run_id,
-        delete_existing_seconds=0,
-        insert_facts_seconds=insert_facts_seconds,
-        cleanup_seconds=cleanup_seconds,
-        partition_swap_seconds=partition_swap_seconds,
-    )
 
     result = PublicationResult(
         run_id=run_id,

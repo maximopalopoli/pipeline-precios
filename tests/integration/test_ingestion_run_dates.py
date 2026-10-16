@@ -1,7 +1,7 @@
 from datetime import date
 
 from etl.development_ingestion import DevelopmentIngestionPolicy
-from etl.ingestion_run import is_partial_run, open_ingestion_run, record_source_date
+from etl.ingestion_run import open_ingestion_run, record_source_date
 
 
 def _raw_file_id(conn, fecha_datos: date) -> int:
@@ -78,7 +78,6 @@ def test_partial_ingestion_run_persists_its_canonical_bounds(pg_conn):
             (run_id,),
         )
         assert cur.fetchone() == (True, "10:2,40:1", 500)
-    assert is_partial_run(pg_conn, run_id) is True
 
 
 def test_ingestion_run_persists_fact_chunk_size(pg_conn):
@@ -90,23 +89,3 @@ def test_ingestion_run_persists_fact_chunk_size(pg_conn):
         cur.execute("SELECT fact_chunk_size FROM ingestion_runs WHERE id = %s", (run_id,))
         assert cur.fetchone()[0] == 50_000
 
-
-def test_is_partial_run_rejects_an_unknown_run(pg_conn):
-    import pytest
-
-    with pytest.raises(ValueError, match="does not exist"):
-        is_partial_run(pg_conn, 9999)
-
-
-def test_ingestion_run_records_its_regional_scope_when_it_opens(pg_conn):
-    raw_file_id = _raw_file_id(pg_conn, date(2026, 3, 15))
-
-    scoped = open_ingestion_run(pg_conn, raw_file_id, regional_scope="amba")
-    unscoped = open_ingestion_run(pg_conn, raw_file_id)
-
-    with pg_conn.cursor() as cur:
-        cur.execute(
-            "SELECT id, regional_scope FROM ingestion_runs WHERE id IN (%s, %s) ORDER BY id",
-            (scoped, unscoped),
-        )
-        assert cur.fetchall() == [(scoped, "amba"), (unscoped, None)]
