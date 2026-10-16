@@ -2,14 +2,13 @@ import { useState } from 'react';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import {
   fetchListTotals,
-  geocode,
   searchProducts,
   type Product,
   type StoreListTotal,
 } from '../lib/api';
 import { useShoppingList } from '../hooks/useShoppingList';
-import { useSearchRadius } from '../hooks/useSearchRadius';
-import { RadiusNotice } from '../components/filters/RadiusNotice';
+import { useAddressLocation } from '../hooks/useAddressLocation';
+import { LocationBar } from '../components/filters/LocationBar';
 import { QueryError } from '../components/layout/QueryError';
 import { formatCurrency } from '../lib/constants';
 import { formatUnitPrice } from '../lib/unitPrice';
@@ -19,59 +18,8 @@ import { CoverageNotes } from '../components/pricing/CoverageNotes';
 // ── Step 0: Build shopping list ──
 
 function BuildList() {
-  const { items, addItem, removeItem, clearItems, lat, lon, radius, setLocation, setRadius, clearLocation, setStep } =
-    useShoppingList();
+  const { items, addItem, removeItem, clearItems, setStep } = useShoppingList();
   const [input, setInput] = useState('');
-
-  // ── Browser geolocation ──
-  const [geoLoading, setGeoLoading] = useState(false);
-  const [geoError, setGeoError] = useState<string | null>(null);
-  const [showAddressForm, setShowAddressForm] = useState(false);
-
-  const handleUseMyLocation = () => {
-    if (!navigator.geolocation) {
-      setGeoError('Tu navegador no soporta geolocalizacion.');
-      setShowAddressForm(true);
-      return;
-    }
-    setGeoLoading(true);
-    setGeoError(null);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setLocation(pos.coords.latitude, pos.coords.longitude);
-        setGeoLoading(false);
-      },
-      (err) => {
-        const msg = err.code === 1
-          ? 'Permiso denegado. Usa la busqueda por direccion.'
-          : 'No se pudo obtener la ubicacion. Usa la busqueda por direccion.';
-        setGeoError(msg);
-        setShowAddressForm(true);
-        setGeoLoading(false);
-      },
-      { enableHighAccuracy: false, timeout: 10000 },
-    );
-  };
-
-  // ── Geocoding fallback ──
-  const [address, setAddress] = useState('');
-  const [city, setCity] = useState('Buenos Aires');
-  const [geoTrigger, setGeoTrigger] = useState(0);
-
-  const { data: geoResult, isFetching: isGeocoding } = useQuery({
-    queryKey: ['geocode', address, city, geoTrigger],
-    queryFn: () => geocode(address, city),
-    enabled: address.length > 3 && geoTrigger > 0,
-  });
-
-  // Sync geocode result to store
-  const geoLat = geoResult?.lat;
-  const geoLon = geoResult?.lon;
-  if (geoLat && geoLon && (geoLat !== lat || geoLon !== lon)) {
-    setLocation(geoLat, geoLon);
-  }
-
-  const handleGeoSearch = () => setGeoTrigger((n) => n + 1);
 
   const handleAdd = () => {
     if (input.trim().length >= 2) {
@@ -81,160 +29,66 @@ function BuildList() {
   };
 
   return (
-    <div className="grid md:grid-cols-[280px_1fr] gap-6">
-      {/* Sidebar */}
-      <div className="space-y-4">
-        {/* Location */}
-        <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-slate-700">Ubicacion</h3>
-            {lat != null && (
-              <button onClick={() => { clearLocation(); setGeoError(null); }} className="text-xs text-slate-400 hover:text-slate-600">
-                Limpiar
-              </button>
-            )}
-          </div>
+    <div className="space-y-4">
+      <h2 className="text-lg font-semibold text-slate-800">Armar lista de compras</h2>
 
-          {lat == null && (
-            <>
-              <button
-                onClick={handleUseMyLocation}
-                disabled={geoLoading}
-                className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
+          placeholder="Ej: leche, pan, arroz..."
+          className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        <button
+          onClick={handleAdd}
+          disabled={input.trim().length < 2}
+          className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+        >
+          Agregar
+        </button>
+      </div>
+
+      {items.length === 0 && (
+        <p className="text-sm text-slate-400">Agrega productos a tu lista para empezar.</p>
+      )}
+
+      {items.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-2">
+            {items.map((item, i) => (
+              <span
+                key={i}
+                className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1.5 text-sm text-blue-800"
               >
-                {geoLoading ? 'Obteniendo ubicacion...' : 'Usar mi ubicacion'}
-              </button>
-
-              {geoError && (
-                <p className="text-xs text-red-500">{geoError}</p>
-              )}
-
-              {!showAddressForm && (
+                {item}
                 <button
-                  onClick={() => setShowAddressForm(true)}
-                  className="w-full text-xs text-slate-400 hover:text-slate-600"
+                  onClick={() => removeItem(i)}
+                  className="text-blue-400 hover:text-blue-600"
                 >
-                  O buscar por direccion
+                  ✕
                 </button>
-              )}
-
-              {showAddressForm && (
-                <>
-                  <input
-                    type="text"
-                    value={address}
-                    onChange={(e) => setAddress(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && address.length > 3) handleGeoSearch(); }}
-                    placeholder="Av. Corrientes 1234"
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  />
-                  <input
-                    type="text"
-                    value={city}
-                    onChange={(e) => setCity(e.target.value)}
-                    placeholder="Ciudad"
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                  />
-                  <button
-                    onClick={handleGeoSearch}
-                    disabled={address.length < 3}
-                    className="w-full rounded-md bg-slate-600 px-3 py-2 text-sm text-white hover:bg-slate-700 disabled:opacity-50"
-                  >
-                    {isGeocoding ? 'Buscando...' : 'Buscar direccion'}
-                  </button>
-                  {geoResult && !geoResult.lat && (
-                    <p className="text-xs text-red-500">No se encontro la direccion.</p>
-                  )}
-                </>
-              )}
-            </>
-          )}
-
-          {lat != null && lon != null && (
-            <>
-              <p className="text-xs text-emerald-600 font-medium">Ubicacion configurada</p>
-              <p className="text-xs text-slate-500">
-                {lat.toFixed(4)}, {lon.toFixed(4)}
-              </p>
-              <div>
-                <label className="block text-xs text-slate-500 mb-1">Radio: {radius} km</label>
-                <input
-                  type="range"
-                  min={0.5}
-                  max={10}
-                  step={0.5}
-                  value={radius}
-                  onChange={(e) => setRadius(Number(e.target.value))}
-                  className="w-full"
-                />
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Main area */}
-      <div className="space-y-4">
-        <h2 className="text-lg font-semibold text-slate-800">Armar lista de compras</h2>
-
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleAdd(); }}
-            placeholder="Ej: leche, pan, arroz..."
-            className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-          />
-          <button
-            onClick={handleAdd}
-            disabled={input.trim().length < 2}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-          >
-            Agregar
-          </button>
-        </div>
-
-        {items.length === 0 && (
-          <p className="text-sm text-slate-400">Agrega productos a tu lista para empezar.</p>
-        )}
-
-        {items.length > 0 && (
-          <div className="space-y-3">
-            <div className="flex flex-wrap gap-2">
-              {items.map((item, i) => (
-                <span
-                  key={i}
-                  className="inline-flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1.5 text-sm text-blue-800"
-                >
-                  {item}
-                  <button
-                    onClick={() => removeItem(i)}
-                    className="text-blue-400 hover:text-blue-600"
-                  >
-                    ✕
-                  </button>
-                </span>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-3">
-              <button
-                onClick={() => setStep(1)}
-                className="rounded-md bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-700"
-              >
-                Comenzar ({items.length} {items.length === 1 ? 'producto' : 'productos'})
-              </button>
-              <button
-                onClick={clearItems}
-                className="text-sm text-slate-400 hover:text-slate-600"
-              >
-                Limpiar lista
-              </button>
-            </div>
+              </span>
+            ))}
           </div>
-        )}
-      </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => setStep(1)}
+              className="rounded-md bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-emerald-700"
+            >
+              Comenzar ({items.length} {items.length === 1 ? 'producto' : 'productos'})
+            </button>
+            <button
+              onClick={clearItems}
+              className="text-sm text-slate-400 hover:text-slate-600"
+            >
+              Limpiar lista
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -244,8 +98,8 @@ function BuildList() {
 const CHOICES_PER_PAGE = 20;
 
 function SelectProduct({ itemIndex }: { itemIndex: number }) {
-  const { items, selections, setSelection, setStep, nextStep, prevStep, lat, lon, radius } =
-    useShoppingList();
+  const { items, selections, setSelection, setStep, nextStep, prevStep } = useShoppingList();
+  const location = useAddressLocation();
 
   const searchTerm = items[itemIndex];
   const currentSelection = selections[itemIndex] ?? null;
@@ -253,10 +107,6 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
   const totalItems = items.length;
   const completedCount = Object.keys(selections).length;
 
-  // Location params
-  const searchArea = useSearchRadius(lat, lon, radius);
-  const searchRadius = searchArea.radius;
-  const locationParams = lat != null && lon != null ? { lat, lon, radius: searchRadius } : {};
 
   // Products ranked as the search ranks them, priced at nearby stores.
   const {
@@ -270,15 +120,15 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
     isFetchingNextPage,
     isFetchNextPageError,
   } = useInfiniteQuery({
-    queryKey: ['lista-search', searchTerm, lat, lon, searchRadius],
+    queryKey: ['lista-search', searchTerm, location.params],
     queryFn: ({ pageParam }) =>
-      searchProducts({ q: searchTerm, ...locationParams, limit: CHOICES_PER_PAGE, offset: pageParam }),
+      searchProducts({ q: searchTerm, ...location.params, limit: CHOICES_PER_PAGE, offset: pageParam }),
     initialPageParam: 0,
     getNextPageParam: (last, all) => (last.hay_mas ? all.length * CHOICES_PER_PAGE : undefined),
-    enabled: !!searchTerm && searchArea.ready,
+    enabled: !!searchTerm && location.ready,
   });
   const results = pages?.pages.flatMap((page) => page.productos) ?? [];
-  const nearby = lat != null && lon != null;
+  const nearby = location.located;
 
   const handleSelect = (product: Product) => {
     setSelection(itemIndex, product);
@@ -342,14 +192,6 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
           </p>
         )}
       </div>
-
-      {/* Location indicator */}
-      {lat != null && (
-        <div className="rounded-lg border border-blue-100 bg-blue-50/50 px-4 py-2 text-sm text-blue-700">
-          Mostrando resultados a menos de {searchRadius} km de tu ubicacion
-          <RadiusNotice area={searchArea.area} />
-        </div>
-      )}
 
       {/* Results */}
       {isLoading && <p className="text-sm text-slate-400">Cargando resultados...</p>}
@@ -468,9 +310,9 @@ function SelectProduct({ itemIndex }: { itemIndex: number }) {
 // ── Summary: the list's total in each nearby store ──
 
 function Summary() {
-  const { items, selections, setStep, reset, lat, lon, radius } = useShoppingList();
-  const located = lat != null && lon != null;
-  const searchArea = useSearchRadius(lat, lon, radius);
+  const { items, selections, setStep, reset } = useShoppingList();
+  const location = useAddressLocation();
+  const { located, lat, lon, radius } = location;
 
   // Each chosen item stands for its product, wherever it was picked.
   const names = new Map<number, string>();
@@ -488,10 +330,9 @@ function Summary() {
   const selectedCount = Object.keys(selections).length;
 
   const { data: stores = [], isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['list-totals', productIds, lat, lon, searchArea.radius],
-    queryFn: () =>
-      fetchListTotals({ producto_sk: productIds, lat: lat!, lon: lon!, radius: searchArea.radius }),
-    enabled: located && productIds.length > 0 && searchArea.ready,
+    queryKey: ['list-totals', productIds, lat, lon, radius],
+    queryFn: () => fetchListTotals({ producto_sk: productIds, lat: lat!, lon: lon!, radius }),
+    enabled: located && productIds.length > 0 && location.ready,
   });
 
   // Totals are only comparable among stores carrying the same items.
@@ -549,20 +390,16 @@ function Summary() {
 
       {!located && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
-          Configurá tu ubicación para comparar el total de la lista en los locales cercanos.{' '}
-          <button onClick={() => setStep(0)} className="underline hover:text-blue-900">
-            Elegir ubicación
-          </button>
+          Indicá dónde estás, arriba, para comparar el total de la lista en los locales cercanos.
         </div>
       )}
 
       {located && (
         <div className="rounded-lg border border-blue-100 bg-blue-50/50 px-4 py-2 text-sm text-blue-700">
           {productIds.length} {productIds.length === 1 ? 'producto' : 'productos'} en locales a
-          menos de {searchArea.radius} km de tu ubicación. El total suma el precio que se paga
+          menos de {radius} km de tu ubicación. El total suma el precio que se paga
           sin condiciones; las promociones condicionales se suman aparte. No incluye
           farmacias ni tiendas de estaciones de servicio.
-          <RadiusNotice area={searchArea.area} />
         </div>
       )}
 
@@ -659,10 +496,13 @@ function StoreTotalCard({ store, names }: { store: StoreListTotal; names: Map<nu
 
 export function Lista() {
   const { currentStep, items } = useShoppingList();
+  const location = useAddressLocation();
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-slate-900">Lista de Compras</h1>
+
+      <LocationBar location={location} />
 
       {currentStep === 0 && <BuildList />}
       {currentStep >= 1 && currentStep <= items.length && (

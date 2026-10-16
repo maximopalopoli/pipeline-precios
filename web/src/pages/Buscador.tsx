@@ -4,11 +4,9 @@ import { Link } from 'react-router-dom';
 import {
   fetchBuscador,
   fetchBuscadorDates,
-  fetchChainOptions,
   fetchProduct,
   fetchSearchFacets,
   searchProducts,
-  type ChainOption,
   type FacetValue,
   type Product,
   type ProductAttributeFilters,
@@ -18,6 +16,7 @@ import {
 import { useAddressLocation } from '../hooks/useAddressLocation';
 import { useShoppingList } from '../hooks/useShoppingList';
 import { LocationBar } from '../components/filters/LocationBar';
+import { ChainChips } from '../components/filters/ChainChips';
 import { SizeRange, type SizeSelection } from '../components/filters/SizeRange';
 import { ProductSearch } from '../components/filters/ProductSearch';
 import { PriceMap } from '../components/maps/PriceMap';
@@ -371,46 +370,7 @@ export function Buscador() {
       return { ...current, marca: marca.length > 0 ? marca : undefined };
     });
 
-  // Chains near the location; a chosen chain stays listed to clear it.
-  const { data: chainOptions = [] } = useQuery({
-    queryKey: ['chain-options', locationParams],
-    queryFn: () => fetchChainOptions(locationParams),
-    enabled: location.ready,
-  });
-  const chainChoices: ChainOption[] = [
-    ...chainOptions,
-    ...cadenas
-      .filter((valor) => !chainOptions.some((option) => option.valor === valor))
-      .map((valor) => ({ valor, nombre: valor, sucursales: 0 })),
-  ];
-  const toggleChain = (valor: string) =>
-    setCadenas((current) =>
-      current.includes(valor) ? current.filter((c) => c !== valor) : [...current, valor],
-    );
-  const chainChips = chainChoices.length > 0 && (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="text-xs font-medium text-slate-500 mr-1">Cadena</span>
-      {chainChoices.map((option) => {
-        const selected = cadenas.includes(option.valor);
-        return (
-          <button
-            key={option.valor}
-            onClick={() => toggleChain(option.valor)}
-            aria-pressed={selected}
-            title={`${option.sucursales} ${option.sucursales === 1 ? 'local' : 'locales'}${nearby ? ' cerca' : ''}`}
-            className={`rounded-full border px-2.5 py-0.5 text-xs transition-colors ${
-              selected
-                ? 'border-blue-600 bg-blue-600 text-white'
-                : 'border-slate-300 bg-white text-slate-700 hover:border-blue-300'
-            }`}
-          >
-            {option.nombre}{' '}
-            <span className={selected ? 'text-blue-100' : 'text-slate-400'}>{option.sucursales}</span>
-          </button>
-        );
-      })}
-    </div>
-  );
+  const chainChips = <ChainChips location={location} chosen={cadenas} onChange={setCadenas} />;
 
   const isLoading = isLoadingSingle || isLoadingCards || resolvingType;
   const isGenericMode = !!genericQuery;
@@ -563,7 +523,7 @@ export function Buscador() {
         )}
 
         {/* ── Facets ── */}
-        {isGenericMode && (facets || chainChips) && (
+        {isGenericMode && (
           <div className="space-y-2">
             {facets && (
               <>

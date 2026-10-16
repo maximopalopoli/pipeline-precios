@@ -6,14 +6,18 @@ import { RadiusNotice } from './RadiusNotice';
 const RADII_KM = [0.5, 1, 2, 3, 5, 10, 20, 50];
 
 /**
- * The shopper's location as a full-width bar: an address form until it is
- * found, then one line with the address, the radius and a way to change it.
+ * The shopper's location as a full-width bar: an address form until there is
+ * a location, then one line with the address, the radius and a way to change
+ * it. Every view shows the same location.
  *
  * The address is typed into a draft and looked up on submit only, so typing
- * a new one does not drop the current location keystroke by keystroke.
+ * a new one keeps the current location until the new one is found.
  */
 export function LocationBar({ location }: { location: AddressLocation }) {
-  const [editing, setEditing] = useState(false);
+  // The location being changed; a new one found closes the form by itself.
+  const place = `${location.lat},${location.lon}`;
+  const [editingPlace, setEditingPlace] = useState<string | null>(null);
+  const editing = editingPlace === place;
   const [draftAddress, setDraftAddress] = useState(location.address);
   const [draftCity, setDraftCity] = useState(location.city);
 
@@ -22,15 +26,22 @@ export function LocationBar({ location }: { location: AddressLocation }) {
       <div className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <span className="text-slate-800">
-            📍 <strong>{location.address}</strong>
-            {location.city && `, ${location.city}`}
+            📍{' '}
+            {location.address ? (
+              <>
+                <strong>{location.address}</strong>
+                {location.city && `, ${location.city}`}
+              </>
+            ) : (
+              <strong>Tu ubicación actual</strong>
+            )}
           </span>
           <RadiusSlider radius={location.radius} onChange={location.setRadius} />
           <button
             onClick={() => {
               setDraftAddress(location.address);
               setDraftCity(location.city);
-              setEditing(true);
+              setEditingPlace(place);
             }}
             className="text-blue-700 hover:text-blue-900"
           >
@@ -50,10 +61,7 @@ export function LocationBar({ location }: { location: AddressLocation }) {
       onSubmit={(e) => {
         e.preventDefault();
         if (draftAddress.trim().length < 3) return;
-        location.setAddress(draftAddress.trim());
-        location.setCity(draftCity.trim());
-        location.search();
-        setEditing(false);
+        location.search(draftAddress.trim(), draftCity.trim());
       }}
       className="rounded-lg border border-slate-200 bg-white p-4"
     >
@@ -67,7 +75,7 @@ export function LocationBar({ location }: { location: AddressLocation }) {
           value={draftAddress}
           onChange={(e) => setDraftAddress(e.target.value)}
           placeholder="Av. Corrientes 1234"
-          className="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+          className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
         />
         <input
           type="text"
@@ -87,14 +95,22 @@ export function LocationBar({ location }: { location: AddressLocation }) {
         {editing && (
           <button
             type="button"
-            onClick={() => setEditing(false)}
+            onClick={() => setEditingPlace(null)}
             className="rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50"
           >
             Cancelar
           </button>
         )}
       </div>
-      {location.notFound && <p className="mt-2 text-xs text-red-500">No se encontró la dirección.</p>}
+      <button
+        type="button"
+        onClick={location.locate}
+        disabled={location.isGeocoding}
+        className="mt-2 text-xs text-blue-700 hover:text-blue-900 disabled:opacity-50"
+      >
+        Usar mi ubicación
+      </button>
+      {location.error && <p className="mt-1 text-xs text-red-500">{location.error}</p>}
     </form>
   );
 }

@@ -428,8 +428,9 @@ sucursales}`, most stores first: `valor` is the published banner name that the
 `cadenas` filter takes, and `nombre` is the name shoppers know ("Coto",
 "Carrefour Market"), from `api/chain_names.py`. With `lat`, `lon` and `radius`
 it lists only the chains with a store in that radius and counts those stores.
-The search page offers these chains as chips next to a location bar; it has no
-province or locality filter.
+Every page that takes a location (Buscador, Ofertas, Locales, Lista) shows the
+same one-line location bar, and Buscador, Ofertas and Locales offer these chains
+as chips under it; the web has no province or locality filter.
 
 Every located route takes `lat`, `lon` and `radius` (km). The point must lie
 in Argentina, both coordinates come together, and the radius is 0.5–50 km.
@@ -872,8 +873,11 @@ Pages: Buscador, the home page (location first, then a price finder with map;
 it also finds a product by its barcode, EAN-8 and UPC-A included; a product
 lists its stores cheapest first and can be added to the list), Lista
 (shopping list, kept in the browser with its chosen products), Ofertas (daily promotions), Locales (nearby store locator) and
-Estado (`/estado`, linked at the foot of the sidebar), which shows the latest
-publication and the quality of the last ingestion. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
+Estado (`/estado`, linked at the foot of the sidebar on wide screens), which shows the latest
+publication and the quality of the last ingestion. The location (an address or
+the device's, plus the radius the shopper sets) is one for every page and is
+kept in the browser. Pages fit any width: on phones the navigation becomes a
+top bar and every page uses the full width. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
 TanStack Table/Query for data.
 
 ## Technical Decisions

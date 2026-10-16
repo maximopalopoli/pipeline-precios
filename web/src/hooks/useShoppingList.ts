@@ -6,9 +6,6 @@ interface ShoppingListState {
   items: string[];
   selections: Record<number, Product>; // item index → selected product
   currentStep: number; // 0 = build list, 1..N = select product, N+1 = summary
-  lat: number | null;
-  lon: number | null;
-  radius: number;
 
   addItem: (term: string) => void;
   /** Add an item already chosen as this product, unless the list has it. */
@@ -20,9 +17,6 @@ interface ShoppingListState {
   setStep: (step: number) => void;
   nextStep: () => void;
   prevStep: () => void;
-  setLocation: (lat: number, lon: number) => void;
-  setRadius: (radius: number) => void;
-  clearLocation: () => void;
   reset: () => void;
 }
 
@@ -32,9 +26,6 @@ export const useShoppingList = create<ShoppingListState>()(
       items: [],
       selections: {},
       currentStep: 0,
-      lat: null,
-      lon: null,
-      radius: 3,
 
       addItem: (term) => {
         const trimmed = term.trim();
@@ -74,10 +65,7 @@ export const useShoppingList = create<ShoppingListState>()(
       setStep: (step) => set({ currentStep: step }),
       nextStep: () => set((s) => ({ currentStep: Math.min(s.currentStep + 1, s.items.length + 1) })),
       prevStep: () => set((s) => ({ currentStep: Math.max(s.currentStep - 1, 0) })),
-      setLocation: (lat, lon) => set({ lat, lon }),
-      setRadius: (radius) => set({ radius }),
-      clearLocation: () => set({ lat: null, lon: null }),
-      reset: () => set({ items: [], selections: {}, currentStep: 0, lat: null, lon: null, radius: 3 }),
+      reset: () => set({ items: [], selections: {}, currentStep: 0 }),
     }),
     {
       name: 'shopping-list',
@@ -85,9 +73,6 @@ export const useShoppingList = create<ShoppingListState>()(
       partialize: (state) => ({
         items: state.items,
         selections: state.selections,
-        radius: state.radius,
-        lat: state.lat,
-        lon: state.lon,
       }),
     },
   ),
