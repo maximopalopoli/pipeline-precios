@@ -100,7 +100,7 @@ pipeline-precios/
 │   ├── unit/                         # focused module and lifecycle tests
 │   ├── integration/                  # database-backed ETL, publication and entrypoint tests
 │   └── fixtures/sample.zip           # Sample ZIP (2 chains, 7 products)
-├── scripts/                          # Baseline, benchmark and regression-check commands
+├── benchmarks/                       # Baselines, chunk sweeps and query audits read from run logs
 ├── deploy/                           # systemd timer and retrying ingestion wrapper
 ├── api/                              # FastAPI backend (REST endpoints, asyncpg)
 ├── web/                              # React frontend (Vite + TypeScript + Tailwind)
@@ -663,7 +663,8 @@ full log, each stage with its row counts and duration, fact progress every 20%
 with the estimated time left, the loss limits and the outcome. Warnings and
 errors that no milestone summarizes are printed as they happen. Every event,
 including the per-chunk ones described below, is written to
-`logs/ingest-<timestamp>.log` (not versioned). `make ingest VERBOSE=1` (or
+`logs/ingest-<timestamp>.log` (not versioned) as one JSON object per line, so
+it can be filtered with `jq` and read by the benchmark commands. `make ingest VERBOSE=1` (or
 `--verbose`) prints every event to the terminal instead.
 
 ### Performance telemetry
@@ -693,12 +694,13 @@ For a bounded run, terminal events always include `is_partial=true`, pending
 fact count, and zero published facts. Treat its throughput as a local flow
 measurement, never as a published snapshot or a full-SEPA capacity result.
 
-After `staging` and `publication`, they also emit a storage snapshot with the
-database total plus `fact_precios`, pending facts, and staging relation sizes.
-These PostgreSQL relation sizes include indexes; compare snapshots from the
-same source and bounds before drawing conclusions about capacity.
+The pipeline itself stores no benchmark data. The commands below live in
+`benchmarks/`, outside the ETL: they read counts and end-to-end timing from
+`ingestion_runs` and stage timings from the run's full log, so a run is
+comparable only while its log is kept. Logs written before the JSON format
+provide no stage timings.
 
-Two read-only commands provide repeatable evidence before changing indexes or
+Three read-only commands provide repeatable evidence before changing indexes or
 database infrastructure:
 
 ```bash
@@ -713,12 +715,13 @@ make compare-etl-baselines RUN_ID=5
 make audit-queries FECHA_ID=20260922
 ```
 
-`etl-baseline` reads durable run-level timing, source size, chunk size, fact-load
-duration, fact-load process-memory high-water mark and
-reconciliation counts. `compare-etl-baselines` excludes runs that do not share
-the source archive and bounds, so its JSON rows differ only in the benchmark
-configuration such as `fact_chunk_size`; it also excludes historical runs that
-predate durable fact-load telemetry. `audit-queries` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and
+`etl-baseline` reports run-level timing, source size, chunk size, reconciliation
+counts, the logged fact-load duration, process-memory high-water mark and
+publication timings, plus the current database and relation sizes (measured
+when the command runs; they include indexes). `compare-etl-baselines` excludes
+runs that do not share the source archive and bounds, so its JSON rows differ
+only in the benchmark configuration such as `fact_chunk_size`; it also excludes
+runs whose log holds no fact-load timing. `audit-queries` runs `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` and
 emits planning/execution time, row counts and shared-buffer reads as JSON.
 Capture a baseline before and after a candidate index migration; do not infer
 full-scale capacity from a bounded run.
@@ -768,7 +771,7 @@ It does not copy the ZIP or contact the SEPA URL.
 
 For a reproducible sizing experiment, run each candidate multiple times. The
 command below performs runs sequentially, remains partial, and prints the
-individual durable samples plus per-size medians and the Python/PostgreSQL/OS
+individual samples plus per-size medians and the Python/PostgreSQL/OS
 versions used for the measurement:
 
 ```bash

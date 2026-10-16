@@ -1,7 +1,8 @@
 """CLI log output: a short milestone view by default, every event when verbose.
 
 The ETL emits many structured events (several per product chunk).  They stay
-the source of truth: every event is always written to a full log file, and
+the source of truth: every event is always written to a full log file, one
+JSON object per line so tools such as ``benchmarks/`` can read it, and
 ``--verbose`` prints them to the terminal as before.  By default the terminal
 shows one line per milestone (stages, fact progress, loss limits, outcome) and
 any warning or error that no milestone already summarizes.
@@ -74,14 +75,16 @@ def default_log_path(now: datetime | None = None) -> Path:
 
 
 class FullLogWriter:
-    """Write every event, as the verbose console shows it, to a file."""
+    """Write every event to a file as one JSON object per line."""
 
     def __init__(self, stream: TextIO) -> None:
         self._stream = stream
-        self._renderer = structlog.dev.ConsoleRenderer(colors=False)
+        self._tracebacks = structlog.processors.format_exc_info
+        self._renderer = structlog.processors.JSONRenderer(default=str)
 
     def __call__(self, logger: Any, method_name: str, event_dict: dict) -> dict:
-        self._stream.write(self._renderer(logger, method_name, dict(event_dict)) + "\n")
+        event = self._tracebacks(logger, method_name, dict(event_dict))
+        self._stream.write(self._renderer(logger, method_name, event) + "\n")
         self._stream.flush()
         return event_dict
 

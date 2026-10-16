@@ -1,4 +1,7 @@
-"""Small PostgreSQL storage snapshots for comparable ingestion baselines."""
+"""Small PostgreSQL storage snapshots for comparable ingestion baselines.
+
+The benchmark reports measure them after a run; the pipeline does not.
+"""
 
 from __future__ import annotations
 

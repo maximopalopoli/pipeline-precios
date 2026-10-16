@@ -185,15 +185,6 @@ def test_publish_replaces_the_full_daily_snapshot(pg_conn, seed_data):
             """
         )
         assert cur.fetchone()[0] >= 4
-        cur.execute(
-            """
-            SELECT delete_existing_seconds, insert_facts_seconds,
-                   cleanup_seconds, partition_swap_seconds
-            FROM ingestion_publication_metrics WHERE run_id = %s
-            """,
-            (pending_run_id,),
-        )
-        assert all(value >= 0 for value in cur.fetchone())
 
 
 def test_publish_rectifies_a_day_with_a_legacy_candidate_leaf(pg_conn, seed_data):

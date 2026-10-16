@@ -6,7 +6,7 @@ from dataclasses import asdict, dataclass
 from statistics import median
 from typing import Iterable
 
-from etl.run_baseline import RunBaseline
+from benchmarks.run_baseline import RunBaseline
 
 
 @dataclass(frozen=True)

@@ -1,4 +1,4 @@
-from etl.query_audit import audit_queries, representative_queries
+from benchmarks.query_audit import audit_queries, representative_queries
 from etl.load.warehouse_loader import _ensure_partition
 
 

@@ -9,6 +9,7 @@ on:
       - "db/**"
       - "api/**"
       - "deploy/**"
+      - "benchmarks/**"
       - "web/src/**"
       - "web/package*.json"
       - "web/tsconfig*.json"

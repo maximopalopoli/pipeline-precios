@@ -89,21 +89,21 @@ restore-date: ## Re-ingest a day from its archived source ZIP (usage: make resto
 benchmark-chunks: ## Repeat bounded local replays (ZIP= DATE= CHUNK_SIZES=... REPEATS=3 and one DEV_* bound required)
 	@test -n "$(ZIP)$(DATE)$(CHUNK_SIZES)" || (echo "ZIP, DATE and CHUNK_SIZES are required"; exit 2)
 	@test -n "$(DEV_CHAIN_KEYS)$(DEV_MAX_PRODUCT_ROWS)" || (echo "Set DEV_CHAIN_KEYS and/or DEV_MAX_PRODUCT_ROWS"; exit 2)
-	@.venv/bin/python scripts/benchmark_fact_chunks.py --zip-path $(ZIP) --fecha $(DATE) --chain-keys '$(DEV_CHAIN_KEYS)' $(if $(DEV_MAX_PRODUCT_ROWS),--max-product-rows $(DEV_MAX_PRODUCT_ROWS)) --chunk-sizes $(CHUNK_SIZES) --repetitions $(or $(REPEATS),3)
+	@.venv/bin/python -m benchmarks.fact_chunks --zip-path $(ZIP) --fecha $(DATE) --chain-keys '$(DEV_CHAIN_KEYS)' $(if $(DEV_MAX_PRODUCT_ROWS),--max-product-rows $(DEV_MAX_PRODUCT_ROWS)) --chunk-sizes $(CHUNK_SIZES) --repetitions $(or $(REPEATS),3)
 
 check-benchmark-regression: ## Compare report artifacts (BASELINE=... CANDIDATE=...; limits are percentage variables)
 	@test -n "$(BASELINE)$(CANDIDATE)" || (echo "BASELINE and CANDIDATE are required"; exit 2)
-	.venv/bin/python scripts/check_benchmark_regression.py $(BASELINE) $(CANDIDATE) --max-elapsed-regression-pct $(or $(MAX_ELAPSED_REGRESSION_PCT),15) --max-peak-rss-regression-pct $(or $(MAX_PEAK_RSS_REGRESSION_PCT),20)
+	.venv/bin/python -m benchmarks.check_regression $(BASELINE) $(CANDIDATE) --max-elapsed-regression-pct $(or $(MAX_ELAPSED_REGRESSION_PCT),15) --max-peak-rss-regression-pct $(or $(MAX_PEAK_RSS_REGRESSION_PCT),20)
 
-etl-baseline: ## Print persisted ETL metrics (optional: RUN_ID=...)
-	.venv/bin/python scripts/report_ingestion_baseline.py $(RUN_ID)
+etl-baseline: ## Print a run's counts, logged stage timings and storage (optional: RUN_ID=...)
+	.venv/bin/python -m benchmarks.report_baseline $(RUN_ID)
 
 compare-etl-baselines: ## Compare completed replays with the same source and bounds (RUN_ID=...)
 	@test -n "$(RUN_ID)" || (echo "RUN_ID is required"; exit 2)
-	.venv/bin/python scripts/compare_ingestion_baselines.py $(RUN_ID)
+	.venv/bin/python -m benchmarks.compare_baselines $(RUN_ID)
 
 audit-queries: ## Run EXPLAIN ANALYZE for representative published API reads (optional: FECHA_ID=...)
-	.venv/bin/python scripts/benchmark_queries.py $(FECHA_ID)
+	.venv/bin/python -m benchmarks.audit_queries $(FECHA_ID)
 
 # Testing
 

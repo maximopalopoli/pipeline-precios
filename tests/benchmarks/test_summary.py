@@ -2,8 +2,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from etl.benchmark_summary import summarize_chunk_benchmarks
-from etl.run_baseline import RunBaseline
+from benchmarks.summary import summarize_chunk_benchmarks
+from benchmarks.run_baseline import RunBaseline
 
 
 def _baseline(*, chunk_size: int, elapsed: float, fact_load: float, rss: int) -> RunBaseline:
