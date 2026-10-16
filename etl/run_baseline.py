@@ -1,8 +1,8 @@
 """Read comparable, persisted ETL baselines from ``ingestion_runs``.
 
-The pipeline deliberately keeps its per-stage telemetry in structured logs: a
-single Airflow run can execute those stages in different workers. This module
-reports durable run-level data instead of reconstructing timings from logs.
+The pipeline deliberately keeps its per-stage telemetry in structured logs.
+This module reports durable run-level data instead of reconstructing timings
+from logs.
 """
 
 from __future__ import annotations

@@ -63,7 +63,7 @@ def with_cli_overrides(
 
     Supplying a CLI flag overrides only that bound. This makes ad-hoc local
     runs reproducible while retaining the same validation contract as the
-    environment configuration used by Airflow.
+    environment configuration used by scheduled runs.
     """
     selected_chain_keys = (
         policy.chain_keys

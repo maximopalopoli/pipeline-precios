@@ -5,9 +5,6 @@ the source of truth: every event is always written to a full log file, and
 ``--verbose`` prints them to the terminal as before.  By default the terminal
 shows one line per milestone (stages, fact progress, loss limits, outcome) and
 any warning or error that no milestone already summarizes.
-
-Airflow does not call :func:`configure_logging`, so its task logs keep every
-event.
 """
 
 from __future__ import annotations

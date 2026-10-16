@@ -105,7 +105,7 @@ def test_cli_refuses_to_start_when_another_entrypoint_owns_the_date(
         pg_conn,
         fecha_datos=_RUN_DATE,
         raw_file_id=raw_file_id,
-        owner="airflow:active-run",
+        owner="cli:active-run",
     )
     monkeypatch.setattr(pipeline, "_db_connect", lambda: _connect_to_fixture(pg_conn))
     monkeypatch.setattr(
@@ -122,7 +122,7 @@ def test_cli_refuses_to_start_when_another_entrypoint_owns_the_date(
         ),
     )
 
-    with pytest.raises(RuntimeError, match="already locked by airflow:active-run"):
+    with pytest.raises(RuntimeError, match="already locked by cli:active-run"):
         pipeline.run(fecha=_RUN_DATE, raw_dir=tmp_path)
 
     with pg_conn.cursor() as cur:

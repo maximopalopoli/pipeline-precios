@@ -14,8 +14,8 @@ def record_fact_load_metrics(
 ) -> None:
     """Upsert the terminal measurement for a run's fact-load stage.
 
-    Airflow retries may execute the task again for the same run, so the metric
-    is intentionally replaced rather than creating duplicate samples.
+    The metric is replaced rather than duplicated if the stage is recorded
+    again for the same run.
     """
     with conn.cursor() as cur:
         cur.execute(

@@ -258,7 +258,7 @@ def test_more_rejections_than_the_sample_still_reconcile_after_a_retry(
             chunk_size=2,
         )
 
-    # A retried Airflow task streams the same run again after lock renewals
+    # A retried stage streams the same run again after lock renewals
     # committed earlier chunks.  Only rejections are under test here, so the
     # first attempt's pending facts are removed.
     stream()

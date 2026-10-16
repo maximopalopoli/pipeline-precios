@@ -88,7 +88,7 @@ pipeline-precios/
 │   ├── regional_scope.py             # Opt-in regional scope (AMBA) applied while staging
 │   ├── raw_archive.py                # Verified source ZIP archive and restore
 │   ├── *_retention.py                # Opt-in fact, staging and raw ZIP retention
-│   └── run_pipeline.py               # End-to-end orchestration (shared with Airflow)
+│   └── run_pipeline.py               # End-to-end orchestration (CLI)
 ├── models/
 │   ├── comercio.py                   # ComercioRecord (Pydantic v2)
 │   ├── sucursal.py                   # SucursalRecord
@@ -101,11 +101,11 @@ pipeline-precios/
 │   ├── integration/                  # database-backed ETL, publication and entrypoint tests
 │   └── fixtures/sample.zip           # Sample ZIP (2 chains, 7 products)
 ├── scripts/                          # Baseline, benchmark and regression-check commands
-├── dags/dag_sepa_ingest.py           # Airflow DAG (7 tasks, dual daily schedule)
+├── deploy/                           # systemd timer and retrying ingestion wrapper
 ├── api/                              # FastAPI backend (REST endpoints, asyncpg)
 ├── web/                              # React frontend (Vite + TypeScript + Tailwind)
 ├── notebooks/exploration.ipynb       # Exploratory analysis
-├── docker-compose.yml                # PostgreSQL + Airflow + API + Web
+├── docker-compose.yml                # PostgreSQL + API + Web
 ├── pyproject.toml                    # Dependencies and configuration
 └── Makefile                          # Targets: install, test, test-unit, test-integration
 ```
@@ -121,7 +121,7 @@ The portal publishes one ZIP per weekday (~300–330 MB) at a fixed URL,
 weekly and the portal keeps no history, so the pipeline archives every
 completed ZIP (see [Source ZIP archive](#source-zip-archive-and-restore)).
 Chains must deliver by 06:00 on the effective day and may
-rectify until 10:00, which is why the DAG runs at 06:30 and 10:30.
+rectify until 10:00, which is why the ingestion runs at 06:30 and 10:30.
 
 ### ZIP Structure
 
@@ -366,7 +366,7 @@ make dev                  # start DB + API + frontend for local development
 That's it. The web app will be at http://localhost:5173 and the API at http://localhost:8000.
 
 The checked-in development defaults are sufficient for a local run. To use
-different database or Airflow credentials, copy `.env.example` to `.env` and
+different database credentials, copy `.env.example` to `.env` and
 edit it before running the commands above.
 
 ### Migration integrity
@@ -502,7 +502,7 @@ is skipped only when a completed run used the same scope, so changing
 
 ### Source ZIP archive and restore
 
-After each full publication, the CLI and the DAG archive every completed ZIP
+After each full publication, the pipeline archives every completed ZIP
 not archived yet, earlier days included, under `SEPA_ARCHIVE_DIR` (default:
 an `archive` folder inside the raw directory):
 
@@ -664,12 +664,11 @@ with the estimated time left, the loss limits and the outcome. Warnings and
 errors that no milestone summarizes are printed as they happen. Every event,
 including the per-chunk ones described below, is written to
 `logs/ingest-<timestamp>.log` (not versioned). `make ingest VERBOSE=1` (or
-`--verbose`) prints every event to the terminal instead. Airflow task logs keep
-every event.
+`--verbose`) prints every event to the terminal instead.
 
 ### Performance telemetry
 
-The CLI and Airflow emit structured events for `download`, `staging`, `quality`,
+The pipeline emits structured events for `download`, `staging`, `quality`,
 `dimensions`, `fact_load`, and `publication`. Each completed or failed stage
 includes `elapsed_seconds` and `peak_rss_bytes`; stage-specific events also
 include their relevant row counts. Product fact processing adds one pair of
@@ -677,9 +676,7 @@ events per chunk: `fact_chunk_preparation` measures cleaning and key resolution,
 while `pending_fact_write` measures the provisional PostgreSQL write.
 
 The CLI's `pipeline.completed` event summarizes the end-to-end `elapsed_total`,
-`peak_rss_bytes`, reconciliation counts, and `fact_rows_per_second`. Airflow
-tasks may run in separate processes, so their per-stage `peak_rss_bytes` values
-are intentionally not combined into a single run-level number.
+`peak_rss_bytes`, reconciliation counts, and `fact_rows_per_second`.
 
 To establish a comparable baseline, capture one bounded ingestion's output:
 
@@ -731,7 +728,7 @@ full-scale capacity from a bounded run.
 The local bounded-ingestion mode is opt-in and uses `SEPA_DEV_CHAIN_KEYS`
 (comma-separated `id_comercio:id_bandera` values) and/or
 `SEPA_DEV_MAX_PRODUCT_ROWS` (a positive integer). Both settings are validated
-strictly and are disabled when unset. When either is set, CLI and Airflow mark
+strictly and are disabled when unset. When either is set, the pipeline marks
 the run as partial, retain
 its staging and pending facts only for local inspection, and publish zero
 facts. They may add dimension keys required by their pending facts but
@@ -807,7 +804,6 @@ make up
 |---------|-----|
 | Frontend | http://localhost:3000 |
 | API | http://localhost:8000 |
-| Airflow | http://localhost:8080 |
 
 ### Run tests
 
@@ -834,9 +830,6 @@ All variables have development defaults. Set them in `.env` (see
 | `POSTGRES_USER` | PostgreSQL username |
 | `POSTGRES_PASSWORD` | PostgreSQL password |
 | `POSTGRES_DB` | Database name |
-| `AIRFLOW_ADMIN_USER` | Airflow web UI username |
-| `AIRFLOW_ADMIN_PASSWORD` | Airflow web UI password |
-| `AIRFLOW_SECRET_KEY` | Airflow secret key |
 | `SEPA_FACT_CHUNK_SIZE` | Staged product rows per fact batch (default 300000) |
 | `SEPA_PENDING_FACT_COMMIT_EVERY_CHUNKS` | Pending-fact chunks written per commit (default 5) |
 | `SEPA_FACT_RETENTION_DAYS` | Opt-in; keeps the ingested date plus the previous N days of facts and drops older daily partitions (and months left empty). 3 covers rectifications and rollback. Off when unset |
@@ -849,27 +842,34 @@ All variables have development defaults. Set them in `.env` (see
 | `SEPA_REGIONAL_SCOPE` | Opt-in regional scope of a published ingestion; `amba` is the only value. Changing it re-ingests the current file. Off when unset |
 | `SEPA_DEV_CHAIN_KEYS`, `SEPA_DEV_MAX_PRODUCT_ROWS` | Bounded development ingestion (see above) |
 
-### Airflow
+### Scheduled ingestion
 
-The DAG `dag_sepa_ingest` runs automatically at 06:30 and 10:30 daily,
-Argentine time (two runs to capture government rectifications). Each run
-ingests the Argentine calendar day it was scheduled for (Airflow's
-`data_interval_end`, not `ds`, which for the 06:30 run is the previous day).
-Before a chain delivers, the weekday URL still serves last week's ZIP: its hash
-is already published, so the 06:30 run stops at the duplicate check, and the
-10:30 run ingests the new or rectified file. Its tasks run download → duplicate check
-→ staging → quality checks → dimensions → pending facts → atomic publication.
-If a task fails after opening an ingestion run, the DAG records the terminal
-failure before Airflow retries or marks the task as failed.
+A systemd timer (`deploy/systemd/sepa-ingest.timer`) runs the ingestion at
+06:30 and 10:30 daily, Argentine time (two runs to capture government
+rectifications), through `deploy/run-ingest.sh`. The wrapper fixes the
+Argentine calendar day once and runs `etl.run_pipeline --fecha <day>` up to
+three times, 15 minutes apart. Before a chain delivers, the weekday URL still
+serves last week's ZIP: its hash is already published, so the 06:30 run stops
+at the duplicate check, and the 10:30 run ingests the new or rectified file.
+A completed file is skipped, so a retry never publishes twice; a failed attempt
+keeps the previous snapshot visible and sends the pipeline's failure alert.
 
-The Airflow containers receive the production settings listed in
-`docker-compose.yml` from `.env` (regional scope, chunk size, retention,
-rejection sample, quality limits and alert email); a blank value means unset.
-The partial development bounds `SEPA_DEV_*` are deliberately not passed, so a
-local `.env` cannot make the scheduled ingestion publish nothing.
-`SEPA_ARCHIVE_DIR` is not passed either: under Airflow the archive is
-`data/archive`, so mount another disk there to keep it off the database disk.
-A unit test fails when the ETL reads a setting the compose file does not pass.
+The service reads the production settings from `.env`. The wrapper unsets the
+partial development bounds `SEPA_DEV_*`, so a local `.env` cannot make the
+scheduled ingestion publish nothing. To install it, adjust `User`,
+`WorkingDirectory`, `EnvironmentFile` and `ExecStart` in
+`deploy/systemd/sepa-ingest.service`, then:
+
+```bash
+sudo cp deploy/systemd/sepa-ingest.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now sepa-ingest.timer
+systemctl list-timers sepa-ingest.timer   # next run
+journalctl -u sepa-ingest.service         # attempts and milestones
+```
+
+The full log of every attempt is in `logs/`, and `/estado` shows the latest
+publication.
 
 ### Web app
 
@@ -901,7 +901,7 @@ TanStack Table/Query for data.
 | Area | Status |
 |------|--------|
 | Ingestion (download, staging, quality, atomic publication, reconciliation) | Done |
-| Airflow orchestration and bounded development mode | Done |
+| Scheduled ingestion (systemd timer) and bounded development mode | Done |
 | Source measurements (price change rate, AMBA share, coverage) | Done |
 | Storage: current snapshot in PostgreSQL, history in archived ZIPs | Next |
 | AMBA regional scope | Done |

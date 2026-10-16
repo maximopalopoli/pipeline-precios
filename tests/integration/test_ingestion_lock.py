@@ -46,7 +46,7 @@ def test_only_one_owner_can_reserve_an_ingestion_date(pg_conn):
             pg_conn,
             fecha_datos=fecha_datos,
             raw_file_id=second_raw_file_id,
-            owner="airflow",
+            owner="cli:restore",
         )
 
     assert exc_info.value.lock == first_lock
@@ -60,7 +60,7 @@ def test_releasing_a_lock_allows_a_later_retry(pg_conn):
         pg_conn,
         fecha_datos=fecha_datos,
         raw_file_id=first_raw_file_id,
-        owner="airflow",
+        owner="cli:restore",
     )
 
     release_ingestion_lock(pg_conn, first_lock)
@@ -136,7 +136,7 @@ def test_expired_lock_can_be_recovered_by_a_later_retry(pg_conn):
         pg_conn,
         fecha_datos=fecha_datos,
         raw_file_id=second_raw_file_id,
-        owner="airflow:retry",
+        owner="cli:retry",
     )
 
     assert recovered_lock.raw_file_id == second_raw_file_id
