@@ -1,4 +1,4 @@
-"""Pending facts of superseded partial runs are deleted when a run opens."""
+"""Pending facts of superseded partial and failed runs are deleted when a run opens."""
 
 from datetime import date
 
@@ -56,16 +56,42 @@ def seeded(pg_conn):
     }
 
 
-def _run_with_pending(pg_conn, seeded, *, is_partial: bool, status: str) -> int:
+def _raw_file(pg_conn, fecha_datos: str) -> int:
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO raw_files (filename, url, sha256, size_bytes, fecha_datos)
+            VALUES (%s, 'http://example.test/other.zip', %s, 1, %s)
+            RETURNING id
+            """,
+            (f"{fecha_datos}.zip", fecha_datos, fecha_datos),
+        )
+        raw_file_id = cur.fetchone()[0]
+    pg_conn.commit()
+    return raw_file_id
+
+
+def _run_with_pending(
+    pg_conn,
+    seeded,
+    *,
+    is_partial: bool,
+    status: str,
+    raw_file_id: int | None = None,
+    with_pending: bool = True,
+) -> int:
     with pg_conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO ingestion_runs (raw_file_id, status, is_partial)
             VALUES (%s, %s, %s) RETURNING id
             """,
-            (seeded["raw_file_id"], status, is_partial),
+            (raw_file_id or seeded["raw_file_id"], status, is_partial),
         )
         run_id = cur.fetchone()[0]
+        if not with_pending:
+            pg_conn.commit()
+            return run_id
         cur.execute(
             """
             INSERT INTO pending_fact_precios (
@@ -129,3 +155,48 @@ def test_a_new_partial_run_keeps_the_previous_partial_until_it_completes(
     open_ingestion_run(pg_conn, seeded["raw_file_id"], fecha_logica=date(2026, 3, 15))
 
     assert _pending_run_ids(pg_conn) == set()
+
+
+def test_opening_a_run_deletes_failed_pending_of_a_later_published_date(
+    pg_conn, seeded
+):
+    failed_full = _run_with_pending(pg_conn, seeded, is_partial=False, status="failed")
+    failed_partial = _run_with_pending(pg_conn, seeded, is_partial=True, status="failed")
+    other_date_failed = _run_with_pending(
+        pg_conn,
+        seeded,
+        is_partial=False,
+        status="failed",
+        raw_file_id=_raw_file(pg_conn, "2026-03-16"),
+    )
+    # A rectified file of the same declared date publishes it as well.
+    _run_with_pending(
+        pg_conn,
+        seeded,
+        is_partial=False,
+        status="completed",
+        raw_file_id=_raw_file(pg_conn, "2026-03-15"),
+        with_pending=False,
+    )
+    failed_after_publication = _run_with_pending(
+        pg_conn, seeded, is_partial=False, status="failed"
+    )
+    running_full = _run_with_pending(pg_conn, seeded, is_partial=False, status="running")
+
+    open_ingestion_run(pg_conn, seeded["raw_file_id"], fecha_logica=date(2026, 3, 15))
+
+    remaining = _pending_run_ids(pg_conn)
+    assert failed_full not in remaining
+    assert failed_partial not in remaining
+    assert remaining == {other_date_failed, failed_after_publication, running_full}
+
+
+def test_a_completed_partial_run_does_not_supersede_failed_pending(pg_conn, seeded):
+    failed_full = _run_with_pending(pg_conn, seeded, is_partial=False, status="failed")
+    completed_partial = _run_with_pending(
+        pg_conn, seeded, is_partial=True, status="completed"
+    )
+
+    open_ingestion_run(pg_conn, seeded["raw_file_id"], fecha_logica=date(2026, 3, 15))
+
+    assert _pending_run_ids(pg_conn) == {failed_full, completed_partial}

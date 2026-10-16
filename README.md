@@ -601,7 +601,12 @@ bounds leave source rows out on purpose; those are the intended exceptions to
 the full-run invariants. Its pending rows remain isolated for local inspection.
 Only the newest completed partial run keeps them: opening any run deletes the
 pending rows of older completed partial runs
-(`ingestion_run.partial_pending_deleted`). Running and failed runs keep theirs. A missing `rows_productos_out_of_scope` or
+(`ingestion_run.partial_pending_deleted`). Running runs keep theirs.
+
+A failed run keeps its pending rows for diagnosis until a later full run of the
+same declared date completes; the next run to open then deletes them
+(`ingestion_run.failed_pending_deleted`), since a retry writes its own rows
+under a new run. A missing `rows_productos_out_of_scope` or
 `rows_productos_store_unlisted` counts as zero.
 
 ### Quality limits
