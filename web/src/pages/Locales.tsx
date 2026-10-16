@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
 import { fetchLocales, fetchStorePromos, type NearbyStore, type StorePromo } from '../lib/api';
 import { useAddressLocation } from '../hooks/useAddressLocation';
@@ -11,6 +11,8 @@ import { StoreLocatorMap } from '../components/maps/StoreLocator';
 import { formatCurrency, formatPercent } from '../lib/constants';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { PriceDate } from '../components/pricing/PriceDate';
+
+const STORES_PER_PAGE = 100;
 
 const storeCol = createColumnHelper<NearbyStore>();
 const storeColumns = [
@@ -86,17 +88,33 @@ export function Locales() {
   const { lat, lon } = location;
   const searchRadius = location.radius;
 
-  const { data: stores = [], isLoading, isError, error, refetch } = useQuery({
+  const {
+    data: storePages,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    fetchNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+  } = useInfiniteQuery({
     queryKey: ['locales', lat, lon, searchRadius, cadenas],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       fetchLocales({
         lat: lat!,
         lon: lon!,
         radius: searchRadius,
         cadenas: cadenas.length > 0 ? cadenas : undefined,
+        limit: STORES_PER_PAGE,
+        offset: pageParam,
       }),
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => (last.hay_mas ? pages.length * STORES_PER_PAGE : undefined),
     enabled: location.located && location.ready,
   });
+  const stores = storePages?.pages.flatMap((page) => page.sucursales) ?? [];
+  const total = storePages?.pages[0]?.total ?? 0;
+  const moreStores = storePages?.pages.at(-1)?.hay_mas ?? false;
 
   return (
     <div className="space-y-6">
@@ -112,12 +130,23 @@ export function Locales() {
 
         {location.located && isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
 
-        {isError && <QueryError what="los locales" error={error} onRetry={() => refetch()} />}
+        {isError && !isFetchNextPageError && (
+          <QueryError what="los locales" error={error} onRetry={() => refetch()} />
+        )}
 
         {lat != null && lon != null && stores.length > 0 && (
           <>
             <p className="text-sm text-slate-600">
-              <strong>{stores.length} locales</strong> a menos de {searchRadius} km
+              {moreStores ? (
+                <>
+                  Los <strong>{stores.length} más cercanos</strong> de {total} locales a menos de {searchRadius} km.
+                  El mapa muestra solo los cargados.
+                </>
+              ) : (
+                <>
+                  <strong>{total} {total === 1 ? 'local' : 'locales'}</strong> a menos de {searchRadius} km
+                </>
+              )}
             </p>
 
             <StoreLocatorMap
@@ -129,6 +158,18 @@ export function Locales() {
 
             <h2 className="text-lg font-semibold text-slate-800">Listado de locales</h2>
             <DataTable data={stores} columns={storeColumns} />
+            {moreStores && !isFetchNextPageError && (
+              <button
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {isFetchingNextPage ? 'Cargando...' : 'Ver más locales'}
+              </button>
+            )}
+            {isFetchNextPageError && (
+              <QueryError compact what="más locales" error={error} onRetry={() => fetchNextPage()} />
+            )}
 
             <h2 className="text-lg font-semibold text-slate-800">Detalle por local</h2>
             <p className="text-sm text-slate-500">Elegí un local para ver sus productos en oferta</p>

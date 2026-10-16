@@ -12,6 +12,7 @@ import { QueryError } from '../components/layout/QueryError';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { PriceDate } from '../components/pricing/PriceDate';
 import { formatCurrency, formatPercent } from '../lib/constants';
+import { formatPriceDate } from '../lib/priceDate';
 
 const col = createColumnHelper<OfertaItem>();
 const columns = [
@@ -108,7 +109,7 @@ export function Ofertas() {
 
         {data?.fecha && (
           <p className="text-sm text-slate-500">
-            Promociones observadas el {new Date(data.fecha).toLocaleDateString('es-AR')}
+            Promociones observadas el {formatPriceDate(data.fecha)}
           </p>
         )}
 

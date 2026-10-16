@@ -284,6 +284,10 @@ Data rules the pipeline relies on:
   `offset` at most 10,000), as `{"fecha", "items", "total", "hay_mas",
   "descuento_promedio", "descuento_maximo"}`; the count and the discounts
   summarize every offer, not only the page.
+  `GET /locales` lists the stores within `lat`, `lon` and `radius`, nearest
+  first, a page at a time (`limit` default 100, at most 500; `offset` at most
+  10,000), as `{"sucursales", "total", "hay_mas"}`; `total` counts every
+  store in the radius.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.

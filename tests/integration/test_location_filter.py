@@ -166,12 +166,18 @@ def _store_page(day, location, offset=0):
     )
 
 
+def _stores(radius):
+    return asyncio.run(
+        locales.get_locales(Location(*OBELISCO, radius), cadenas=None, limit=100, offset=0)
+    )["sucursales"]
+
+
 def test_distance_is_exact_not_a_square(day):
     # 0.9 km north and east is inside a 1 km square but 1.27 km away.
     day.store(12, 0.9, km_east=0.9)
     inside = day.store(15, 0.9)
 
-    stores = asyncio.run(locales.get_locales(Location(*OBELISCO, 1), cadenas=None))
+    stores = _stores(1)
 
     assert [s["sucursal_sk"] for s in stores] == [inside]
 
@@ -179,11 +185,28 @@ def test_distance_is_exact_not_a_square(day):
 def test_nearby_stores_come_nearest_first(day):
     far, near = day.store(10, 2), day.store(12, 0.5)
 
-    stores = asyncio.run(locales.get_locales(Location(*OBELISCO, 5), cadenas=None))
+    stores = _stores(5)
 
     assert [(s["sucursal_sk"], float(s["distancia_km"])) for s in stores] == [
         (near, 0.5), (far, 2.0),
     ]
+
+
+def test_nearby_stores_come_a_page_at_a_time_with_their_total(day):
+    nearest, middle, farthest = day.store(10, 0.5), day.store(12, 1), day.store(15, 2)
+
+    def page(offset):
+        return asyncio.run(
+            locales.get_locales(Location(*OBELISCO, 5), cadenas=None, limit=2, offset=offset)
+        )
+
+    first, second, past = page(0), page(2), page(3)
+
+    assert [s["sucursal_sk"] for s in first["sucursales"]] == [nearest, middle]
+    assert (first["total"], first["hay_mas"]) == (3, True)
+    assert [s["sucursal_sk"] for s in second["sucursales"]] == [farthest]
+    assert (second["total"], second["hay_mas"]) == (3, False)
+    assert (past["sucursales"], past["total"], past["hay_mas"]) == ([], 3, False)
 
 
 def test_the_radius_grows_until_three_chain_companies_are_near(day):

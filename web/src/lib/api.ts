@@ -272,12 +272,20 @@ export interface NearbyStore {
   provincia: string;
   distancia_km: number;
 }
+/** One page of nearby stores; `total` counts every store in the radius. */
+export interface NearbyStorePage {
+  sucursales: NearbyStore[];
+  total: number;
+  hay_mas: boolean;
+}
 export const fetchLocales = (params: {
   lat: number;
   lon: number;
   radius: number;
   cadenas?: string[];
-}) => api.get<NearbyStore[]>('/locales', { params }).then(r => r.data);
+  limit?: number;
+  offset?: number;
+}) => api.get<NearbyStorePage>('/locales', { params }).then(r => r.data);
 
 export interface StorePromo {
   producto: string;
