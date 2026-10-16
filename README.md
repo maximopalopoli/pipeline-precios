@@ -245,7 +245,9 @@ Data rules the pipeline relies on:
   published day. Every query word must appear in any order, ignoring case and
   accents. An exact EAN comes first, then products of the type the query
   names, then those listed by more chains. Optional `tipo`, `marca`,
-  `contenido` and `unidad` (`g`, `ml`, `u`) filters narrow the results.
+  `contenido` and `unidad` (`g`, `ml`, `u`) filters narrow the results;
+  repeated `marca` keys list the products of any of those brands, and
+  `contenido_min` and `contenido_max` keep the sizes between them.
   Each result carries `precio_desde`, its lowest store price (unconditional
   promotions in force only), the observation date of that price, and
   `sucursales`, how many stores carry it. With `lat`, `lon` and `radius` (km,
@@ -257,7 +259,13 @@ Data rules the pipeline relies on:
   product, so pages of one published day never repeat or skip a product.
   `GET /products/search/facets` takes the same query and attribute
   filters and returns `tipos`, `marcas` and `tamanos` with product counts;
-  each facet ignores its own filter and applies the others.
+  each facet ignores its own filter and applies the others. Types and brands
+  list the 20 most common; sizes are all listed. The web shows up to five
+  sizes as chips and more as a range bar that stops only at listed sizes,
+  one unit at a time. `tipo_nombrado`
+  is the type the query names ("leche" for "leche entera"), when it is among
+  the listed types; the web chooses it before listing cards, so a search for
+  milk lists milk, and the shopper can clear it to see every match.
   `GET /products/{producto_sk}` is the product detail: catalog name and
   attributes, the description, brand and size as published (`publicado`),
   whether a curated correction applies (`corregido`), and the source codes
@@ -276,6 +284,10 @@ Data rules the pipeline relies on:
   `offset` at most 10,000), as `{"fecha", "items", "total", "hay_mas",
   "descuento_promedio", "descuento_maximo"}`; the count and the discounts
   summarize every offer, not only the page.
+  `GET /locales` lists the stores within `lat`, `lon` and `radius`, nearest
+  first, a page at a time (`limit` default 100, at most 500; `offset` at most
+  10,000), as `{"sucursales", "total", "hay_mas"}`; `total` counts every
+  store in the radius.
 - **Store identity.** `id_sucursal` is unique only within a chain.
 - **Prices.** The list price must be > 0; a promotion counts only when it is
   > 0 and lower than the list price. Bank and wallet discounts are not published.
@@ -415,6 +427,14 @@ Stores are classified while `sucursales.csv` is staged:
 
 Store discovery (`/api/locales` and the province, chain and locality filters)
 includes only stores with prices on the latest published day.
+`GET /api/filters/chain-options` lists the chains as `{valor, nombre,
+sucursales}`, most stores first: `valor` is the published banner name that the
+`cadenas` filter takes, and `nombre` is the name shoppers know ("Coto",
+"Carrefour Market"), from `api/chain_names.py`. With `lat`, `lon` and `radius`
+it lists only the chains with a store in that radius and counts those stores.
+Every page that takes a location (Buscador, Ofertas, Locales, Lista) shows the
+same one-line location bar, and Buscador, Ofertas and Locales offer these chains
+as chips under it; the web has no province or locality filter.
 
 Every located route takes `lat`, `lon` and `radius` (km). The point must lie
 in Argentina, both coordinates come together, and the radius is 0.5–50 km.
@@ -422,7 +442,8 @@ Distance is measured before any limit. `GET /api/location/radius` returns
 `radio_km`, the chosen radius grown through 1, 2, 5, 10, 20 and 50 km until
 grocery stores of three chain companies are within it. It also returns
 `cadenas` (the companies reached), `ampliado` and `suficiente`. Gas-station
-shops and pharmacies do not count. Older
+shops and pharmacies do not count. The web grows only the first radius around an
+address; a radius the shopper sets on the slider is kept as set. Older
 national facts may remain under fact retention without appearing as current
 stores.
 
@@ -852,10 +873,15 @@ A unit test fails when the ETL reads a setting the compose file does not pass.
 
 ### Web app
 
-Pages: Home, Buscador (price finder with map; it also finds a product by its
-barcode, EAN-8 and UPC-A included), Lista (shopping list), Ofertas (daily promotions) and Locales (nearby store
-locator). Home shows the latest publication and the quality of the last
-ingestion. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
+Pages: Buscador, the home page (location first, then a price finder with map;
+it also finds a product by its barcode, EAN-8 and UPC-A included; a product
+lists its stores cheapest first and can be added to the list), Lista
+(shopping list, kept in the browser with its chosen products), Ofertas (daily promotions), Locales (nearby store locator) and
+Estado (`/estado`, linked at the foot of the sidebar on wide screens), which shows the latest
+publication and the quality of the last ingestion. The location (an address or
+the device's, plus the radius the shopper sets) is one for every page and is
+kept in the browser. Pages fit any width: on phones the navigation becomes a
+top bar and every page uses the full width. Built with React + TypeScript, Recharts for charts, React-Leaflet for maps and
 TanStack Table/Query for data.
 
 ## Technical Decisions

@@ -532,6 +532,8 @@ def test_airflow_partial_run_completes_without_publishing_a_snapshot(
 
 
 def test_airflow_reserves_the_date_before_loading_staging(pg_conn, dag_module, monkeypatch):
+    # `make test` exports the local .env, which may set a scope.
+    monkeypatch.delenv("SEPA_REGIONAL_SCOPE", raising=False)
     raw_file_id = _create_raw_file(pg_conn, "airflow-lock.zip", "airflow-lock")
     pg_conn.commit()
     monkeypatch.setattr(dag_module, "_db_connect", lambda: _connect_to_fixture(pg_conn))

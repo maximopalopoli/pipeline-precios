@@ -4,10 +4,15 @@ import axios from 'axios';
 const api = axios.create({ baseURL: '/api', paramsSerializer: { indexes: null } });
 
 // ── Filter endpoints ──
-export const fetchProvinces = () => api.get<string[]>('/filters/provinces').then(r => r.data);
-export const fetchChains = () => api.get<string[]>('/filters/chains').then(r => r.data);
-export const fetchLocalities = (province: string) =>
-  api.get<string[]>('/filters/localities', { params: { province } }).then(r => r.data);
+/** A chain to filter by: `valor` for the `cadenas` filters, `nombre` to show. */
+export interface ChainOption {
+  valor: string;
+  nombre: string;
+  /** Its stores near the location, or everywhere without one. */
+  sucursales: number;
+}
+export const fetchChainOptions = (params: { lat?: number; lon?: number; radius?: number }) =>
+  api.get<ChainOption[]>('/filters/chain-options', { params }).then(r => r.data);
 
 // ── Products ──
 export interface Product {
@@ -39,9 +44,13 @@ export type CoverageNote = 'fraccionado_en_local' | 'codigo_interno' | 'pocos_lo
 /** Attributes that narrow a search to some of its products. */
 export interface ProductAttributeFilters {
   tipo?: string;
-  marca?: string;
+  /** Products of any of these brands. */
+  marca?: string[];
   contenido?: number;
-  unidad?: 'g' | 'ml' | 'u';
+  /** Sizes between these, inclusive, in ``unidad``. */
+  contenido_min?: number;
+  contenido_max?: number;
+  unidad?: SizeUnit;
 }
 export const searchProducts = (params: ProductAttributeFilters & {
   q: string;
@@ -102,15 +111,18 @@ export interface FacetValue {
   valor: string;
   productos: number;
 }
+export type SizeUnit = 'g' | 'ml' | 'u';
 export interface SizeFacetValue extends FacetValue {
   contenido: number;
-  unidad: 'g' | 'ml' | 'u';
+  unidad: SizeUnit;
 }
 /** Choices that narrow a search; each counts with the other filters applied. */
 export interface SearchFacets {
   tipos: FacetValue[];
   marcas: FacetValue[];
   tamanos: SizeFacetValue[];
+  /** The type the query names, when the search lists it ("leche"). */
+  tipo_nombrado: string | null;
 }
 export const fetchSearchFacets = (params: ProductAttributeFilters & { q: string }) =>
   api.get<SearchFacets>('/products/search/facets', { params }).then(r => r.data);
@@ -260,12 +272,20 @@ export interface NearbyStore {
   provincia: string;
   distancia_km: number;
 }
+/** One page of nearby stores; `total` counts every store in the radius. */
+export interface NearbyStorePage {
+  sucursales: NearbyStore[];
+  total: number;
+  hay_mas: boolean;
+}
 export const fetchLocales = (params: {
   lat: number;
   lon: number;
   radius: number;
   cadenas?: string[];
-}) => api.get<NearbyStore[]>('/locales', { params }).then(r => r.data);
+  limit?: number;
+  offset?: number;
+}) => api.get<NearbyStorePage>('/locales', { params }).then(r => r.data);
 
 export interface StorePromo {
   producto: string;

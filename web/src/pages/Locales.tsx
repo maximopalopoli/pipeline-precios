@@ -1,17 +1,18 @@
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { createColumnHelper } from '@tanstack/react-table';
-import { fetchLocales, fetchStorePromos, geocode, type NearbyStore, type StorePromo } from '../lib/api';
-import { useFilters } from '../hooks/useFilters';
-import { useSearchRadius } from '../hooks/useSearchRadius';
-import { RadiusNotice } from '../components/filters/RadiusNotice';
-import { FilterPanel } from '../components/filters/FilterPanel';
+import { fetchLocales, fetchStorePromos, type NearbyStore, type StorePromo } from '../lib/api';
+import { useAddressLocation } from '../hooks/useAddressLocation';
+import { LocationBar } from '../components/filters/LocationBar';
+import { ChainChips } from '../components/filters/ChainChips';
 import { DataTable } from '../components/tables/DataTable';
 import { QueryError } from '../components/layout/QueryError';
 import { StoreLocatorMap } from '../components/maps/StoreLocator';
 import { formatCurrency, formatPercent } from '../lib/constants';
 import { PromotionDetails } from '../components/pricing/PromotionDetails';
 import { PriceDate } from '../components/pricing/PriceDate';
+
+const STORES_PER_PAGE = 100;
 
 const storeCol = createColumnHelper<NearbyStore>();
 const storeColumns = [
@@ -82,183 +83,109 @@ function StoreExpander({ store }: { store: NearbyStore }) {
 }
 
 export function Locales() {
-  const { cadenas } = useFilters();
-  const [mode, setMode] = useState<'address' | 'coords'>('address');
-  const [address, setAddress] = useState('');
-  const [city, setCity] = useState('Buenos Aires');
-  const [manualLat, setManualLat] = useState(-34.6037);
-  const [manualLon, setManualLon] = useState(-58.3816);
-  const [radius, setRadius] = useState(5);
-  const [searchTrigger, setSearchTrigger] = useState(0);
+  const [cadenas, setCadenas] = useState<string[]>([]);
+  const location = useAddressLocation(5);
+  const { lat, lon } = location;
+  const searchRadius = location.radius;
 
-  // Geocoding
-  const { data: geoResult, isFetching: isGeocoding } = useQuery({
-    queryKey: ['geocode', address, city, searchTrigger],
-    queryFn: () => geocode(address, city),
-    enabled: mode === 'address' && address.length > 3 && searchTrigger > 0,
-  });
-
-  const lat = mode === 'address' ? geoResult?.lat ?? null : manualLat;
-  const lon = mode === 'address' ? geoResult?.lon ?? null : manualLon;
-
-  const searchArea = useSearchRadius(lat, lon, radius);
-  const searchRadius = searchArea.radius;
-
-  const { data: stores = [], isLoading, isError, error, refetch } = useQuery({
+  const {
+    data: storePages,
+    isLoading,
+    isError,
+    error,
+    refetch,
+    fetchNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+  } = useInfiniteQuery({
     queryKey: ['locales', lat, lon, searchRadius, cadenas],
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       fetchLocales({
         lat: lat!,
         lon: lon!,
         radius: searchRadius,
         cadenas: cadenas.length > 0 ? cadenas : undefined,
+        limit: STORES_PER_PAGE,
+        offset: pageParam,
       }),
-    enabled: lat != null && lon != null && searchArea.ready,
+    initialPageParam: 0,
+    getNextPageParam: (last, pages) => (last.hay_mas ? pages.length * STORES_PER_PAGE : undefined),
+    enabled: location.located && location.ready,
   });
+  const stores = storePages?.pages.flatMap((page) => page.sucursales) ?? [];
+  const total = storePages?.pages[0]?.total ?? 0;
+  const moreStores = storePages?.pages.at(-1)?.hay_mas ?? false;
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold text-slate-900">Locales Cercanos</h1>
 
-      <div className="grid md:grid-cols-[280px_1fr] gap-6">
-        <div className="space-y-4">
-          <FilterPanel />
+      <LocationBar location={location} />
+      <ChainChips location={location} chosen={cadenas} onChange={setCadenas} />
 
-          <div className="rounded-lg border border-slate-200 bg-white p-4 space-y-3">
-            <h3 className="text-sm font-semibold text-slate-700">Tu ubicacion</h3>
+      <div className="space-y-4">
+        {!location.located && (
+          <p className="text-sm text-slate-400">Indicá dónde estás para buscar locales cercanos.</p>
+        )}
 
-            <div className="flex gap-2">
-              {(['address', 'coords'] as const).map((m) => (
-                <button
-                  key={m}
-                  onClick={() => setMode(m)}
-                  className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
-                    mode === m
-                      ? 'bg-slate-900 text-white'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  {m === 'address' ? 'Direccion' : 'Coordenadas'}
-                </button>
-              ))}
-            </div>
+        {location.located && isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
 
-            {mode === 'address' ? (
-              <div className="space-y-2">
-                <input
-                  type="text"
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder="Av. Corrientes 1234"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                />
-                <input
-                  type="text"
-                  value={city}
-                  onChange={(e) => setCity(e.target.value)}
-                  placeholder="Ciudad"
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                />
-                <button
-                  onClick={() => setSearchTrigger((n) => n + 1)}
-                  disabled={address.length < 3}
-                  className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {isGeocoding ? 'Buscando...' : 'Buscar'}
-                </button>
-                {geoResult?.lat && (
-                  <p className="text-xs text-slate-500">
-                    Ubicacion: {geoResult.lat.toFixed(4)}, {geoResult.lon!.toFixed(4)}
-                  </p>
-                )}
-                {geoResult && !geoResult.lat && (
-                  <p className="text-xs text-red-500">No se encontro la direccion.</p>
-                )}
-              </div>
-            ) : (
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-xs text-slate-500">Latitud</label>
-                  <input
-                    type="number"
-                    value={manualLat}
-                    onChange={(e) => setManualLat(Number(e.target.value))}
-                    step={0.0001}
-                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500">Longitud</label>
-                  <input
-                    type="number"
-                    value={manualLon}
-                    onChange={(e) => setManualLon(Number(e.target.value))}
-                    step={0.0001}
-                    className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
-                  />
-                </div>
-              </div>
+        {isError && !isFetchNextPageError && (
+          <QueryError what="los locales" error={error} onRetry={() => refetch()} />
+        )}
+
+        {lat != null && lon != null && stores.length > 0 && (
+          <>
+            <p className="text-sm text-slate-600">
+              {moreStores ? (
+                <>
+                  Los <strong>{stores.length} más cercanos</strong> de {total} locales a menos de {searchRadius} km.
+                  El mapa muestra solo los cargados.
+                </>
+              ) : (
+                <>
+                  <strong>{total} {total === 1 ? 'local' : 'locales'}</strong> a menos de {searchRadius} km
+                </>
+              )}
+            </p>
+
+            <StoreLocatorMap
+              userLat={lat}
+              userLon={lon}
+              radiusKm={searchRadius}
+              stores={stores}
+            />
+
+            <h2 className="text-lg font-semibold text-slate-800">Listado de locales</h2>
+            <DataTable data={stores} columns={storeColumns} />
+            {moreStores && !isFetchNextPageError && (
+              <button
+                onClick={() => fetchNextPage()}
+                disabled={isFetchingNextPage}
+                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-60"
+              >
+                {isFetchingNextPage ? 'Cargando...' : 'Ver más locales'}
+              </button>
+            )}
+            {isFetchNextPageError && (
+              <QueryError compact what="más locales" error={error} onRetry={() => fetchNextPage()} />
             )}
 
-            <div>
-              <label className="block text-xs text-slate-500 mb-1">Radio: {radius} km</label>
-              <input
-                type="range"
-                min={1}
-                max={50}
-                value={radius}
-                onChange={(e) => setRadius(Number(e.target.value))}
-                className="w-full"
-              />
+            <h2 className="text-lg font-semibold text-slate-800">Detalle por local</h2>
+            <p className="text-sm text-slate-500">Elegí un local para ver sus productos en oferta</p>
+            <div className="space-y-2">
+              {stores.slice(0, 20).map((store) => (
+                <StoreExpander key={store.sucursal_sk} store={store} />
+              ))}
             </div>
-          </div>
-        </div>
+          </>
+        )}
 
-        <div className="space-y-4">
-          {isLoading && <p className="text-sm text-slate-400">Cargando...</p>}
-
-          {isError && <QueryError what="los locales" error={error} onRetry={() => refetch()} />}
-
-          {lat != null && lon != null && stores.length > 0 && (
-            <>
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-                <p className="text-sm text-emerald-800">
-                  <strong>{stores.length} locales</strong> encontrados en un radio de {searchRadius} km
-                </p>
-                <RadiusNotice area={searchArea.area} />
-              </div>
-
-              <StoreLocatorMap
-                userLat={lat}
-                userLon={lon}
-                radiusKm={searchRadius}
-                stores={stores}
-              />
-
-              <h2 className="text-lg font-semibold text-slate-800">Listado de locales</h2>
-              <DataTable data={stores} columns={storeColumns} />
-
-              <h2 className="text-lg font-semibold text-slate-800">Detalle por local</h2>
-              <p className="text-sm text-slate-500">Selecciona un local para ver productos en oferta</p>
-              <div className="space-y-2">
-                {stores.slice(0, 20).map((store) => (
-                  <StoreExpander key={store.sucursal_sk} store={store} />
-                ))}
-              </div>
-            </>
-          )}
-
-          {lat != null && lon != null && !isLoading && !isError && stores.length === 0 && (
-            <p className="text-sm text-slate-400">
-              No se encontraron locales en un radio de {searchRadius} km.
-            </p>
-          )}
-
-          {lat == null && mode === 'coords' && null}
-          {lat == null && mode === 'address' && searchTrigger === 0 && (
-            <p className="text-sm text-slate-400">Ingresa una direccion para buscar locales cercanos.</p>
-          )}
-        </div>
+        {location.located && !isLoading && !isError && stores.length === 0 && (
+          <p className="text-sm text-slate-400">
+            No se encontraron locales en un radio de {searchRadius} km.
+          </p>
+        )}
       </div>
     </div>
   );

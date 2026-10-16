@@ -1,21 +1,15 @@
 import { useQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
 import { fetchHealth } from '../lib/api';
 import { KpiCard } from '../components/layout/KpiCard';
 import { QueryError } from '../components/layout/QueryError';
 import { formatPriceDate } from '../lib/priceDate';
 
-const NAV_CARDS = [
-  { to: '/buscador', icon: '🔍', label: 'Buscador de Precios', desc: 'Busca un producto y compara precios entre locales.' },
-  { to: '/ofertas', icon: '🏷️', label: 'Ofertas del dia', desc: 'Los mejores descuentos y promociones vigentes hoy.' },
-  { to: '/locales', icon: '📍', label: 'Locales Cercanos', desc: 'Encuentra supermercados cerca tuyo y ve sus ofertas.' },
-];
-
 function formatCount(value: number | null) {
   return value == null ? '—' : value.toLocaleString();
 }
 
-export function Home() {
+/** Where the published prices come from and how the last ingestion went. */
+export function Estado() {
   // Missing, stale and failed publications are announced by the layout's DataNotice.
   const { data: health, isError, error, refetch } = useQuery({
     queryKey: ['health'], queryFn: fetchHealth, refetchInterval: 60_000,
@@ -25,9 +19,10 @@ export function Home() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">SEPA Precios</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Estado de los datos</h1>
         <p className="text-slate-500">
-          Comparador de precios minoristas del sistema SEPA de transparencia de precios de Argentina.
+          Los precios vienen de SEPA, el sistema de transparencia de precios minoristas de Argentina,
+          que publican las cadenas cada día.
         </p>
         {health?.ultima_publicacion ? (
           <p className="mt-1 text-sm text-slate-600">
@@ -58,25 +53,6 @@ export function Home() {
           </p>
         </div>
       )}
-
-      {/* Navigation cards */}
-      <div>
-        <h2 className="text-lg font-semibold text-slate-800 mb-3">Explorar</h2>
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {NAV_CARDS.map(({ to, icon, label, desc }) => (
-            <Link
-              key={to}
-              to={to}
-              className="rounded-lg border border-slate-200 bg-white p-4 transition-shadow hover:shadow-md"
-            >
-              <p className="text-lg">
-                {icon} <span className="font-semibold text-slate-900">{label}</span>
-              </p>
-              <p className="mt-1 text-sm text-slate-500">{desc}</p>
-            </Link>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }

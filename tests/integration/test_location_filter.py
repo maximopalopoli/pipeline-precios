@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from api.location import KM_PER_DEGREE_LAT, KM_PER_DEGREE_LON, Location
-from api.routes import buscador, locales
+from api.routes import buscador, filters, locales
 from etl.load.warehouse_loader import _ensure_partition
 
 FECHA_ID = 20260317
@@ -118,6 +118,7 @@ def day(pg_conn, monkeypatch):
 
     monkeypatch.setattr(buscador, "fetch", fetch)
     monkeypatch.setattr(locales, "fetch", fetch)
+    monkeypatch.setattr(filters, "fetch", fetch)
     return Day(pg_conn)
 
 
@@ -165,12 +166,18 @@ def _store_page(day, location, offset=0):
     )
 
 
+def _stores(radius):
+    return asyncio.run(
+        locales.get_locales(Location(*OBELISCO, radius), cadenas=None, limit=100, offset=0)
+    )["sucursales"]
+
+
 def test_distance_is_exact_not_a_square(day):
     # 0.9 km north and east is inside a 1 km square but 1.27 km away.
     day.store(12, 0.9, km_east=0.9)
     inside = day.store(15, 0.9)
 
-    stores = asyncio.run(locales.get_locales(Location(*OBELISCO, 1), cadenas=None))
+    stores = _stores(1)
 
     assert [s["sucursal_sk"] for s in stores] == [inside]
 
@@ -178,11 +185,28 @@ def test_distance_is_exact_not_a_square(day):
 def test_nearby_stores_come_nearest_first(day):
     far, near = day.store(10, 2), day.store(12, 0.5)
 
-    stores = asyncio.run(locales.get_locales(Location(*OBELISCO, 5), cadenas=None))
+    stores = _stores(5)
 
     assert [(s["sucursal_sk"], float(s["distancia_km"])) for s in stores] == [
         (near, 0.5), (far, 2.0),
     ]
+
+
+def test_nearby_stores_come_a_page_at_a_time_with_their_total(day):
+    nearest, middle, farthest = day.store(10, 0.5), day.store(12, 1), day.store(15, 2)
+
+    def page(offset):
+        return asyncio.run(
+            locales.get_locales(Location(*OBELISCO, 5), cadenas=None, limit=2, offset=offset)
+        )
+
+    first, second, past = page(0), page(2), page(3)
+
+    assert [s["sucursal_sk"] for s in first["sucursales"]] == [nearest, middle]
+    assert (first["total"], first["hay_mas"]) == (3, True)
+    assert [s["sucursal_sk"] for s in second["sucursales"]] == [farthest]
+    assert (second["total"], second["hay_mas"]) == (3, False)
+    assert (past["sucursales"], past["total"], past["hay_mas"]) == ([], 3, False)
 
 
 def test_the_radius_grows_until_three_chain_companies_are_near(day):
@@ -211,3 +235,20 @@ def test_a_sparse_area_reports_the_chains_the_largest_radius_reaches(day):
     day.store(12, 60)
 
     assert _radius(1) == {"radio_km": 50, "cadenas": 1, "ampliado": True, "suficiente": False}
+
+
+def test_chain_options_list_the_chains_near_the_location_by_known_name(day):
+    day.store(12, 0.3)
+    day.store(12, 0.6)
+    day.store(15, 0.8)
+    day.store(9, 5)
+    day.store(10, 0.4, price=None)
+
+    near = asyncio.run(filters.get_chain_options(Location(*OBELISCO, 1)))
+    assert near == [
+        {"valor": "Cadena 12", "nombre": "Coto", "sucursales": 2},
+        {"valor": "Cadena 15", "nombre": "Día", "sucursales": 1},
+    ]
+    # Without a location every chain with a price is listed.
+    everywhere = asyncio.run(filters.get_chain_options(None))
+    assert [option["nombre"] for option in everywhere] == ["Coto", "Cadena 9", "Día"]

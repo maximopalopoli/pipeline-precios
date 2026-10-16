@@ -180,14 +180,17 @@ def catalog(pg_conn, monkeypatch):
 
 
 def _facets(q, **filters):
-    filters = {"tipo": None, "marca": None, "contenido": None, "unidad": None, **filters}
+    filters = {
+        "tipo": None, "marca": None, "contenido": None, "contenido_min": None,
+        "contenido_max": None, "unidad": None, **filters,
+    }
     return asyncio.run(products.search_facets(q, **filters))
 
 
 def _page(q, **filters):
     filters = {
-        "tipo": None, "marca": None, "contenido": None, "unidad": None,
-        "provincia": None, "localidad": None, "cadenas": None,
+        "tipo": None, "marca": None, "contenido": None, "contenido_min": None,
+        "contenido_max": None, "unidad": None, "provincia": None, "localidad": None, "cadenas": None,
         "location": None, "limit": 50, "offset": 0, **filters,
     }
     return asyncio.run(products.search_products(q, **filters))
@@ -287,10 +290,16 @@ def test_a_query_of_short_words_finds_the_type_it_names(catalog):
     [
         ({"tipo": "dulce de leche"}, ["Dulce de leche La Serenisima 400 g"]),
         (
-            {"marca": "la serenísima"},
+            {"marca": ["la serenísima"]},
             ["Leche La Serenisima entera 1 l", "Dulce de leche La Serenisima 400 g"],
         ),
         ({"contenido": Decimal("1000"), "unidad": "ml"}, ["Leche La Serenisima entera 1 l"]),
+        (
+            {"contenido_min": Decimal("100"), "contenido_max": Decimal("400"), "unidad": "g"},
+            ["Galletitas Mana 145 g", "Dulce de leche La Serenisima 400 g"],
+        ),
+        ({"contenido_min": Decimal("200"), "unidad": "g"}, ["Dulce de leche La Serenisima 400 g"]),
+        ({"contenido_max": Decimal("200"), "unidad": "g"}, ["Galletitas Mana 145 g"]),
     ],
 )
 def test_filters_narrow_the_results(catalog, filters, names):
@@ -407,16 +416,48 @@ def test_brands_are_grouped_without_regard_to_case_or_accents(catalog):
 
     # Three products write it in capitals, one with an accent.
     assert _values(_facets("leche")["marcas"]) == [("La Serenisima", 4), ("Mana", 1)]
-    assert len(_search("leche", marca="la serenisima")) == 4
+    assert len(_search("leche", marca=["la serenisima"])) == 4
+
+
+def test_several_brands_list_the_products_of_any_of_them(catalog):
+    assert {product["marca"] for product in _search("leche", marca=["la serenisima", "Maná"])} == {
+        "LA SERENISIMA", "MANA"
+    }
+    # Choosing brands keeps every brand available, to add another.
+    assert _values(_facets("leche", marca=["mana"])["marcas"]) == [("La Serenisima", 2), ("Mana", 1)]
+
+
+def test_every_size_is_listed_so_that_a_range_covers_them(catalog):
+    for size in range(100, 100 + products.MAX_FACET_VALUES + 5):
+        identity = f"12:1:{size}"
+        catalog.add_product(identity, "GALLETITAS DE PRUEBA", "MANA", "galletitas", None, size, "g", 1)
+        catalog.price(identity, 1, 100)
+
+    sizes = _facets("galletitas", contenido_min=Decimal("120"), unidad="g")["tamanos"]
+
+    assert len(sizes) == products.MAX_FACET_VALUES + 5 + 1
 
 
 def test_a_facet_ignores_its_own_filter_and_applies_the_others(catalog):
-    facets = _facets("leche", tipo="leche", marca="mana")
+    facets = _facets("leche", tipo="leche", marca=["mana"])
 
     # Every type of the brand, every brand of the type.
     assert _values(facets["tipos"]) == [("galletitas", 1)]
     assert _values(facets["marcas"]) == [("La Serenisima", 1)]
     assert facets["tamanos"] == []
+
+
+def test_facets_name_the_type_the_query_names(catalog):
+    assert _facets("leche")["tipo_nombrado"] == "leche"
+    assert _facets("dulce de leche")["tipo_nombrado"] == "dulce de leche"
+    # A brand names no type.
+    assert _facets("serenisima")["tipo_nombrado"] is None
+
+
+def test_a_named_type_the_search_does_not_list_is_not_named(catalog):
+    # Mana sells no milk, so choosing milk would empty the search.
+    assert _values(_facets("leche", marca=["mana"])["tipos"]) == [("galletitas", 1)]
+    assert _facets("leche", marca=["mana"])["tipo_nombrado"] is None
 
 
 def test_a_blank_brand_and_a_single_unit_are_not_choices(catalog):
